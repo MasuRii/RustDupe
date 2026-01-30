@@ -134,6 +134,41 @@ impl WalkerConfig {
             ignore_patterns,
         }
     }
+
+    /// Set whether to follow symbolic links.
+    #[must_use]
+    pub fn with_follow_symlinks(mut self, follow: bool) -> Self {
+        self.follow_symlinks = follow;
+        self
+    }
+
+    /// Set whether to skip hidden files.
+    #[must_use]
+    pub fn with_skip_hidden(mut self, skip: bool) -> Self {
+        self.skip_hidden = skip;
+        self
+    }
+
+    /// Set minimum file size filter.
+    #[must_use]
+    pub fn with_min_size(mut self, size: Option<u64>) -> Self {
+        self.min_size = size;
+        self
+    }
+
+    /// Set maximum file size filter.
+    #[must_use]
+    pub fn with_max_size(mut self, size: Option<u64>) -> Self {
+        self.max_size = size;
+        self
+    }
+
+    /// Set glob patterns to ignore.
+    #[must_use]
+    pub fn with_patterns(mut self, patterns: Vec<String>) -> Self {
+        self.ignore_patterns = patterns;
+        self
+    }
 }
 
 /// Errors that can occur during directory scanning.

@@ -14,11 +14,13 @@
 //! - [`duplicates`]: Duplicate detection engine
 //! - [`tui`]: Interactive terminal user interface
 //! - [`actions`]: File operations (delete, preview)
+//! - [`output`]: Output formatters (JSON, CSV)
 
 pub mod actions;
 pub mod cli;
 pub mod duplicates;
 pub mod logging;
+pub mod output;
 pub mod scanner;
 pub mod signal;
 pub mod tui;

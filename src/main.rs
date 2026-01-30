@@ -4,7 +4,13 @@
 
 use anyhow::Result;
 use clap::Parser;
-use rustdupe::{logging, signal};
+use rustdupe::{
+    duplicates::{DuplicateFinder, FinderConfig},
+    logging, output,
+    scanner::WalkerConfig,
+    signal,
+};
+use std::io::{self, Write};
 
 mod cli;
 
@@ -19,7 +25,7 @@ fn main() -> Result<()> {
 
     // Install signal handler for graceful shutdown (Ctrl+C)
     let shutdown_handler = signal::install_handler().map_err(|e| anyhow::anyhow!("{}", e))?;
-    let _shutdown_flag = shutdown_handler.get_flag();
+    let shutdown_flag = shutdown_handler.get_flag();
 
     // Handle subcommands
     match cli.command {
@@ -47,32 +53,100 @@ fn main() -> Result<()> {
                 log::debug!("Ignore patterns: {:?}", args.ignore_patterns);
             }
 
-            // TODO: Implement actual scanning logic (Task 3.2.1+)
+            // Configure the walker
+            // TODO: Pass walker config to DuplicateFinder (currently uses default internally)
+            let _walker_config = WalkerConfig::default()
+                .with_follow_symlinks(args.follow_symlinks)
+                .with_skip_hidden(args.skip_hidden)
+                .with_min_size(args.min_size)
+                .with_max_size(args.max_size)
+                .with_patterns(args.ignore_patterns.clone());
+
+            // Configure the duplicate finder
+            let finder_config = FinderConfig::default()
+                .with_io_threads(args.io_threads)
+                .with_paranoid(args.paranoid)
+                .with_shutdown_flag(shutdown_flag.clone());
+
+            let finder = DuplicateFinder::new(finder_config);
+
+            // Run the scan based on output format
             match args.output {
                 OutputFormat::Tui => {
                     log::info!(
                         "Starting TUI scan of {}",
                         args.path.canonicalize()?.display()
                     );
-                    // TODO: Launch TUI (Task 3.4.x)
-                    println!(
-                        "TUI mode not yet implemented. Scanning: {}",
-                        args.path.display()
-                    );
+                    // TODO: Launch TUI with scan results (Task 3.4.x)
+                    // For now, run the scan and show a placeholder message
+                    match finder.find_duplicates(&args.path) {
+                        Ok((groups, summary)) => {
+                            log::info!(
+                                "Scan complete: {} groups, {} reclaimable",
+                                summary.duplicate_groups,
+                                summary.reclaimable_display()
+                            );
+                            // TODO: Launch TUI with these groups
+                            println!(
+                                "TUI mode not yet fully integrated. Found {} duplicate groups.",
+                                groups.len()
+                            );
+                            println!("Reclaimable space: {}", summary.reclaimable_display());
+                        }
+                        Err(e) => {
+                            anyhow::bail!("Scan failed: {}", e);
+                        }
+                    }
                 }
                 OutputFormat::Json => {
                     log::info!("Starting JSON scan of {}", args.path.display());
-                    // TODO: Implement JSON output (Task 3.6.2)
-                    println!(
-                        "{{\"status\": \"not_implemented\", \"path\": \"{}\"}}",
-                        args.path.display()
-                    );
+                    match finder.find_duplicates(&args.path) {
+                        Ok((groups, summary)) => {
+                            let json_output = output::JsonOutput::new(&groups, &summary);
+                            let mut stdout = io::stdout().lock();
+                            json_output.write_to(&mut stdout, true)?;
+                            stdout.flush()?;
+                        }
+                        Err(e) => {
+                            // Output error as JSON to stderr, but also return error
+                            let error_json = serde_json::json!({
+                                "error": e.to_string(),
+                                "interrupted": matches!(e, rustdupe::duplicates::FinderError::Interrupted)
+                            });
+                            eprintln!("{}", serde_json::to_string_pretty(&error_json)?);
+                            anyhow::bail!("Scan failed: {}", e);
+                        }
+                    }
                 }
                 OutputFormat::Csv => {
                     log::info!("Starting CSV scan of {}", args.path.display());
                     // TODO: Implement CSV output (Task 3.6.3)
-                    println!("status,path");
-                    println!("not_implemented,{}", args.path.display());
+                    match finder.find_duplicates(&args.path) {
+                        Ok((groups, summary)) => {
+                            println!("# CSV output not yet implemented");
+                            println!(
+                                "# Found {} duplicate groups, {} reclaimable",
+                                summary.duplicate_groups,
+                                summary.reclaimable_display()
+                            );
+                            // Print placeholder CSV
+                            println!("group_id,hash,path,size");
+                            for (idx, group) in groups.iter().enumerate() {
+                                for path in &group.files {
+                                    println!(
+                                        "{},{},{},{}",
+                                        idx + 1,
+                                        group.hash_hex(),
+                                        path.display(),
+                                        group.size
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            anyhow::bail!("Scan failed: {}", e);
+                        }
+                    }
                 }
             }
 
