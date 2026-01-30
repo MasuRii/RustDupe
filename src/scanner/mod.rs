@@ -37,6 +37,7 @@
 
 pub mod hardlink;
 pub mod hasher;
+pub mod path_utils;
 pub mod walker;
 
 use std::path::PathBuf;
@@ -45,6 +46,10 @@ use std::time::SystemTime;
 // Re-export main types
 pub use hardlink::HardlinkTracker;
 pub use hasher::{hash_to_hex, hex_to_hash, Hash, Hasher, PREHASH_SIZE};
+pub use path_utils::{
+    is_nfc, normalize_path_str, normalize_path_str_cow, normalize_pathbuf, path_key, paths_equal,
+    paths_equal_normalized,
+};
 pub use walker::Walker;
 
 /// Metadata for a discovered file.
