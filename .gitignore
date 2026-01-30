@@ -1,0 +1,3 @@
+# Ralph - AI agent loop files
+.ralph*
+.opencode/plugin/ralph-write-guardrail.ts
