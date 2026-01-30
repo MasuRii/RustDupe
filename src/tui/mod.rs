@@ -7,8 +7,9 @@
 //!
 //! The TUI module consists of:
 //! - [`app`]: Application state management (modes, navigation, selection)
-//! - [`events`]: Keyboard event handling (TODO: Task 3.4.2)
-//! - [`ui`]: Ratatui rendering (TODO: Task 3.4.3)
+//! - [`events`]: Keyboard event handling
+//! - [`ui`]: Ratatui rendering
+//! - [`run_tui`]: Main loop that coordinates everything
 //!
 //! # Architecture
 //!
@@ -21,7 +22,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use rustdupe::tui::app::{App, AppMode, Action};
+//! use rustdupe::tui::{run_tui, App};
 //! use rustdupe::duplicates::DuplicateGroup;
 //! use std::path::PathBuf;
 //!
@@ -33,22 +34,19 @@
 //!         vec![PathBuf::from("/a.txt"), PathBuf::from("/b.txt")],
 //!     ),
 //! ];
-//! let mut app = App::with_groups(groups);
+//! let app = App::with_groups(groups);
 //!
-//! // Handle user actions
-//! app.handle_action(Action::NavigateDown);
-//! app.handle_action(Action::ToggleSelect);
-//!
-//! // Check state
-//! assert_eq!(app.file_index(), 1);
-//! assert!(app.has_selections());
+//! // Run the TUI (this takes over the terminal)
+//! // run_tui(app, None).unwrap();
 //! ```
 
 pub mod app;
 pub mod events;
+mod run;
 pub mod ui;
 
 // Re-export commonly used types
 pub use app::{Action, App, AppMode, ScanProgress};
 pub use events::{EventError, EventHandler};
+pub use run::{run_tui, TuiError};
 pub use ui::{format_size, render, truncate_path, truncate_string};
