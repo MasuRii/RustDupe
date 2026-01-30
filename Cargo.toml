@@ -1,0 +1,100 @@
+[package]
+name = "rustdupe"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Smart duplicate file finder with interactive TUI"
+authors = ["RustDupe Team"]
+license = "MIT"
+repository = "https://github.com/rustdupe/rustdupe"
+keywords = ["duplicate", "files", "deduplication", "tui", "cli"]
+categories = ["command-line-utilities", "filesystem"]
+readme = "README.md"
+
+[dependencies]
+# CLI Argument Parsing - clap is the gold standard
+# 13.7k GitHub stars, excellent docs, derive macros, shell completions
+clap = { version = "4", features = ["derive", "env", "unicode"] }
+
+# TUI Framework - Ratatui is the actively maintained successor to tui-rs
+# Cross-platform via crossterm backend, 23k+ GitHub stars
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+
+# Terminal Backend - MUST use crossterm for Windows support
+# termion is Unix-only, termwiz is more complex
+crossterm = "0.28"
+
+# Hashing - BLAKE3 is optimal for file deduplication
+# 2.8-10x faster than SHA-256, parallel processing, cryptographically secure
+# Multi-threaded scaling: 8.4 GB/s single-thread -> 92 GB/s on 16 cores
+blake3 = "1.5"
+
+# Directory Walking - jwalk for parallel traversal (4x faster than walkdir)
+# Provides sorted streaming results, rayon-powered parallelism
+jwalk = "0.8"
+# Keep walkdir as fallback for simpler single-threaded cases
+walkdir = "2"
+
+# Parallel Processing - Rayon is the de facto standard
+# Work-stealing thread pool, near-linear scaling with cores
+rayon = "1.10"
+
+# Progress Bars - indicatif is mature and feature-rich
+# 90M+ downloads, integrates with rayon, multi-bar support
+indicatif = "0.17"
+
+# Trash Support - Cross-platform recycle bin
+# Windows: IFileOperation, macOS: NSFileManager, Linux: Freedesktop spec
+# Note: Minor thread-safety caveat on Linux with mount operations
+trash = "5"
+
+# Human-Readable File Sizes - bytesize is lightweight and popular
+# 3.3M downloads/month, supports SI (KB/MB) and IEC (KiB/MiB)
+bytesize = "2"
+
+# Ignore Patterns - gitignore-style pattern matching
+# Same library used by ripgrep, handles .gitignore files natively
+ignore = "0.4"
+
+# Error Handling - anyhow for applications, thiserror for libraries
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Signal Handling - Graceful Ctrl+C shutdown
+# Cross-platform, supports SIGTERM/SIGHUP with "termination" feature
+ctrlc = { version = "3.4", features = ["termination"] }
+
+# Config/Cache Directory Discovery - XDG on Linux, AppData on Windows
+directories = "5"
+
+# Unicode Path Normalization - Critical for macOS NFD vs NFC issues
+unicode-normalization = "0.1"
+
+# Serialization for JSON/CSV output
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+csv = "1"
+
+[build-dependencies]
+# Windows manifest embedding for long path support (>260 chars)
+embed-resource = "2"
+
+[dev-dependencies]
+# Property-based testing
+proptest = "1"
+# Temp file/directory creation for tests
+tempfile = "3"
+
+[profile.release]
+lto = "thin"           # Link-time optimization (good balance)
+codegen-units = 1      # Better optimization, slower compile
+strip = true           # Strip symbols for smaller binary
+panic = "abort"        # Smaller binary, faster execution
+
+[profile.release-fast]
+inherits = "release"
+lto = "fat"            # Maximum optimization
