@@ -677,6 +677,524 @@ pub fn phase3_fullhash(
     (duplicate_groups, stats)
 }
 
+// ============================================================================
+// DuplicateFinder - Pipeline Orchestrator
+// ============================================================================
+
+/// Configuration for the duplicate finder.
+///
+/// Controls the behavior of the multi-phase duplicate detection pipeline.
+#[derive(Clone)]
+pub struct FinderConfig {
+    /// Number of I/O threads for parallel hashing.
+    /// Default is 4 to prevent disk thrashing.
+    pub io_threads: usize,
+    /// Enable byte-by-byte verification after hash matching (paranoid mode).
+    pub paranoid: bool,
+    /// Optional shutdown flag for graceful termination.
+    pub shutdown_flag: Option<Arc<AtomicBool>>,
+    /// Optional progress callback for reporting.
+    pub progress_callback: Option<Arc<dyn ProgressCallback>>,
+}
+
+impl std::fmt::Debug for FinderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FinderConfig")
+            .field("io_threads", &self.io_threads)
+            .field("paranoid", &self.paranoid)
+            .field("shutdown_flag", &self.shutdown_flag)
+            .field(
+                "progress_callback",
+                &self.progress_callback.as_ref().map(|_| "<callback>"),
+            )
+            .finish()
+    }
+}
+
+impl Default for FinderConfig {
+    fn default() -> Self {
+        Self {
+            io_threads: 4,
+            paranoid: false,
+            shutdown_flag: None,
+            progress_callback: None,
+        }
+    }
+}
+
+impl FinderConfig {
+    /// Create a new configuration with custom I/O thread count.
+    #[must_use]
+    pub fn with_io_threads(mut self, threads: usize) -> Self {
+        self.io_threads = threads.max(1);
+        self
+    }
+
+    /// Enable paranoid mode (byte-by-byte verification).
+    #[must_use]
+    pub fn with_paranoid(mut self, enabled: bool) -> Self {
+        self.paranoid = enabled;
+        self
+    }
+
+    /// Set the shutdown flag for graceful termination.
+    #[must_use]
+    pub fn with_shutdown_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.shutdown_flag = Some(flag);
+        self
+    }
+
+    /// Set the progress callback.
+    #[must_use]
+    pub fn with_progress_callback(mut self, callback: Arc<dyn ProgressCallback>) -> Self {
+        self.progress_callback = Some(callback);
+        self
+    }
+
+    /// Check if shutdown has been requested.
+    fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_flag
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::SeqCst))
+    }
+}
+
+/// Summary statistics from a duplicate scan.
+///
+/// Provides comprehensive metrics about the scan results including
+/// file counts, sizes, and potential space savings.
+#[derive(Debug, Clone, Default)]
+pub struct ScanSummary {
+    /// Total number of files scanned
+    pub total_files: usize,
+    /// Total size of all scanned files in bytes
+    pub total_size: u64,
+    /// Number of files eliminated by size grouping (unique sizes)
+    pub eliminated_by_size: usize,
+    /// Number of files eliminated by prehash (different first 4KB)
+    pub eliminated_by_prehash: usize,
+    /// Number of confirmed duplicate groups
+    pub duplicate_groups: usize,
+    /// Total number of duplicate files (excluding originals)
+    pub duplicate_files: usize,
+    /// Total space that can be reclaimed by removing duplicates
+    pub reclaimable_space: u64,
+    /// Duration of the entire scan
+    pub scan_duration: std::time::Duration,
+    /// Whether the scan was interrupted
+    pub interrupted: bool,
+}
+
+impl ScanSummary {
+    /// Calculate the percentage of space that is wasted by duplicates.
+    #[must_use]
+    pub fn wasted_percentage(&self) -> f64 {
+        if self.total_size == 0 {
+            0.0
+        } else {
+            (self.reclaimable_space as f64 / self.total_size as f64) * 100.0
+        }
+    }
+
+    /// Format reclaimable space as human-readable string.
+    #[must_use]
+    pub fn reclaimable_display(&self) -> String {
+        format_size(self.reclaimable_space)
+    }
+
+    /// Format total size as human-readable string.
+    #[must_use]
+    pub fn total_size_display(&self) -> String {
+        format_size(self.total_size)
+    }
+}
+
+/// Format a byte size as a human-readable string.
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
+
+    if bytes >= TB {
+        format!("{:.2} TB", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+/// Errors that can occur during duplicate finding.
+#[derive(thiserror::Error, Debug)]
+pub enum FinderError {
+    /// The scan was interrupted by user (Ctrl+C or shutdown signal).
+    #[error("Scan interrupted by user")]
+    Interrupted,
+
+    /// The provided path does not exist.
+    #[error("Path not found: {0}")]
+    PathNotFound(PathBuf),
+
+    /// The provided path is not a directory.
+    #[error("Not a directory: {0}")]
+    NotADirectory(PathBuf),
+
+    /// An I/O error occurred during scanning.
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// Duplicate finder that orchestrates the multi-phase detection pipeline.
+///
+/// The `DuplicateFinder` runs the complete duplicate detection pipeline:
+/// 1. **Walk** - Collect all files from the target directory
+/// 2. **Phase 1** - Group files by size (eliminates 70-90%)
+/// 3. **Phase 2** - Compare prehashes of same-size files (eliminates 80-95%)
+/// 4. **Phase 3** - Compute full hashes to confirm duplicates
+///
+/// # Example
+///
+/// ```no_run
+/// use rustdupe::duplicates::{DuplicateFinder, FinderConfig};
+/// use std::path::Path;
+///
+/// let config = FinderConfig::default().with_io_threads(4);
+/// let finder = DuplicateFinder::new(config);
+///
+/// let (groups, summary) = finder.find_duplicates(Path::new("/some/path")).unwrap();
+///
+/// println!("Found {} duplicate groups", summary.duplicate_groups);
+/// println!("Reclaimable space: {}", summary.reclaimable_display());
+/// ```
+pub struct DuplicateFinder {
+    config: FinderConfig,
+    hasher: Arc<Hasher>,
+}
+
+impl DuplicateFinder {
+    /// Create a new duplicate finder with the given configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Configuration for the finder
+    #[must_use]
+    pub fn new(config: FinderConfig) -> Self {
+        let mut hasher = Hasher::new();
+        if let Some(ref flag) = config.shutdown_flag {
+            hasher = hasher.with_shutdown_flag(flag.clone());
+        }
+        Self {
+            config,
+            hasher: Arc::new(hasher),
+        }
+    }
+
+    /// Create a new duplicate finder with default configuration.
+    #[must_use]
+    pub fn with_defaults() -> Self {
+        Self::new(FinderConfig::default())
+    }
+
+    /// Find all duplicate files starting from the given path.
+    ///
+    /// Runs the complete multi-phase duplicate detection pipeline and
+    /// returns confirmed duplicate groups along with summary statistics.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Root directory to scan for duplicates
+    ///
+    /// # Returns
+    ///
+    /// A tuple of:
+    /// - `Vec<DuplicateGroup>` - Confirmed duplicate groups
+    /// - `ScanSummary` - Statistics about the scan
+    ///
+    /// # Errors
+    ///
+    /// Returns `FinderError` if:
+    /// - The path does not exist
+    /// - The path is not a directory
+    /// - The scan is interrupted by shutdown signal
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustdupe::duplicates::{DuplicateFinder, FinderConfig};
+    /// use std::path::Path;
+    ///
+    /// let finder = DuplicateFinder::with_defaults();
+    /// match finder.find_duplicates(Path::new(".")) {
+    ///     Ok((groups, summary)) => {
+    ///         println!("Found {} duplicate groups", groups.len());
+    ///         println!("Can reclaim {} bytes", summary.reclaimable_space);
+    ///     }
+    ///     Err(e) => eprintln!("Scan failed: {}", e),
+    /// }
+    /// ```
+    pub fn find_duplicates(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(Vec<super::DuplicateGroup>, ScanSummary), FinderError> {
+        let start_time = std::time::Instant::now();
+        let mut summary = ScanSummary::default();
+
+        // Validate path
+        if !path.exists() {
+            return Err(FinderError::PathNotFound(path.to_path_buf()));
+        }
+        if !path.is_dir() {
+            return Err(FinderError::NotADirectory(path.to_path_buf()));
+        }
+
+        log::info!("Starting duplicate scan of {}", path.display());
+
+        // Check for early shutdown
+        if self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        // Phase 0: Walk directory and collect files
+        log::info!("Phase 0: Walking directory...");
+        if let Some(ref callback) = self.config.progress_callback {
+            callback.on_phase_start("walking", 0); // Unknown total
+        }
+
+        let walker_config = crate::scanner::WalkerConfig::default();
+        let walker = crate::scanner::Walker::new(path, walker_config);
+
+        // Set shutdown flag on walker if available
+        let walker = if let Some(ref flag) = self.config.shutdown_flag {
+            walker.with_shutdown_flag(flag.clone())
+        } else {
+            walker
+        };
+
+        let files: Vec<FileEntry> = walker.walk().filter_map(|r| r.ok()).collect();
+
+        if let Some(ref callback) = self.config.progress_callback {
+            callback.on_phase_end("walking");
+        }
+
+        summary.total_files = files.len();
+        summary.total_size = files.iter().map(|f| f.size).sum();
+
+        log::info!(
+            "Found {} files ({} total)",
+            files.len(),
+            format_size(summary.total_size)
+        );
+
+        // Check for shutdown after walking
+        if self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        if files.is_empty() {
+            log::info!("No files found, scan complete");
+            summary.scan_duration = start_time.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        // Phase 1: Group by size
+        log::info!("Phase 1: Grouping by size...");
+        let (size_groups, size_stats) = super::group_by_size(files);
+
+        summary.eliminated_by_size = size_stats.eliminated_unique;
+
+        log::info!(
+            "Phase 1 complete: {} → {} files ({:.1}% eliminated)",
+            size_stats.total_files,
+            size_stats.potential_duplicates,
+            size_stats.elimination_rate()
+        );
+
+        // Check for shutdown after Phase 1
+        if self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        if size_groups.is_empty() {
+            log::info!("No potential duplicates found after size grouping");
+            summary.scan_duration = start_time.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        // Phase 2: Prehash comparison
+        log::info!("Phase 2: Computing prehashes...");
+        let prehash_config = PrehashConfig {
+            io_threads: self.config.io_threads,
+            shutdown_flag: self.config.shutdown_flag.clone(),
+            progress_callback: self.config.progress_callback.clone(),
+        };
+
+        let (prehash_groups, prehash_stats) =
+            phase2_prehash(size_groups, self.hasher.clone(), prehash_config);
+
+        summary.eliminated_by_prehash = prehash_stats.unique_prehashes;
+
+        log::info!(
+            "Phase 2 complete: {} → {} files ({:.1}% eliminated)",
+            prehash_stats.input_files,
+            prehash_stats.potential_duplicates,
+            prehash_stats.elimination_rate()
+        );
+
+        // Check for shutdown after Phase 2
+        if prehash_stats.interrupted || self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        if prehash_groups.is_empty() {
+            log::info!("No potential duplicates found after prehash comparison");
+            summary.scan_duration = start_time.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        // Phase 3: Full hash comparison
+        log::info!("Phase 3: Computing full hashes...");
+        let fullhash_config = FullhashConfig {
+            io_threads: self.config.io_threads,
+            shutdown_flag: self.config.shutdown_flag.clone(),
+            progress_callback: self.config.progress_callback.clone(),
+        };
+
+        let (duplicate_groups, fullhash_stats) =
+            phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config);
+
+        // Check for shutdown after Phase 3
+        if fullhash_stats.interrupted || self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        // Update summary with final results
+        summary.duplicate_groups = fullhash_stats.duplicate_groups;
+        summary.duplicate_files = fullhash_stats.duplicate_files;
+        summary.reclaimable_space = fullhash_stats.wasted_space;
+        summary.scan_duration = start_time.elapsed();
+
+        log::info!(
+            "Scan complete: {} duplicate groups, {} duplicate files, {} reclaimable",
+            summary.duplicate_groups,
+            summary.duplicate_files,
+            summary.reclaimable_display()
+        );
+
+        // TODO: Phase 4 - Paranoid mode (byte-by-byte verification)
+        if self.config.paranoid && !duplicate_groups.is_empty() {
+            log::warn!("Paranoid mode not yet implemented - skipping byte verification");
+        }
+
+        Ok((duplicate_groups, summary))
+    }
+
+    /// Find duplicates from a pre-collected list of files.
+    ///
+    /// Use this method when you already have a list of files from another source
+    /// (e.g., a custom walker or cached file list).
+    ///
+    /// # Arguments
+    ///
+    /// * `files` - List of file entries to check for duplicates
+    ///
+    /// # Returns
+    ///
+    /// A tuple of:
+    /// - `Vec<DuplicateGroup>` - Confirmed duplicate groups
+    /// - `ScanSummary` - Statistics about the scan
+    pub fn find_duplicates_from_files(
+        &self,
+        files: Vec<FileEntry>,
+    ) -> Result<(Vec<super::DuplicateGroup>, ScanSummary), FinderError> {
+        let start_time = std::time::Instant::now();
+        let total_files = files.len();
+        let total_size: u64 = files.iter().map(|f| f.size).sum();
+
+        let mut summary = ScanSummary {
+            total_files,
+            total_size,
+            ..Default::default()
+        };
+
+        log::info!(
+            "Processing {} files ({})",
+            files.len(),
+            format_size(summary.total_size)
+        );
+
+        // Check for early shutdown
+        if self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        if files.is_empty() {
+            summary.scan_duration = start_time.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        // Phase 1: Group by size
+        let (size_groups, size_stats) = super::group_by_size(files);
+        summary.eliminated_by_size = size_stats.eliminated_unique;
+
+        if self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        if size_groups.is_empty() {
+            summary.scan_duration = start_time.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        // Phase 2: Prehash comparison
+        let prehash_config = PrehashConfig {
+            io_threads: self.config.io_threads,
+            shutdown_flag: self.config.shutdown_flag.clone(),
+            progress_callback: self.config.progress_callback.clone(),
+        };
+
+        let (prehash_groups, prehash_stats) =
+            phase2_prehash(size_groups, self.hasher.clone(), prehash_config);
+
+        summary.eliminated_by_prehash = prehash_stats.unique_prehashes;
+
+        if prehash_stats.interrupted || self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        if prehash_groups.is_empty() {
+            summary.scan_duration = start_time.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        // Phase 3: Full hash comparison
+        let fullhash_config = FullhashConfig {
+            io_threads: self.config.io_threads,
+            shutdown_flag: self.config.shutdown_flag.clone(),
+            progress_callback: self.config.progress_callback.clone(),
+        };
+
+        let (duplicate_groups, fullhash_stats) =
+            phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config);
+
+        if fullhash_stats.interrupted || self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        // Update summary
+        summary.duplicate_groups = fullhash_stats.duplicate_groups;
+        summary.duplicate_files = fullhash_stats.duplicate_files;
+        summary.reclaimable_space = fullhash_stats.wasted_space;
+        summary.scan_duration = start_time.elapsed();
+
+        Ok((duplicate_groups, summary))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1176,6 +1694,290 @@ mod tests {
         // Callback should have been called
         assert!(*callback.phase_started.lock().unwrap());
         assert!(callback.progress_count.load(Ordering::SeqCst) > 0);
+        assert!(*callback.phase_ended.lock().unwrap());
+    }
+
+    // ========================================================================
+    // DuplicateFinder Tests
+    // ========================================================================
+
+    #[test]
+    fn test_finder_config_default() {
+        let config = FinderConfig::default();
+        assert_eq!(config.io_threads, 4);
+        assert!(!config.paranoid);
+        assert!(config.shutdown_flag.is_none());
+        assert!(config.progress_callback.is_none());
+    }
+
+    #[test]
+    fn test_finder_config_builder() {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let config = FinderConfig::default()
+            .with_io_threads(8)
+            .with_paranoid(true)
+            .with_shutdown_flag(shutdown.clone());
+
+        assert_eq!(config.io_threads, 8);
+        assert!(config.paranoid);
+        assert!(config.shutdown_flag.is_some());
+    }
+
+    #[test]
+    fn test_finder_config_io_threads_min() {
+        let config = FinderConfig::default().with_io_threads(0);
+        assert_eq!(config.io_threads, 1); // Minimum 1
+    }
+
+    #[test]
+    fn test_scan_summary_default() {
+        let summary = ScanSummary::default();
+        assert_eq!(summary.total_files, 0);
+        assert_eq!(summary.total_size, 0);
+        assert_eq!(summary.duplicate_groups, 0);
+        assert_eq!(summary.reclaimable_space, 0);
+        assert!(!summary.interrupted);
+    }
+
+    #[test]
+    fn test_scan_summary_wasted_percentage() {
+        let summary = ScanSummary {
+            total_size: 1000,
+            reclaimable_space: 250,
+            ..Default::default()
+        };
+        assert!((summary.wasted_percentage() - 25.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_scan_summary_wasted_percentage_zero_size() {
+        let summary = ScanSummary::default();
+        assert_eq!(summary.wasted_percentage(), 0.0);
+    }
+
+    #[test]
+    fn test_scan_summary_display() {
+        let summary = ScanSummary {
+            total_size: 1_500_000,
+            reclaimable_space: 500_000,
+            ..Default::default()
+        };
+        assert!(summary.total_size_display().contains("MB"));
+        assert!(summary.reclaimable_display().contains("KB"));
+    }
+
+    #[test]
+    fn test_format_size_bytes() {
+        assert_eq!(format_size(500), "500 B");
+    }
+
+    #[test]
+    fn test_format_size_kilobytes() {
+        assert!(format_size(1024).contains("KB"));
+        assert!(format_size(2048).contains("KB"));
+    }
+
+    #[test]
+    fn test_format_size_megabytes() {
+        assert!(format_size(1024 * 1024).contains("MB"));
+    }
+
+    #[test]
+    fn test_format_size_gigabytes() {
+        assert!(format_size(1024 * 1024 * 1024).contains("GB"));
+    }
+
+    #[test]
+    fn test_format_size_terabytes() {
+        assert!(format_size(1024 * 1024 * 1024 * 1024).contains("TB"));
+    }
+
+    #[test]
+    fn test_duplicate_finder_new() {
+        let config = FinderConfig::default();
+        let finder = DuplicateFinder::new(config);
+        // Just ensure it creates successfully
+        assert!(Arc::strong_count(&finder.hasher) >= 1);
+    }
+
+    #[test]
+    fn test_duplicate_finder_with_defaults() {
+        let finder = DuplicateFinder::with_defaults();
+        assert!(Arc::strong_count(&finder.hasher) >= 1);
+    }
+
+    #[test]
+    fn test_find_duplicates_path_not_found() {
+        let finder = DuplicateFinder::with_defaults();
+        let result = finder.find_duplicates(std::path::Path::new("/nonexistent/path/12345"));
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            FinderError::PathNotFound(p) => {
+                assert!(p.to_string_lossy().contains("nonexistent"));
+            }
+            _ => panic!("Expected PathNotFound error"),
+        }
+    }
+
+    #[test]
+    fn test_find_duplicates_not_a_directory() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("file.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let finder = DuplicateFinder::with_defaults();
+        let result = finder.find_duplicates(&file);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            FinderError::NotADirectory(_) => {}
+            _ => panic!("Expected NotADirectory error"),
+        }
+    }
+
+    #[test]
+    fn test_find_duplicates_empty_directory() {
+        let dir = TempDir::new().unwrap();
+
+        let finder = DuplicateFinder::with_defaults();
+        let (groups, summary) = finder.find_duplicates(dir.path()).unwrap();
+
+        assert!(groups.is_empty());
+        assert_eq!(summary.total_files, 0);
+        assert_eq!(summary.duplicate_groups, 0);
+        assert!(!summary.interrupted);
+    }
+
+    #[test]
+    fn test_find_duplicates_no_duplicates() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "content a").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "content b").unwrap();
+        std::fs::write(dir.path().join("c.txt"), "content c").unwrap();
+
+        let finder = DuplicateFinder::with_defaults();
+        let (groups, summary) = finder.find_duplicates(dir.path()).unwrap();
+
+        assert!(groups.is_empty());
+        assert_eq!(summary.total_files, 3);
+        assert_eq!(summary.duplicate_groups, 0);
+        assert_eq!(summary.reclaimable_space, 0);
+    }
+
+    #[test]
+    fn test_find_duplicates_with_duplicates() {
+        let dir = TempDir::new().unwrap();
+        let content = b"identical content for duplicate detection";
+        std::fs::write(dir.path().join("dup1.txt"), content).unwrap();
+        std::fs::write(dir.path().join("dup2.txt"), content).unwrap();
+        std::fs::write(dir.path().join("unique.txt"), "different content").unwrap();
+
+        let finder = DuplicateFinder::with_defaults();
+        let (groups, summary) = finder.find_duplicates(dir.path()).unwrap();
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(summary.total_files, 3);
+        assert_eq!(summary.duplicate_groups, 1);
+        assert_eq!(summary.duplicate_files, 1); // 2 files - 1 original
+        assert_eq!(summary.reclaimable_space, content.len() as u64);
+    }
+
+    #[test]
+    fn test_find_duplicates_multiple_groups() {
+        let dir = TempDir::new().unwrap();
+
+        // Group A: 2 identical files
+        std::fs::write(dir.path().join("a1.txt"), "group A content").unwrap();
+        std::fs::write(dir.path().join("a2.txt"), "group A content").unwrap();
+
+        // Group B: 3 identical files
+        std::fs::write(dir.path().join("b1.txt"), "group B content").unwrap();
+        std::fs::write(dir.path().join("b2.txt"), "group B content").unwrap();
+        std::fs::write(dir.path().join("b3.txt"), "group B content").unwrap();
+
+        let finder = DuplicateFinder::with_defaults();
+        let (groups, summary) = finder.find_duplicates(dir.path()).unwrap();
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(summary.total_files, 5);
+        assert_eq!(summary.duplicate_groups, 2);
+        assert_eq!(summary.duplicate_files, 3); // (2-1) + (3-1)
+    }
+
+    #[test]
+    fn test_find_duplicates_shutdown_flag() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "content").unwrap();
+
+        let shutdown = Arc::new(AtomicBool::new(true)); // Already shutdown
+        let config = FinderConfig::default().with_shutdown_flag(shutdown);
+        let finder = DuplicateFinder::new(config);
+
+        let result = finder.find_duplicates(dir.path());
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            FinderError::Interrupted => {}
+            _ => panic!("Expected Interrupted error"),
+        }
+    }
+
+    #[test]
+    fn test_find_duplicates_from_files_empty() {
+        let finder = DuplicateFinder::with_defaults();
+        let (groups, summary) = finder.find_duplicates_from_files(vec![]).unwrap();
+
+        assert!(groups.is_empty());
+        assert_eq!(summary.total_files, 0);
+    }
+
+    #[test]
+    fn test_find_duplicates_from_files_with_duplicates() {
+        let dir = TempDir::new().unwrap();
+        let content = b"identical content";
+
+        let file1 = create_test_file(&dir, "dup1.txt", content);
+        let file2 = create_test_file(&dir, "dup2.txt", content);
+
+        let finder = DuplicateFinder::with_defaults();
+        let (groups, summary) = finder
+            .find_duplicates_from_files(vec![file1, file2])
+            .unwrap();
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(summary.duplicate_groups, 1);
+        assert_eq!(summary.reclaimable_space, content.len() as u64);
+    }
+
+    #[test]
+    fn test_find_duplicates_summary_timing() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "content").unwrap();
+
+        let finder = DuplicateFinder::with_defaults();
+        let (_, summary) = finder.find_duplicates(dir.path()).unwrap();
+
+        // Duration should be non-zero (at least some time passed)
+        assert!(summary.scan_duration.as_nanos() > 0);
+    }
+
+    #[test]
+    fn test_find_duplicates_with_progress_callback() {
+        let dir = TempDir::new().unwrap();
+        let content = b"identical content for testing";
+        std::fs::write(dir.path().join("dup1.txt"), content).unwrap();
+        std::fs::write(dir.path().join("dup2.txt"), content).unwrap();
+
+        let callback = Arc::new(TestProgressCallback::new());
+        let config = FinderConfig::default().with_progress_callback(callback.clone());
+        let finder = DuplicateFinder::new(config);
+
+        let (groups, _) = finder.find_duplicates(dir.path()).unwrap();
+
+        assert_eq!(groups.len(), 1);
+        // Progress callback should have been invoked
+        assert!(*callback.phase_started.lock().unwrap());
         assert!(*callback.phase_ended.lock().unwrap());
     }
 }

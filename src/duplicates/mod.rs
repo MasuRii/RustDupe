@@ -58,6 +58,7 @@ pub use groups::{
 
 // Re-export main types from finder
 pub use finder::{
-    compute_prehashes, extract_paths, phase2_prehash, phase3_fullhash, FullhashConfig,
-    FullhashStats, PrehashConfig, PrehashEntry, PrehashStats, ProgressCallback,
+    compute_prehashes, extract_paths, phase2_prehash, phase3_fullhash, DuplicateFinder,
+    FinderConfig, FinderError, FullhashConfig, FullhashStats, PrehashConfig, PrehashEntry,
+    PrehashStats, ProgressCallback, ScanSummary,
 };
