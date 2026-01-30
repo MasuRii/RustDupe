@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use clap::Parser;
-use rustdupe::logging;
+use rustdupe::{logging, signal};
 
 mod cli;
 
@@ -16,6 +16,10 @@ fn main() -> Result<()> {
 
     // Initialize logging based on verbosity flags (MUST be before any log calls)
     logging::init_logging(cli.verbose, cli.quiet);
+
+    // Install signal handler for graceful shutdown (Ctrl+C)
+    let shutdown_handler = signal::install_handler().map_err(|e| anyhow::anyhow!("{}", e))?;
+    let _shutdown_flag = shutdown_handler.get_flag();
 
     // Handle subcommands
     match cli.command {
@@ -70,6 +74,11 @@ fn main() -> Result<()> {
                     println!("status,path");
                     println!("not_implemented,{}", args.path.display());
                 }
+            }
+
+            // Check if shutdown was requested and exit with appropriate code
+            if shutdown_handler.is_shutdown_requested() {
+                std::process::exit(signal::EXIT_CODE_INTERRUPTED);
             }
 
             Ok(())
