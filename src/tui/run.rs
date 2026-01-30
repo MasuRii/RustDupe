@@ -59,6 +59,7 @@ use super::app::{Action, App, AppMode};
 use super::events::EventHandler;
 use super::ui::render;
 use crate::actions::delete::{delete_batch, validate_preserves_copy, DeleteConfig};
+use crate::actions::preview::preview_file_simple;
 
 /// Frame rate limit: 60 FPS = ~16.67ms per frame.
 /// Using 16ms for slightly conservative timing.
@@ -231,7 +232,7 @@ fn handle_action(
             if app.mode() == AppMode::Previewing {
                 // Load preview content for the current file
                 if let Some(path) = app.current_file() {
-                    let content = load_preview_content(path);
+                    let content = preview_file_simple(path);
                     app.set_preview(content);
                 }
             }
@@ -311,57 +312,6 @@ impl crate::actions::delete::DeleteProgressCallback for NoOpProgress {
     fn on_complete(&self, _result: &crate::actions::delete::BatchDeleteResult) {}
 }
 
-/// Load preview content for a file.
-///
-/// For text files, returns the first 50 lines.
-/// For binary files, returns a hex dump.
-/// On error, returns an error message.
-fn load_preview_content(path: &std::path::Path) -> String {
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
-
-    // Try to open the file
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(e) => return format!("Error opening file: {}", e),
-    };
-
-    let reader = BufReader::new(file);
-
-    // Read the first ~50 lines or 4KB
-    let mut lines = Vec::new();
-    let mut total_bytes = 0;
-    const MAX_BYTES: usize = 4096;
-    const MAX_LINES: usize = 50;
-
-    for line_result in reader.lines().take(MAX_LINES) {
-        match line_result {
-            Ok(line) => {
-                total_bytes += line.len() + 1;
-                if total_bytes > MAX_BYTES {
-                    lines.push("... (content truncated)".to_string());
-                    break;
-                }
-                lines.push(line);
-            }
-            Err(e) => {
-                // If we can't read as text, show as binary
-                if lines.is_empty() {
-                    return format!("Binary file or encoding error: {}", e);
-                }
-                lines.push(format!("... (read error: {})", e));
-                break;
-            }
-        }
-    }
-
-    if lines.is_empty() {
-        return "(empty file)".to_string();
-    }
-
-    lines.join("\n")
-}
-
 /// Set up the terminal for TUI mode.
 fn setup_terminal() -> TuiResult<Terminal> {
     log::debug!("Setting up terminal for TUI");
@@ -422,13 +372,13 @@ mod tests {
     }
 
     #[test]
-    fn test_load_preview_content_nonexistent() {
-        let content = load_preview_content(std::path::Path::new("/nonexistent/file.txt"));
-        assert!(content.contains("Error"));
+    fn test_preview_file_simple_nonexistent() {
+        let content = preview_file_simple(std::path::Path::new("/nonexistent/file.txt"));
+        assert!(content.to_lowercase().contains("error") || content.contains("not found"));
     }
 
     #[test]
-    fn test_load_preview_content_with_temp_file() {
+    fn test_preview_file_simple_with_temp_file() {
         use std::io::Write;
 
         // Create a temporary file
@@ -442,7 +392,7 @@ mod tests {
             writeln!(file, "Line 3").unwrap();
         }
 
-        let content = load_preview_content(&temp_path);
+        let content = preview_file_simple(&temp_path);
         assert!(content.contains("Line 1"));
         assert!(content.contains("Line 2"));
         assert!(content.contains("Line 3"));
@@ -452,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_preview_content_empty_file() {
+    fn test_preview_file_simple_empty_file() {
         use std::fs::File;
 
         let temp_dir = std::env::temp_dir();
@@ -461,7 +411,7 @@ mod tests {
         // Create empty file
         File::create(&temp_path).unwrap();
 
-        let content = load_preview_content(&temp_path);
+        let content = preview_file_simple(&temp_path);
         assert!(content.contains("empty"));
 
         // Cleanup
