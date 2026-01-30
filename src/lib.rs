@@ -8,6 +8,7 @@
 //! The crate is organized into the following modules:
 //!
 //! - [`cli`]: Command-line argument parsing and validation
+//! - [`logging`]: Logging infrastructure and initialization
 //! - [`scanner`]: Directory traversal and file hashing
 //! - [`duplicates`]: Duplicate detection engine
 //! - [`tui`]: Interactive terminal user interface
@@ -16,5 +17,6 @@
 pub mod actions;
 pub mod cli;
 pub mod duplicates;
+pub mod logging;
 pub mod scanner;
 pub mod tui;

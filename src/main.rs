@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use rustdupe::logging;
 
 mod cli;
 
@@ -13,8 +14,8 @@ fn main() -> Result<()> {
     // Parse command-line arguments
     let cli = Cli::parse();
 
-    // Initialize logging based on verbosity flags
-    init_logging(cli.verbose, cli.quiet);
+    // Initialize logging based on verbosity flags (MUST be before any log calls)
+    logging::init_logging(cli.verbose, cli.quiet);
 
     // Handle subcommands
     match cli.command {
@@ -74,33 +75,4 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
-}
-
-/// Initialize logging based on CLI verbosity flags.
-///
-/// - No flags: Info level (normal operation)
-/// - `-q/--quiet`: Error level only
-/// - `-v`: Debug level
-/// - `-vv`: Trace level
-fn init_logging(verbose: u8, quiet: bool) {
-    use env_logger::Builder;
-    use log::LevelFilter;
-
-    let level = if quiet {
-        LevelFilter::Error
-    } else {
-        match verbose {
-            0 => LevelFilter::Info,
-            1 => LevelFilter::Debug,
-            _ => LevelFilter::Trace,
-        }
-    };
-
-    Builder::new()
-        .filter_level(level)
-        .format_timestamp_secs()
-        .format_module_path(verbose >= 2)
-        .init();
-
-    log::debug!("Logging initialized at level: {:?}", level);
 }
