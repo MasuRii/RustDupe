@@ -26,18 +26,26 @@
 //!
 //! # Example
 //!
-//! ```
-//! use rustdupe::scanner::{Walker, WalkerConfig, FileEntry};
-//! use rustdupe::duplicates::{group_by_size, SizeGroup, DuplicateGroup, GroupingStats};
+//! ```no_run
+//! use rustdupe::scanner::{Walker, WalkerConfig, FileEntry, Hasher};
+//! use rustdupe::duplicates::{group_by_size, phase2_prehash, PrehashConfig};
 //! use std::path::Path;
+//! use std::sync::Arc;
 //!
 //! // Phase 1: Collect files and group by size
-//! // let walker = Walker::new(Path::new("."), WalkerConfig::default());
-//! // let files: Vec<FileEntry> = walker.walk().filter_map(Result::ok).collect();
-//! // let (size_groups, stats) = group_by_size(files);
-//! //
-//! // println!("Phase 1: {} files → {} potential duplicates",
-//! //     stats.total_files, stats.potential_duplicates);
+//! let walker = Walker::new(Path::new("."), WalkerConfig::default());
+//! let files: Vec<FileEntry> = walker.walk().filter_map(Result::ok).collect();
+//! let (size_groups, size_stats) = group_by_size(files);
+//!
+//! // Phase 2: Compute prehashes
+//! let hasher = Arc::new(Hasher::new());
+//! let config = PrehashConfig::default();
+//! let (prehash_groups, prehash_stats) = phase2_prehash(size_groups, hasher, config);
+//!
+//! println!("Phase 1: {} files, {:.1}% eliminated",
+//!     size_stats.total_files, size_stats.elimination_rate());
+//! println!("Phase 2: {} potential duplicates, {:.1}% eliminated",
+//!     prehash_stats.potential_duplicates, prehash_stats.elimination_rate());
 //! ```
 
 pub mod finder;
@@ -46,4 +54,10 @@ pub mod groups;
 // Re-export main types from groups
 pub use groups::{
     group_by_size, group_by_size_structured, DuplicateGroup, GroupingStats, SizeGroup,
+};
+
+// Re-export main types from finder
+pub use finder::{
+    compute_prehashes, extract_paths, phase2_prehash, PrehashConfig, PrehashEntry, PrehashStats,
+    ProgressCallback,
 };
