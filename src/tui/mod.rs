@@ -50,3 +50,4 @@ pub mod ui;
 
 // Re-export commonly used types
 pub use app::{Action, App, AppMode, ScanProgress};
+pub use events::{EventError, EventHandler};
