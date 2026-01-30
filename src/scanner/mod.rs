@@ -35,6 +35,7 @@
 //! }
 //! ```
 
+pub mod hardlink;
 pub mod hasher;
 pub mod walker;
 
@@ -42,6 +43,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 // Re-export main types
+pub use hardlink::HardlinkTracker;
 pub use hasher::{hash_to_hex, hex_to_hash, Hash, Hasher, PREHASH_SIZE};
 pub use walker::Walker;
 

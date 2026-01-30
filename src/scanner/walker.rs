@@ -13,7 +13,7 @@
 //! - Gitignore-style pattern matching via the `ignore` crate
 //! - Size filtering (min/max)
 //! - Hidden file filtering
-//! - Hardlink detection support
+//! - Hardlink detection via [`HardlinkTracker`](super::hardlink::HardlinkTracker)
 //! - Graceful shutdown via atomic flag
 //!
 //! # Example
@@ -37,7 +37,6 @@
 //! }
 //! ```
 
-use std::collections::HashSet;
 use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,6 +46,7 @@ use std::time::SystemTime;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use jwalk::WalkDir;
 
+use super::hardlink::HardlinkTracker;
 use super::{FileEntry, ScanError, WalkerConfig};
 
 /// Directory walker for parallel file discovery.
@@ -178,7 +178,7 @@ impl Walker {
     /// ```
     pub fn walk(&self) -> impl Iterator<Item = Result<FileEntry, ScanError>> + '_ {
         let gitignore = self.build_gitignore();
-        let mut seen_inodes: HashSet<InodeKey> = HashSet::new();
+        let mut hardlink_tracker = HardlinkTracker::new();
 
         // Configure jwalk
         let walk_dir = WalkDir::new(&self.root)
@@ -259,7 +259,7 @@ impl Walker {
                         path,
                         metadata,
                         is_symlink,
-                        &mut seen_inodes,
+                        &mut hardlink_tracker,
                         &gitignore,
                     )
                 }
@@ -280,7 +280,7 @@ impl Walker {
         path: PathBuf,
         metadata: Metadata,
         is_symlink: bool,
-        seen_inodes: &mut HashSet<InodeKey>,
+        hardlink_tracker: &mut HardlinkTracker,
         _gitignore: &Option<Gitignore>,
     ) -> Option<Result<FileEntry, ScanError>> {
         let size = metadata.len();
@@ -304,26 +304,18 @@ impl Walker {
         // Get modification time
         let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
 
-        // Check for hardlinks
-        let inode_key = InodeKey::from_metadata(&metadata);
-        let is_hardlink = if let Some(key) = inode_key {
-            if seen_inodes.contains(&key) {
-                log::debug!("Skipping hardlink: {}", path.display());
-                return None;
-            }
-            seen_inodes.insert(key);
-            // We track but don't skip the first occurrence
-            false
-        } else {
-            false
-        };
+        // Check for hardlinks using the tracker
+        if hardlink_tracker.is_hardlink(&metadata) {
+            log::debug!("Skipping hardlink: {}", path.display());
+            return None;
+        }
 
         Some(Ok(FileEntry {
             path,
             size,
             modified,
             is_symlink,
-            is_hardlink,
+            is_hardlink: false,
         }))
     }
 
@@ -362,51 +354,6 @@ impl Walker {
             path,
             source: std::io::Error::other(error.to_string()),
         })
-    }
-}
-
-/// Platform-specific inode key for hardlink detection.
-///
-/// On Unix, this is (device_id, inode).
-/// On Windows, this uses file_index from metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct InodeKey {
-    #[cfg(unix)]
-    dev: u64,
-    #[cfg(unix)]
-    ino: u64,
-    #[cfg(windows)]
-    file_index: u64,
-    #[cfg(not(any(unix, windows)))]
-    _phantom: (),
-}
-
-impl InodeKey {
-    /// Create an inode key from file metadata.
-    ///
-    /// Returns `None` if the platform doesn't support inode tracking
-    /// or if the metadata doesn't contain the required information.
-    #[cfg(unix)]
-    fn from_metadata(metadata: &Metadata) -> Option<Self> {
-        use std::os::unix::fs::MetadataExt;
-        Some(Self {
-            dev: metadata.dev(),
-            ino: metadata.ino(),
-        })
-    }
-
-    #[cfg(windows)]
-    fn from_metadata(_metadata: &Metadata) -> Option<Self> {
-        // Windows requires opening the file handle to get file_index
-        // For now, we skip hardlink detection on Windows in the walker
-        // and rely on the hasher to handle duplicates
-        // TODO: Implement Windows hardlink detection using winapi (Task 3.2.2)
-        None
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    fn from_metadata(_metadata: &Metadata) -> Option<Self> {
-        None
     }
 }
 
