@@ -396,6 +396,287 @@ pub fn extract_paths(files: &[FileEntry]) -> Vec<PathBuf> {
     files.iter().map(|f| f.path.clone()).collect()
 }
 
+/// Threshold for logging large files.
+const LARGE_FILE_THRESHOLD: u64 = 100 * 1024 * 1024; // 100MB
+
+/// Configuration for full hash phase.
+#[derive(Clone)]
+pub struct FullhashConfig {
+    /// Number of I/O threads for parallel hashing.
+    /// Default is 4 to prevent disk thrashing.
+    pub io_threads: usize,
+    /// Optional shutdown flag for graceful termination.
+    pub shutdown_flag: Option<Arc<AtomicBool>>,
+    /// Optional progress callback.
+    pub progress_callback: Option<Arc<dyn ProgressCallback>>,
+}
+
+impl std::fmt::Debug for FullhashConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FullhashConfig")
+            .field("io_threads", &self.io_threads)
+            .field("shutdown_flag", &self.shutdown_flag)
+            .field(
+                "progress_callback",
+                &self.progress_callback.as_ref().map(|_| "<callback>"),
+            )
+            .finish()
+    }
+}
+
+impl Default for FullhashConfig {
+    fn default() -> Self {
+        Self {
+            io_threads: 4,
+            shutdown_flag: None,
+            progress_callback: None,
+        }
+    }
+}
+
+impl FullhashConfig {
+    /// Create a new configuration with custom I/O thread count.
+    #[must_use]
+    pub fn with_io_threads(mut self, threads: usize) -> Self {
+        self.io_threads = threads.max(1);
+        self
+    }
+
+    /// Set the shutdown flag for graceful termination.
+    #[must_use]
+    pub fn with_shutdown_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.shutdown_flag = Some(flag);
+        self
+    }
+
+    /// Set the progress callback.
+    #[must_use]
+    pub fn with_progress_callback(mut self, callback: Arc<dyn ProgressCallback>) -> Self {
+        self.progress_callback = Some(callback);
+        self
+    }
+
+    /// Check if shutdown has been requested.
+    fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_flag
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::SeqCst))
+    }
+}
+
+/// Statistics from full hash phase.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FullhashStats {
+    /// Total files that entered Phase 3
+    pub input_files: usize,
+    /// Number of files successfully hashed
+    pub hashed_files: usize,
+    /// Number of files that failed to hash (I/O errors)
+    pub failed_files: usize,
+    /// Total bytes hashed across all files
+    pub bytes_hashed: u64,
+    /// Number of confirmed duplicate groups
+    pub duplicate_groups: usize,
+    /// Number of confirmed duplicate files (excluding originals)
+    pub duplicate_files: usize,
+    /// Total space wasted by duplicates
+    pub wasted_space: u64,
+    /// Whether phase was interrupted by shutdown
+    pub interrupted: bool,
+}
+
+impl FullhashStats {
+    /// Calculate wasted space from duplicate groups.
+    pub fn calculate_wasted_space(&mut self, groups: &[super::DuplicateGroup]) {
+        self.duplicate_groups = groups.len();
+        self.duplicate_files = groups.iter().map(|g| g.duplicate_count()).sum();
+        self.wasted_space = groups.iter().map(|g| g.wasted_space()).sum();
+    }
+}
+
+/// Compute full hashes for prehash groups (Phase 3).
+///
+/// This is the third and final phase of duplicate detection. For each prehash
+/// group, it computes the full content hash of each file to confirm that they
+/// are true duplicates.
+///
+/// # Arguments
+///
+/// * `prehash_groups` - Files grouped by prehash from Phase 2
+/// * `hasher` - The hasher to use for computing full hashes
+/// * `config` - Configuration for the full hash phase
+///
+/// # Returns
+///
+/// A tuple of:
+/// - `Vec<DuplicateGroup>` - Confirmed duplicate groups
+/// - `FullhashStats` - Statistics about the full hash operation
+///
+/// # Performance
+///
+/// - Uses rayon for parallel I/O (limited to `io_threads` to prevent disk thrashing)
+/// - Streams entire file content (O(total bytes))
+/// - Large files (>100MB) are logged at debug level for visibility
+///
+/// # Example
+///
+/// ```no_run
+/// use rustdupe::scanner::{FileEntry, Hasher};
+/// use rustdupe::duplicates::{phase2_prehash, phase3_fullhash, PrehashConfig, FullhashConfig};
+/// use std::collections::HashMap;
+/// use std::sync::Arc;
+///
+/// // Assume prehash_groups from Phase 2
+/// let prehash_groups: HashMap<[u8; 32], Vec<FileEntry>> = HashMap::new();
+///
+/// let hasher = Arc::new(Hasher::new());
+/// let config = FullhashConfig::default();
+/// let (duplicate_groups, stats) = phase3_fullhash(prehash_groups, hasher, config);
+///
+/// println!("Found {} duplicate groups wasting {} bytes",
+///     stats.duplicate_groups, stats.wasted_space);
+/// ```
+#[must_use]
+pub fn phase3_fullhash(
+    prehash_groups: HashMap<Hash, Vec<FileEntry>>,
+    hasher: Arc<Hasher>,
+    config: FullhashConfig,
+) -> (Vec<super::DuplicateGroup>, FullhashStats) {
+    // Count total input files
+    let input_files: usize = prehash_groups.values().map(|v| v.len()).sum();
+    let mut stats = FullhashStats {
+        input_files,
+        ..Default::default()
+    };
+
+    // Flatten all files from prehash groups
+    let all_files: Vec<FileEntry> = prehash_groups.into_values().flatten().collect();
+
+    if all_files.is_empty() {
+        log::debug!("Phase 3: No files to process");
+        return (Vec::new(), stats);
+    }
+
+    // Notify progress callback
+    if let Some(ref callback) = config.progress_callback {
+        callback.on_phase_start("fullhash", all_files.len());
+    }
+
+    log::info!(
+        "Phase 3: Computing full hashes for {} files",
+        all_files.len()
+    );
+
+    // Build a custom thread pool with limited parallelism for I/O
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(config.io_threads)
+        .build()
+        .unwrap_or_else(|_| {
+            log::warn!(
+                "Failed to create custom thread pool, using global pool with {} threads",
+                rayon::current_num_threads()
+            );
+            rayon::ThreadPoolBuilder::new().build().unwrap()
+        });
+
+    // Compute full hashes in parallel with limited I/O parallelism
+    let hash_results: Vec<(FileEntry, Option<Hash>)> = pool.install(|| {
+        all_files
+            .into_par_iter()
+            .enumerate()
+            .map(|(idx, file)| {
+                // Check shutdown flag
+                if config.is_shutdown_requested() {
+                    log::debug!("Phase 3: Shutdown requested, skipping remaining files");
+                    return (file, None);
+                }
+
+                // Log large files for visibility
+                if file.size > LARGE_FILE_THRESHOLD {
+                    log::debug!(
+                        "Hashing large file ({} MB): {}",
+                        file.size / (1024 * 1024),
+                        file.path.display()
+                    );
+                }
+
+                // Report progress
+                if let Some(ref callback) = config.progress_callback {
+                    callback.on_progress(idx + 1, file.path.to_string_lossy().as_ref());
+                }
+
+                // Compute full hash
+                match hasher.full_hash(&file.path) {
+                    Ok(hash) => {
+                        log::trace!("Full hash computed: {}", file.path.display());
+                        (file, Some(hash))
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to hash {}: {}", file.path.display(), e);
+                        (file, None)
+                    }
+                }
+            })
+            .collect()
+    });
+
+    // Check if we were interrupted
+    if config.is_shutdown_requested() {
+        stats.interrupted = true;
+        log::info!("Phase 3: Interrupted by shutdown signal");
+    }
+
+    // Group by full hash
+    let mut fullhash_groups: HashMap<Hash, Vec<FileEntry>> = HashMap::new();
+
+    for (file, fullhash_opt) in hash_results {
+        match fullhash_opt {
+            Some(fullhash) => {
+                stats.hashed_files += 1;
+                stats.bytes_hashed += file.size;
+                fullhash_groups.entry(fullhash).or_default().push(file);
+            }
+            None => {
+                stats.failed_files += 1;
+            }
+        }
+    }
+
+    // Convert to DuplicateGroup structs, filtering to only groups with 2+ files
+    let duplicate_groups: Vec<super::DuplicateGroup> = fullhash_groups
+        .into_iter()
+        .filter(|(_, files)| files.len() > 1)
+        .map(|(hash, files)| {
+            let size = files.first().map_or(0, |f| f.size);
+            let paths: Vec<PathBuf> = files.into_iter().map(|f| f.path).collect();
+            log::debug!(
+                "Duplicate group {}: {} files, {} bytes each",
+                crate::scanner::hash_to_hex(&hash),
+                paths.len(),
+                size
+            );
+            super::DuplicateGroup::new(hash, size, paths)
+        })
+        .collect();
+
+    // Calculate final statistics
+    stats.calculate_wasted_space(&duplicate_groups);
+
+    // Notify progress callback
+    if let Some(ref callback) = config.progress_callback {
+        callback.on_phase_end("fullhash");
+    }
+
+    log::info!(
+        "Phase 3 complete: {} groups, {} duplicates, {} bytes reclaimable",
+        stats.duplicate_groups,
+        stats.duplicate_files,
+        stats.wasted_space
+    );
+
+    (duplicate_groups, stats)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,6 +961,217 @@ mod tests {
         let config = PrehashConfig::default().with_progress_callback(callback.clone());
 
         let (_, _) = phase2_prehash(size_groups, hasher, config);
+
+        // Callback should have been called
+        assert!(*callback.phase_started.lock().unwrap());
+        assert!(callback.progress_count.load(Ordering::SeqCst) > 0);
+        assert!(*callback.phase_ended.lock().unwrap());
+    }
+
+    // Phase 3 tests
+
+    #[test]
+    fn test_fullhash_config_default() {
+        let config = FullhashConfig::default();
+        assert_eq!(config.io_threads, 4);
+        assert!(config.shutdown_flag.is_none());
+        assert!(config.progress_callback.is_none());
+    }
+
+    #[test]
+    fn test_fullhash_config_builder() {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let config = FullhashConfig::default()
+            .with_io_threads(8)
+            .with_shutdown_flag(shutdown.clone());
+
+        assert_eq!(config.io_threads, 8);
+        assert!(config.shutdown_flag.is_some());
+    }
+
+    #[test]
+    fn test_fullhash_stats_default() {
+        let stats = FullhashStats::default();
+        assert_eq!(stats.input_files, 0);
+        assert_eq!(stats.hashed_files, 0);
+        assert_eq!(stats.bytes_hashed, 0);
+        assert_eq!(stats.duplicate_groups, 0);
+    }
+
+    #[test]
+    fn test_phase3_empty_input() {
+        let hasher = Arc::new(Hasher::new());
+        let config = FullhashConfig::default();
+        let (groups, stats) = phase3_fullhash(HashMap::new(), hasher, config);
+
+        assert!(groups.is_empty());
+        assert_eq!(stats.input_files, 0);
+        assert_eq!(stats.duplicate_groups, 0);
+    }
+
+    #[test]
+    fn test_phase3_identical_files() {
+        let dir = TempDir::new().unwrap();
+        let content = b"identical content for testing duplicates";
+
+        let file1 = create_test_file(&dir, "file1.txt", content);
+        let file2 = create_test_file(&dir, "file2.txt", content);
+
+        // Create prehash groups (simulating Phase 2 output)
+        let hasher = Arc::new(Hasher::new());
+        let prehash = hasher.prehash(&file1.path).unwrap();
+
+        let mut prehash_groups = HashMap::new();
+        prehash_groups.insert(prehash, vec![file1, file2]);
+
+        let config = FullhashConfig::default();
+        let (groups, stats) = phase3_fullhash(prehash_groups, hasher, config);
+
+        // Both files should be in same duplicate group
+        assert_eq!(groups.len(), 1);
+        assert_eq!(stats.input_files, 2);
+        assert_eq!(stats.hashed_files, 2);
+        assert_eq!(stats.duplicate_groups, 1);
+        assert_eq!(stats.duplicate_files, 1); // 1 duplicate (2 files - 1 original)
+        assert_eq!(stats.wasted_space, content.len() as u64);
+    }
+
+    #[test]
+    fn test_phase3_different_content_same_prehash_size() {
+        let dir = TempDir::new().unwrap();
+
+        // Files with same size but different content (hypothetically same prehash)
+        // In reality, different content means different prehash, but for testing
+        // we simulate false positives from Phase 2
+        let file1 = create_test_file(&dir, "file1.txt", b"content A for test");
+        let file2 = create_test_file(&dir, "file2.txt", b"content B for test");
+
+        // Force them into same prehash group (simulating edge case)
+        let fake_prehash = [0u8; 32];
+        let mut prehash_groups = HashMap::new();
+        prehash_groups.insert(fake_prehash, vec![file1, file2]);
+
+        let hasher = Arc::new(Hasher::new());
+        let config = FullhashConfig::default();
+        let (groups, stats) = phase3_fullhash(prehash_groups, hasher, config);
+
+        // Files have different full hashes, no duplicates
+        assert!(groups.is_empty());
+        assert_eq!(stats.input_files, 2);
+        assert_eq!(stats.hashed_files, 2);
+        assert_eq!(stats.duplicate_groups, 0);
+    }
+
+    #[test]
+    fn test_phase3_handles_missing_file() {
+        let dir = TempDir::new().unwrap();
+        let file1 = create_test_file(&dir, "exists.txt", b"real content here");
+
+        // Create entry for non-existent file
+        let file2 = make_file_entry(dir.path().join("missing.txt").to_str().unwrap(), 17);
+
+        let fake_prehash = [0u8; 32];
+        let mut prehash_groups = HashMap::new();
+        prehash_groups.insert(fake_prehash, vec![file1, file2]);
+
+        let hasher = Arc::new(Hasher::new());
+        let config = FullhashConfig::default();
+        let (groups, stats) = phase3_fullhash(prehash_groups, hasher, config);
+
+        // Missing file should fail, existing file becomes unique (no group)
+        assert!(groups.is_empty());
+        assert_eq!(stats.input_files, 2);
+        assert_eq!(stats.hashed_files, 1);
+        assert_eq!(stats.failed_files, 1);
+    }
+
+    #[test]
+    fn test_phase3_shutdown_flag() {
+        let dir = TempDir::new().unwrap();
+        let file1 = create_test_file(&dir, "file1.txt", b"content");
+        let file2 = create_test_file(&dir, "file2.txt", b"content");
+
+        let fake_prehash = [0u8; 32];
+        let mut prehash_groups = HashMap::new();
+        prehash_groups.insert(fake_prehash, vec![file1, file2]);
+
+        let shutdown = Arc::new(AtomicBool::new(true)); // Already shutdown
+        let hasher = Arc::new(Hasher::new());
+        let config = FullhashConfig::default().with_shutdown_flag(shutdown);
+        let (_, stats) = phase3_fullhash(prehash_groups, hasher, config);
+
+        // Should be interrupted
+        assert!(stats.interrupted);
+    }
+
+    #[test]
+    fn test_phase3_multiple_duplicate_groups() {
+        let dir = TempDir::new().unwrap();
+
+        // Group 1: Two identical files
+        let file1 = create_test_file(&dir, "a1.txt", b"content group A");
+        let file2 = create_test_file(&dir, "a2.txt", b"content group A");
+
+        // Group 2: Three identical files
+        let file3 = create_test_file(&dir, "b1.txt", b"content group B");
+        let file4 = create_test_file(&dir, "b2.txt", b"content group B");
+        let file5 = create_test_file(&dir, "b3.txt", b"content group B");
+
+        let hasher = Arc::new(Hasher::new());
+        let prehash1 = hasher.prehash(&file1.path).unwrap();
+        let prehash2 = hasher.prehash(&file3.path).unwrap();
+
+        let mut prehash_groups = HashMap::new();
+        prehash_groups.insert(prehash1, vec![file1, file2]);
+        prehash_groups.insert(prehash2, vec![file3, file4, file5]);
+
+        let config = FullhashConfig::default();
+        let (groups, stats) = phase3_fullhash(prehash_groups, hasher, config);
+
+        // Should have 2 duplicate groups
+        assert_eq!(groups.len(), 2);
+        assert_eq!(stats.input_files, 5);
+        assert_eq!(stats.hashed_files, 5);
+        assert_eq!(stats.duplicate_groups, 2);
+        assert_eq!(stats.duplicate_files, 3); // 1 + 2
+    }
+
+    #[test]
+    fn test_phase3_bytes_hashed_tracking() {
+        let dir = TempDir::new().unwrap();
+        let content = b"test content for byte tracking";
+        let file1 = create_test_file(&dir, "file1.txt", content);
+        let file2 = create_test_file(&dir, "file2.txt", content);
+
+        let hasher = Arc::new(Hasher::new());
+        let prehash = hasher.prehash(&file1.path).unwrap();
+
+        let mut prehash_groups = HashMap::new();
+        prehash_groups.insert(prehash, vec![file1, file2]);
+
+        let config = FullhashConfig::default();
+        let (_, stats) = phase3_fullhash(prehash_groups, hasher, config);
+
+        // Should track total bytes hashed
+        assert_eq!(stats.bytes_hashed, (content.len() * 2) as u64);
+    }
+
+    #[test]
+    fn test_phase3_progress_callback() {
+        let dir = TempDir::new().unwrap();
+        let file1 = create_test_file(&dir, "file1.txt", b"content");
+        let file2 = create_test_file(&dir, "file2.txt", b"content");
+
+        let hasher = Arc::new(Hasher::new());
+        let prehash = hasher.prehash(&file1.path).unwrap();
+
+        let mut prehash_groups = HashMap::new();
+        prehash_groups.insert(prehash, vec![file1, file2]);
+
+        let callback = Arc::new(TestProgressCallback::new());
+        let config = FullhashConfig::default().with_progress_callback(callback.clone());
+
+        let (_, _) = phase3_fullhash(prehash_groups, hasher, config);
 
         // Callback should have been called
         assert!(*callback.phase_started.lock().unwrap());
