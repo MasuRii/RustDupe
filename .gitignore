@@ -1,8 +1,88 @@
+# RustDupe - .gitignore
+#
+# Cargo.lock Decision:
+# This is a BINARY crate (produces an executable), so Cargo.lock IS committed.
+# This ensures reproducible builds across all environments.
+# For library crates, Cargo.lock would typically be ignored.
+
 # Ralph - AI agent loop files
 .ralph*
 .opencode/plugin/ralph-write-guardrail.ts
 
-
-# Added by cargo
-
+# Rust build artifacts (added by cargo)
 /target
+
+# Backup files from rustfmt and other tools
+*.rs.bk
+
+# IDE patterns
+# IntelliJ IDEA / CLion
+.idea/
+*.iml
+
+# VS Code - ignore user settings but keep workspace recommendations
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# Vim / Neovim
+*.swp
+*.swo
+*~
+.nvim/
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+
+# OS-specific patterns
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+
+# Build artifacts in wrong locations (should only be in /target)
+*.pdb
+*.exe
+*.dll
+*.so
+*.dylib
+!target/**
+
+# Environment and secrets (never commit these!)
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+credentials.json
+
+# Test artifacts
+*.profraw
+*.profdata
+coverage/
+.coverage
+
+# Benchmarking
+criterion/
+
+# Documentation generation (use 'cargo doc' instead)
+/doc/
+
+# Core dumps
+core
