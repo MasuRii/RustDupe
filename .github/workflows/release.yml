@@ -4,14 +4,51 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag to release (e.g. v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
 
 env:
   BIN_NAME: rustdupe
   PROJECT_NAME: rustdupe
 
 jobs:
+  prepare:
+    name: Prepare Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      clean_version: ${{ steps.get_version.outputs.clean_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get version
+        id: get_version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG_NAME="${{ github.event.inputs.tag_name }}"
+          else
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "clean_version=${TAG_NAME#v}" >> $GITHUB_OUTPUT
+      - name: Create and Push Tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.get_version.outputs.version }} || echo "Tag already exists"
+          git push origin ${{ steps.get_version.outputs.version }} || echo "Tag already exists"
+
   build:
     name: Build - ${{ matrix.target }}
+    needs: prepare
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -50,7 +87,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${{ needs.prepare.outputs.clean_version }}
           ASSET_NAME="${PROJECT_NAME}-${VERSION}-${matrix.target}"
           BINARY_PATH="target/${{ matrix.target }}/release/${BIN_NAME}${{ matrix.suffix }}"
           
@@ -71,7 +108,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: build
+    needs: [build, prepare]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,6 +123,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare.outputs.version }}
           files: artifacts/*
           generate_release_notes: true
           draft: false
