@@ -614,7 +614,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn test_walker_detects_hardlinks() {
-        use std::os::unix::fs::hard_link;
+        use std::fs::hard_link;
 
         let dir = create_test_dir();
 

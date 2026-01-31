@@ -380,7 +380,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn test_hardlink_detected() {
-        use std::os::unix::fs::hard_link;
+        use std::fs::hard_link;
 
         let dir = TempDir::new().unwrap();
         let original = create_test_file(&dir, "original.txt", "content");
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn test_multiple_hardlinks_same_inode() {
-        use std::os::unix::fs::hard_link;
+        use std::fs::hard_link;
 
         let dir = TempDir::new().unwrap();
         let original = create_test_file(&dir, "original.txt", "content");
