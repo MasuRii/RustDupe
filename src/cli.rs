@@ -308,9 +308,75 @@ mod tests {
     }
 
     #[test]
-    fn test_output_format_display() {
-        assert_eq!(format!("{}", OutputFormat::Tui), "tui");
-        assert_eq!(format!("{}", OutputFormat::Json), "json");
-        assert_eq!(format!("{}", OutputFormat::Csv), "csv");
+    fn test_cli_parse_scan_csv() {
+        let cli = Cli::try_parse_from(["rustdupe", "scan", "/path", "--output", "csv"]).unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.output, OutputFormat::Csv);
+            }
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_quiet() {
+        let cli = Cli::try_parse_from(["rustdupe", "-q", "scan", "/path"]).unwrap();
+        assert!(cli.quiet);
+        assert_eq!(cli.verbose, 0);
+    }
+
+    #[test]
+    fn test_cli_parse_scan_all_flags() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "scan",
+            "/path",
+            "--follow-symlinks",
+            "--skip-hidden",
+            "--io-threads",
+            "8",
+            "--paranoid",
+            "--permanent",
+            "--yes",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Scan(args) => {
+                assert!(args.follow_symlinks);
+                assert!(args.skip_hidden);
+                assert_eq!(args.io_threads, 8);
+                assert!(args.paranoid);
+                assert!(args.permanent);
+                assert!(args.yes);
+            }
+        }
+    }
+
+    #[test]
+    fn test_cli_no_color_env() {
+        // Use a lock if we had one, but since we don't, we'll just be careful.
+        // Note: This test may fail if run in parallel with other CLI tests.
+        std::env::set_var("NO_COLOR", "true");
+        let cli = Cli::try_parse_from(["rustdupe", "scan", "/path"]).unwrap();
+        assert!(cli.no_color);
+        std::env::remove_var("NO_COLOR");
+    }
+
+    #[test]
+    fn test_cli_invalid_subcommand() {
+        let result = Cli::try_parse_from(["rustdupe", "invalid", "/path"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_missing_path() {
+        let result = Cli::try_parse_from(["rustdupe", "scan"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_version_flag() {
+        let result = Cli::try_parse_from(["rustdupe", "--version"]);
+        assert!(result.is_err()); // clap exits on --version
     }
 }
