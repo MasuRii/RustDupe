@@ -27,7 +27,8 @@ crossterm = "0.28"
 # Hashing - BLAKE3 is optimal for file deduplication
 # 2.8-10x faster than SHA-256, parallel processing, cryptographically secure
 # Multi-threaded scaling: 8.4 GB/s single-thread -> 92 GB/s on 16 cores
-blake3 = "1.5"
+# Pinned to 1.5.x for Rust 1.75 MSRV compatibility (1.6+ requires newer Rust)
+blake3 = "~1.5"
 
 # Directory Walking - jwalk for parallel traversal (4x faster than walkdir)
 # Provides sorted streaming results, rayon-powered parallelism
