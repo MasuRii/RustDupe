@@ -294,6 +294,7 @@ impl InodeKey {
 /// The inode key if available, or `None` if the file cannot be opened
 /// or the platform doesn't support this operation.
 #[cfg(windows)]
+// Currently unused as Windows hardlink detection is stubbed
 #[allow(dead_code)]
 fn get_inode_key_from_path(path: &Path) -> Option<InodeKey> {
     // This would require winapi/windows-sys to implement properly.

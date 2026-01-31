@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_event_error_display() {
-        let io_error = std::io::Error::new(std::io::ErrorKind::Other, "test error");
+        let io_error = std::io::Error::other("test error");
         let event_error = EventError::Io(io_error);
         let display = format!("{}", event_error);
         assert!(display.contains("Event I/O error"));

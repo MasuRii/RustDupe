@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_tui_error_display() {
-        let io_err = io::Error::new(io::ErrorKind::Other, "test error");
+        let io_err = io::Error::other("test error");
         let tui_err = TuiError::Io(io_err);
         assert!(format!("{}", tui_err).contains("terminal I/O error"));
 
