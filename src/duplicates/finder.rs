@@ -124,6 +124,15 @@ pub trait ProgressCallback: Send + Sync {
     /// * `path` - Path being processed
     fn on_progress(&self, current: usize, path: &str);
 
+    /// Called when an item has been processed, providing its size.
+    ///
+    /// This can be used to track byte-based throughput.
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes` - Size of the item in bytes
+    fn on_item_completed(&self, _bytes: u64) {}
+
     /// Called when a phase completes.
     ///
     /// # Arguments
@@ -609,6 +618,9 @@ pub fn phase3_fullhash(
                 match hasher.full_hash(&file.path) {
                     Ok(hash) => {
                         log::trace!("Full hash computed: {}", file.path.display());
+                        if let Some(ref callback) = config.progress_callback {
+                            callback.on_item_completed(file.size);
+                        }
                         (file, Some(hash))
                     }
                     Err(e) => {

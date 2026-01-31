@@ -11,6 +11,7 @@ use rustdupe::{
     signal,
 };
 use std::io::{self, Write};
+use std::sync::Arc;
 
 mod cli;
 
@@ -62,11 +63,24 @@ fn main() -> Result<()> {
                 .with_max_size(args.max_size)
                 .with_patterns(args.ignore_patterns.clone());
 
+            // Configure progress reporting for non-TUI modes
+            let progress = if args.output != OutputFormat::Tui {
+                Some(Arc::new(rustdupe::progress::Progress::new(cli.quiet)))
+            } else {
+                None
+            };
+
             // Configure the duplicate finder
-            let finder_config = FinderConfig::default()
+            let mut finder_config = FinderConfig::default()
                 .with_io_threads(args.io_threads)
                 .with_paranoid(args.paranoid)
                 .with_shutdown_flag(shutdown_flag.clone());
+
+            if let Some(ref p) = progress {
+                finder_config = finder_config.with_progress_callback(
+                    p.clone() as Arc<dyn rustdupe::duplicates::ProgressCallback>
+                );
+            }
 
             let finder = DuplicateFinder::new(finder_config);
 
