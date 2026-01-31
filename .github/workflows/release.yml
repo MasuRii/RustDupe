@@ -89,7 +89,7 @@ jobs:
         shell: bash
         run: |
           VERSION=${{ needs.prepare.outputs.clean_version }}
-          ASSET_NAME="${PROJECT_NAME}-${VERSION}-${matrix.target}"
+          ASSET_NAME="${PROJECT_NAME}-${VERSION}-${{ matrix.target }}"
           BINARY_PATH="target/${{ matrix.target }}/release/${BIN_NAME}${{ matrix.suffix }}"
           
           mkdir dist
