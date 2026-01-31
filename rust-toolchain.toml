@@ -1,0 +1,9 @@
+# RustDupe Rust Toolchain Configuration
+#
+# This file pins the Rust toolchain version for reproducible builds.
+# See: https://rust-lang.github.io/rustup/overrides.html
+
+[toolchain]
+channel = "1.75"
+components = ["rustfmt", "clippy"]
+profile = "default"
