@@ -1,0 +1,10 @@
+// Windows Resource Script for RustDupe
+// This embeds the application manifest into the executable
+// 
+// Resource type 24 is RT_MANIFEST - the manifest resource type
+// Resource ID 1 indicates this is the main application manifest
+
+#define RT_MANIFEST 24
+#define CREATEPROCESS_MANIFEST_RESOURCE_ID 1
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "rustdupe.manifest"
