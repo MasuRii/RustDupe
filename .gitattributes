@@ -1,0 +1,11 @@
+# Enforce Unix line endings (LF) for all text files
+# This prevents "Incorrect newline style" errors in CI on Windows
+* text=auto eol=lf
+
+# Binary files
+*.png binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.pdb binary
