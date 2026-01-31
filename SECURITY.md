@@ -19,7 +19,7 @@ We take security vulnerabilities seriously. If you discover a security issue, pl
 Instead, please report them via one of the following methods:
 
 1. **GitHub Security Advisories** (Preferred):
-   - Go to the [Security Advisories](https://github.com/rustdupe/rustdupe/security/advisories) page
+   - Go to the [Security Advisories](https://github.com/MasuRii/RustDupe/security/advisories) page
    - Click "New draft security advisory"
    - Fill in the details of the vulnerability
 

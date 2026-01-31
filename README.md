@@ -1,6 +1,6 @@
 # RustDupe
 
-[![CI](https://github.com/rustdupe/rustdupe/actions/workflows/ci.yml/badge.svg)](https://github.com/rustdupe/rustdupe/actions/workflows/ci.yml)
+[![CI](https://github.com/MasuRii/RustDupe/actions/workflows/ci.yml/badge.svg)](https://github.com/MasuRii/RustDupe/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/rustdupe.svg)](https://crates.io/crates/rustdupe)
 [![Downloads](https://img.shields.io/crates/d/rustdupe.svg)](https://crates.io/crates/rustdupe)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -48,7 +48,7 @@ cargo install rustdupe
 
 ### Pre-built Binaries
 
-Download the latest release for your platform from the [GitHub Releases](https://github.com/rustdupe/rustdupe/releases) page.
+Download the latest release for your platform from the [GitHub Releases](https://github.com/MasuRii/RustDupe/releases) page.
 
 | Platform | Architecture | Download |
 |----------|--------------|----------|
@@ -61,7 +61,7 @@ Download the latest release for your platform from the [GitHub Releases](https:/
 ### From Source
 
 ```bash
-git clone https://github.com/rustdupe/rustdupe.git
+git clone https://github.com/MasuRii/RustDupe.git
 cd rustdupe
 cargo build --release
 ```

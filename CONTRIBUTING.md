@@ -39,7 +39,7 @@ cd rustdupe
 3. Add the upstream remote:
 
 ```bash
-git remote add upstream https://github.com/rustdupe/rustdupe.git
+git remote add upstream https://github.com/MasuRii/RustDupe.git
 ```
 
 ## Development Setup
