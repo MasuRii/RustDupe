@@ -1,0 +1,24 @@
+# RustDupe - Clippy configuration
+#
+# This file configures Clippy thresholds and project-wide lint settings.
+# Lint levels are configured in src/lib.rs using #![warn(...)] and #![allow(...)] attributes.
+#
+# Run: cargo clippy -- -D warnings
+# Run with all lints: cargo clippy -- -W clippy::pedantic -D warnings
+
+# Maximum number of function arguments before too_many_arguments triggers
+too-many-arguments-threshold = 7
+
+# Maximum number of lines in a function before too_many_lines triggers
+too-many-lines-threshold = 150
+
+# Maximum cognitive complexity before cognitive_complexity triggers
+cognitive-complexity-threshold = 25
+
+# Maximum number of struct fields before too-many-fields triggers
+# (Not used by default, but good to document)
+type-complexity-threshold = 250
+
+# MSRV for clippy to check against
+# This should match rust-version in Cargo.toml
+msrv = "1.75.0"

@@ -16,6 +16,29 @@
 //! - [`actions`]: File operations (delete, preview)
 //! - [`output`]: Output formatters (JSON, CSV)
 
+// =============================================================================
+// Clippy Lint Configuration
+// =============================================================================
+//
+// We use Clippy's default warnings-as-errors (-D warnings) for CI quality gates.
+// Pedantic lints are NOT enabled project-wide because they generate too many
+// false positives for this codebase (e.g., doc_markdown, cast_precision_loss).
+//
+// Threshold configuration is in clippy.toml:
+// - too-many-arguments-threshold = 7
+// - too-many-lines-threshold = 150
+// - cognitive-complexity-threshold = 25
+// - msrv = "1.75.0"
+//
+// To run with pedantic lints for review (not CI):
+//   cargo clippy -- -W clippy::pedantic
+//
+// Allow specific lints with documented justification:
+
+// `module_name_repetitions`: We prefer explicit names like `DeleteError` in `delete` module
+// over generic names that lose context when imported.
+#![allow(clippy::module_name_repetitions)]
+
 pub mod actions;
 pub mod cli;
 pub mod duplicates;
