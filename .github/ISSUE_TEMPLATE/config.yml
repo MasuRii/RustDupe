@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/rustdupe/rustdupe#readme
+    about: Check the README for usage instructions and examples
+  - name: Discussions
+    url: https://github.com/rustdupe/rustdupe/discussions
+    about: Ask questions or discuss ideas in GitHub Discussions
