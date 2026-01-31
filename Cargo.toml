@@ -2,7 +2,7 @@
 name = "rustdupe"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.85"
 description = "Smart duplicate file finder with interactive TUI"
 authors = ["RustDupe Team"]
 license = "MIT"
@@ -18,7 +18,8 @@ clap = { version = "4", features = ["derive", "env", "unicode"] }
 
 # TUI Framework - Ratatui is the actively maintained successor to tui-rs
 # Cross-platform via crossterm backend, 23k+ GitHub stars
-ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+# Pinned to 0.28.x for Rust 1.85 MSRV compatibility
+ratatui = { version = "0.28", default-features = false, features = ["crossterm"] }
 
 # Terminal Backend - MUST use crossterm for Windows support
 # termion is Unix-only, termwiz is more complex
@@ -27,8 +28,7 @@ crossterm = "0.28"
 # Hashing - BLAKE3 is optimal for file deduplication
 # 2.8-10x faster than SHA-256, parallel processing, cryptographically secure
 # Multi-threaded scaling: 8.4 GB/s single-thread -> 92 GB/s on 16 cores
-# Pinned to 1.5.x for Rust 1.75 MSRV compatibility (1.6+ requires newer Rust)
-blake3 = "~1.5"
+blake3 = "1"
 
 # Directory Walking - jwalk for parallel traversal (4x faster than walkdir)
 # Provides sorted streaming results, rayon-powered parallelism

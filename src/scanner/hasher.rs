@@ -359,7 +359,11 @@ impl Hasher {
 /// ```
 #[must_use]
 pub fn hash_to_hex(hash: &Hash) -> String {
-    hash.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write;
+    hash.iter().fold(String::with_capacity(64), |mut acc, b| {
+        let _ = write!(acc, "{b:02x}");
+        acc
+    })
 }
 
 /// Parse a hex string to a hash.

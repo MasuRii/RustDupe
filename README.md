@@ -4,7 +4,7 @@
 [![Crates.io](https://img.shields.io/crates/v/rustdupe.svg)](https://crates.io/crates/rustdupe)
 [![Downloads](https://img.shields.io/crates/d/rustdupe.svg)](https://crates.io/crates/rustdupe)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust Version](https://img.shields.io/badge/rust-1.75%2B-blue.svg)](https://www.rust-lang.org)
+[![Rust Version](https://img.shields.io/badge/rust-1.85%2B-blue.svg)](https://www.rust-lang.org)
 
 **Smart Duplicate File Finder** — A high-performance, cross-platform duplicate file finder built in Rust with an interactive TUI.
 
@@ -44,7 +44,7 @@
 cargo install rustdupe
 ```
 
-> **Requires Rust 1.75 or later.** Install Rust via [rustup](https://rustup.rs/).
+> **Requires Rust 1.85 or later.** Install Rust via [rustup](https://rustup.rs/).
 
 ### Pre-built Binaries
 

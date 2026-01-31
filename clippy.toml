@@ -21,4 +21,4 @@ type-complexity-threshold = 250
 
 # MSRV for clippy to check against
 # This should match rust-version in Cargo.toml
-msrv = "1.75.0"
+msrv = "1.85.0"
