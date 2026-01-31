@@ -28,6 +28,13 @@ impl Progress {
     /// # Arguments
     ///
     /// * `quiet` - If true, no progress bars will be displayed.
+    /// # Examples
+    ///
+    /// ```
+    /// use rustdupe::progress::Progress;
+    ///
+    /// let progress = Progress::new(false);
+    /// ```
     #[must_use]
     pub fn new(quiet: bool) -> Self {
         Self {

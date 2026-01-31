@@ -239,6 +239,12 @@ pub fn install_handler() -> Result<ShutdownHandler, SignalError> {
 /// # Returns
 ///
 /// A `ShutdownHandler` with the flag set to `false`.
+/// # Example
+///
+/// ```
+/// use rustdupe::signal::create_handler;
+/// let handler = create_handler();
+/// ```
 #[must_use]
 pub fn create_handler() -> ShutdownHandler {
     ShutdownHandler::new()

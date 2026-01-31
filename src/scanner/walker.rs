@@ -13,7 +13,7 @@
 //! - Gitignore-style pattern matching via the `ignore` crate
 //! - Size filtering (min/max)
 //! - Hidden file filtering
-//! - Hardlink detection via [`HardlinkTracker`](super::hardlink::HardlinkTracker)
+//! - Hardlink detection via [`HardlinkTracker`]
 //! - Graceful shutdown via atomic flag
 //!
 //! # Example

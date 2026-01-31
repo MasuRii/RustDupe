@@ -661,6 +661,15 @@ fn detect_bmp_dimensions(header: &[u8]) -> Option<(u32, u32)> {
 /// # Returns
 ///
 /// A string with the preview content, or an error message.
+/// # Example
+///
+/// ```no_run
+/// use rustdupe::actions::preview::preview_file_simple;
+/// use std::path::Path;
+///
+/// let content = preview_file_simple(Path::new("test.txt"));
+/// println!("{}", content);
+/// ```
 #[must_use]
 pub fn preview_file_simple(path: &Path) -> String {
     match preview_file(path) {

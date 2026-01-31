@@ -131,6 +131,13 @@ pub struct ScanProgress {
 
 impl ScanProgress {
     /// Create a new scan progress.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::app::ScanProgress;
+    /// let progress = ScanProgress::new();
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -197,6 +204,13 @@ impl App {
     /// Create a new App instance with empty state.
     ///
     /// The app starts in Scanning mode with no groups loaded.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::app::App;
+    /// let app = App::new();
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -218,6 +232,14 @@ impl App {
     /// Create an App with pre-loaded duplicate groups.
     ///
     /// The app starts in Reviewing mode if groups are provided.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::app::App;
+    /// use rustdupe::duplicates::DuplicateGroup;
+    /// let app = App::with_groups(vec![]);
+    /// ```
     #[must_use]
     pub fn with_groups(groups: Vec<DuplicateGroup>) -> Self {
         let reclaimable = groups.iter().map(DuplicateGroup::wasted_space).sum();
@@ -644,6 +666,15 @@ impl App {
     /// Handle a user action and update state accordingly.
     ///
     /// Returns true if the action was handled.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::app::{App, Action};
+    /// let mut app = App::new();
+    /// app.handle_action(Action::Quit);
+    /// assert!(app.should_quit());
+    /// ```
     pub fn handle_action(&mut self, action: Action) -> bool {
         log::trace!("Handling action: {:?} in mode {:?}", action, self.mode);
 

@@ -1,4 +1,29 @@
 //! CSV output formatter for duplicate scan results.
+//!
+//! Provides machine-readable CSV output for spreadsheets and data analysis.
+//! One row is generated for each duplicate file.
+//!
+//! # Columns
+//!
+//! - `group_id`: Numeric ID identifying the duplicate group
+//! - `hash`: BLAKE3 content hash (hexadecimal)
+//! - `path`: Absolute path to the file
+//! - `size`: File size in bytes
+//! - `modified`: Last modified time (RFC 3339 format)
+//!
+//! # Example
+//!
+//! ```no_run
+//! use rustdupe::duplicates::{DuplicateFinder, DuplicateGroup};
+//! use rustdupe::output::csv::CsvOutput;
+//! use std::path::Path;
+//!
+//! let finder = DuplicateFinder::with_defaults();
+//! let (groups, _) = finder.find_duplicates(Path::new(".")).unwrap();
+//!
+//! let output = CsvOutput::new(&groups);
+//! output.write_to(std::io::stdout()).unwrap();
+//! ```
 
 use std::io;
 
@@ -87,6 +112,13 @@ impl<'a> CsvOutput<'a> {
     /// # Errors
     ///
     /// Returns `CsvOutputError` if serialization fails.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustdupe::output::csv::CsvOutput;
+    /// let output = CsvOutput::new(&[]);
+    /// let csv = output.to_string().unwrap();
+    /// ```
     pub fn to_string(&self) -> Result<String, CsvOutputError> {
         let mut buffer = Vec::new();
         self.write_to(&mut buffer)?;

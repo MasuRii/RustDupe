@@ -66,6 +66,12 @@ pub enum EventError {
 
 impl EventHandler {
     /// Create a new event handler.
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::events::EventHandler;
+    /// let handler = EventHandler::new();
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self { _private: () }
@@ -142,6 +148,15 @@ impl EventHandler {
     /// # Errors
     ///
     /// Returns `EventError::Io` if there's an I/O error.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustdupe::tui::events::EventHandler;
+    /// let handler = EventHandler::new();
+    /// if handler.has_event().unwrap() {
+    ///     // Process event
+    /// }
+    /// ```
     pub fn has_event(&self) -> Result<bool, EventError> {
         Ok(event::poll(Duration::ZERO)?)
     }

@@ -3,7 +3,7 @@
 //! # Overview
 //!
 //! This module orchestrates the duplicate detection pipeline:
-//! 1. **Phase 1 - Size grouping**: Group files by size (see [`groups`] module)
+//! 1. **Phase 1 - Size grouping**: Group files by size (see [`crate::duplicates::groups`] module)
 //! 2. **Phase 2 - Prehash**: Hash first 4KB of same-size files
 //! 3. **Phase 3 - Full hash**: Hash entire content of prehash matches
 //!
@@ -361,6 +361,18 @@ pub fn phase2_prehash(
 ///
 /// This is a helper function that computes prehashes for all files
 /// in the size groups and returns them as a flat list.
+/// # Example
+///
+/// ```no_run
+/// use rustdupe::scanner::{FileEntry, Hasher};
+/// use rustdupe::duplicates::{compute_prehashes, PrehashConfig};
+/// use std::collections::HashMap;
+/// use std::sync::Arc;
+///
+/// let size_groups: HashMap<u64, Vec<FileEntry>> = HashMap::new();
+/// let hasher = Arc::new(Hasher::new());
+/// let entries = compute_prehashes(size_groups, hasher, PrehashConfig::default());
+/// ```
 #[must_use]
 pub fn compute_prehashes(
     size_groups: HashMap<u64, Vec<FileEntry>>,
@@ -400,6 +412,20 @@ pub fn compute_prehashes(
 }
 
 /// Get paths from a prehash group.
+/// # Example
+///
+/// ```
+/// use rustdupe::scanner::FileEntry;
+/// use rustdupe::duplicates::extract_paths;
+/// use std::path::PathBuf;
+/// use std::time::SystemTime;
+///
+/// let files = vec![
+///     FileEntry::new(PathBuf::from("/a.txt"), 100, SystemTime::now()),
+/// ];
+/// let paths = extract_paths(&files);
+/// assert_eq!(paths[0], PathBuf::from("/a.txt"));
+/// ```
 #[must_use]
 pub fn extract_paths(files: &[FileEntry]) -> Vec<PathBuf> {
     files.iter().map(|f| f.path.clone()).collect()

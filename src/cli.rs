@@ -155,6 +155,10 @@ impl std::fmt::Display for OutputFormat {
 /// assert_eq!(parse_size("1MB").unwrap(), 1_000_000);
 /// assert_eq!(parse_size("1MiB").unwrap(), 1_048_576);
 /// ```
+/// # Errors
+///
+/// Returns an error if the string is empty, contains an invalid number,
+/// a negative number, or an unknown size suffix.
 pub fn parse_size(s: &str) -> Result<u64, String> {
     let s = s.trim();
     if s.is_empty() {

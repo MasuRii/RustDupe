@@ -77,6 +77,13 @@ impl Hasher {
     /// Create a new hasher with default settings.
     ///
     /// Uses 4KB prehash size and 64KB buffer for streaming.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::scanner::hasher::Hasher;
+    /// let hasher = Hasher::new();
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -90,6 +97,13 @@ impl Hasher {
     /// # Arguments
     ///
     /// * `prehash_size` - Number of bytes to read for prehash operations
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::scanner::hasher::Hasher;
+    /// let hasher = Hasher::with_prehash_size(8 * 1024); // 8KB
+    /// ```
     ///
     /// # Panics
     ///
@@ -111,6 +125,16 @@ impl Hasher {
     /// # Arguments
     ///
     /// * `flag` - Atomic boolean flag shared across threads
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::scanner::hasher::Hasher;
+    /// use std::sync::Arc;
+    /// use std::sync::atomic::AtomicBool;
+    ///
+    /// let shutdown = Arc::new(AtomicBool::new(false));
+    /// let hasher = Hasher::new().with_shutdown_flag(shutdown);
+    /// ```
     #[must_use]
     pub fn with_shutdown_flag(mut self, flag: Arc<AtomicBool>) -> Self {
         self.shutdown_flag = Some(flag);
@@ -298,6 +322,15 @@ impl Hasher {
     /// This method does NOT support the shutdown flag since it
     /// delegates entirely to BLAKE3's internal reader. Use `full_hash()`
     /// if you need interruptible hashing.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustdupe::scanner::hasher::Hasher;
+    /// use std::path::Path;
+    ///
+    /// let hasher = Hasher::new();
+    /// let hash = hasher.full_hash_optimized(Path::new("large_file.bin")).unwrap();
+    /// ```
     pub fn full_hash_optimized(&self, path: &Path) -> Result<Hash, HashError> {
         let file = File::open(path).map_err(|e| self.map_io_error(path, e))?;
         let mut reader = BufReader::with_capacity(BUFFER_SIZE, file);

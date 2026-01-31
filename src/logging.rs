@@ -195,6 +195,14 @@ fn configure_format(builder: &mut Builder, verbose: u8) {
 /// # Returns
 ///
 /// A string representation of the maximum log level.
+/// # Example
+///
+/// ```
+/// use rustdupe::logging::current_level_name;
+///
+/// let level = current_level_name();
+/// println!("Logging at level: {}", level);
+/// ```
 pub fn current_level_name() -> &'static str {
     match log::max_level() {
         LevelFilter::Off => "off",
