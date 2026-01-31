@@ -127,12 +127,12 @@ jobs:
         id: release_body
         shell: bash
         run: |
-          # Create a nice header with emojis
-          echo "## 📦 Release ${{ needs.prepare.outputs.version }}" > release_notes.md
+          # Create a nice header
+          echo "## Release ${{ needs.prepare.outputs.version }}" > release_notes.md
           echo "" >> release_notes.md
           
           # Add "What's Changed" section
-          echo "### 🚀 What's Changed" >> release_notes.md
+          echo "### What's Changed" >> release_notes.md
           
           # Try to get changes since last tag, or all if no tags
           PREV_TAG=$(git describe --tags --abbrev=0 "${{ needs.prepare.outputs.version }}^" 2>/dev/null || echo "")
@@ -145,17 +145,17 @@ jobs:
           echo "" >> release_notes.md
           
           # Add Asset table
-          echo "### 📄 Assets" >> release_notes.md
+          echo "### Assets" >> release_notes.md
           echo "| Filename | Type |" >> release_notes.md
           echo "| -------- | ---- |" >> release_notes.md
           for file in artifacts/*; do
             filename=$(basename "$file")
             if [[ "$filename" == *.sha256 ]]; then
-              echo "| 📄 $filename | Checksum |" >> release_notes.md
+              echo "| $filename | Checksum |" >> release_notes.md
             elif [[ "$filename" == *.exe ]]; then
-              echo "| 🛠️ **$filename** | Windows Binary |" >> release_notes.md
+              echo "| **$filename** | Windows Binary |" >> release_notes.md
             else
-              echo "| 🛠️ **$filename** | Unix Binary |" >> release_notes.md
+              echo "| **$filename** | Unix Binary |" >> release_notes.md
             fi
           done
           
