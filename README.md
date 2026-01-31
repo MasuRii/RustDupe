@@ -1,10 +1,10 @@
 # RustDupe
 
 [![CI](https://github.com/MasuRii/RustDupe/actions/workflows/ci.yml/badge.svg)](https://github.com/MasuRii/RustDupe/actions/workflows/ci.yml)
-[![Crates.io](https://img.shields.io/crates/v/rustdupe.svg)](https://crates.io/crates/rustdupe)
-[![Downloads](https://img.shields.io/crates/d/rustdupe.svg)](https://crates.io/crates/rustdupe)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust Version](https://img.shields.io/badge/rust-1.85%2B-blue.svg)](https://www.rust-lang.org)
+[![Crates.io Version](https://img.shields.io/crates/v/rustdupe.svg?style=flat-square&color=orange)](https://crates.io/crates/rustdupe)
+[![Crates.io Downloads](https://img.shields.io/crates/d/rustdupe.svg?style=flat-square&color=blue)](https://crates.io/crates/rustdupe)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+[![Rust Version](https://img.shields.io/badge/rust-1.85%2B-blue.svg?style=flat-square)](https://www.rust-lang.org)
 
 **Smart Duplicate File Finder** — A high-performance, cross-platform duplicate file finder built in Rust with an interactive TUI.
 
