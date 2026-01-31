@@ -703,6 +703,8 @@ pub struct FinderConfig {
     pub io_threads: usize,
     /// Enable byte-by-byte verification after hash matching (paranoid mode).
     pub paranoid: bool,
+    /// Walker configuration for directory traversal.
+    pub walker_config: crate::scanner::WalkerConfig,
     /// Optional shutdown flag for graceful termination.
     pub shutdown_flag: Option<Arc<AtomicBool>>,
     /// Optional progress callback for reporting.
@@ -714,6 +716,7 @@ impl std::fmt::Debug for FinderConfig {
         f.debug_struct("FinderConfig")
             .field("io_threads", &self.io_threads)
             .field("paranoid", &self.paranoid)
+            .field("walker_config", &self.walker_config)
             .field("shutdown_flag", &self.shutdown_flag)
             .field(
                 "progress_callback",
@@ -728,6 +731,7 @@ impl Default for FinderConfig {
         Self {
             io_threads: 4,
             paranoid: false,
+            walker_config: crate::scanner::WalkerConfig::default(),
             shutdown_flag: None,
             progress_callback: None,
         }
@@ -746,6 +750,13 @@ impl FinderConfig {
     #[must_use]
     pub fn with_paranoid(mut self, enabled: bool) -> Self {
         self.paranoid = enabled;
+        self
+    }
+
+    /// Set the walker configuration.
+    #[must_use]
+    pub fn with_walker_config(mut self, config: crate::scanner::WalkerConfig) -> Self {
+        self.walker_config = config;
         self
     }
 
@@ -977,8 +988,7 @@ impl DuplicateFinder {
             callback.on_phase_start("walking", 0); // Unknown total
         }
 
-        let walker_config = crate::scanner::WalkerConfig::default();
-        let walker = crate::scanner::Walker::new(path, walker_config);
+        let walker = crate::scanner::Walker::new(path, self.config.walker_config.clone());
 
         // Set shutdown flag on walker if available
         let walker = if let Some(ref flag) = self.config.shutdown_flag {

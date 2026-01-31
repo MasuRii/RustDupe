@@ -109,22 +109,39 @@ impl Walker {
             .is_some_and(|f| f.load(Ordering::SeqCst))
     }
 
-    /// Build gitignore matcher from config patterns.
+    /// Build gitignore matcher from config patterns and .gitignore file.
     fn build_gitignore(&self) -> Option<Gitignore> {
-        if self.config.ignore_patterns.is_empty() {
-            return None;
+        let mut builder = GitignoreBuilder::new(&self.root);
+
+        // Add local .gitignore if it exists
+        let gitignore_path = self.root.join(".gitignore");
+        if gitignore_path.exists() {
+            if let Some(e) = builder.add(&gitignore_path) {
+                log::warn!(
+                    "Failed to load .gitignore from {}: {}",
+                    gitignore_path.display(),
+                    e
+                );
+            } else {
+                log::debug!("Loaded .gitignore from {}", gitignore_path.display());
+            }
         }
 
-        let mut builder = GitignoreBuilder::new(&self.root);
+        // Add custom patterns from config
         for pattern in &self.config.ignore_patterns {
-            // Add each pattern - errors are logged but not fatal
             if let Err(e) = builder.add_line(None, pattern) {
                 log::warn!("Invalid ignore pattern '{}': {}", pattern, e);
             }
         }
 
         match builder.build() {
-            Ok(gitignore) => Some(gitignore),
+            Ok(gitignore) => {
+                if gitignore.is_empty() {
+                    None
+                } else {
+                    Some(gitignore)
+                }
+            }
             Err(e) => {
                 log::warn!("Failed to build ignore patterns: {}", e);
                 None
@@ -135,7 +152,21 @@ impl Walker {
     /// Check if a path should be ignored based on configured patterns.
     fn should_ignore(&self, path: &Path, is_dir: bool, gitignore: &Option<Gitignore>) -> bool {
         if let Some(gi) = gitignore {
-            gi.matched(path, is_dir).is_ignore()
+            // Gitignore matching typically expects relative paths from the root
+            // and uses forward slashes even on Windows.
+            let relative_path = path.strip_prefix(&self.root).unwrap_or(path);
+
+            // The ignore crate's Gitignore::matched() works best when we check
+            // the path and all its parents, or at least ensure directory patterns
+            // match correctly.
+            let path_str = relative_path.to_string_lossy();
+            let normalized_path = if cfg!(windows) {
+                path_str.replace('\\', "/")
+            } else {
+                path_str.into_owned()
+            };
+
+            gi.matched(normalized_path, is_dir).is_ignore()
         } else {
             false
         }

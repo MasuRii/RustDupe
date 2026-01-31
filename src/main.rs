@@ -55,8 +55,7 @@ fn main() -> Result<()> {
             }
 
             // Configure the walker
-            // TODO: Pass walker config to DuplicateFinder (currently uses default internally)
-            let _walker_config = WalkerConfig::default()
+            let walker_config = WalkerConfig::default()
                 .with_follow_symlinks(args.follow_symlinks)
                 .with_skip_hidden(args.skip_hidden)
                 .with_min_size(args.min_size)
@@ -74,6 +73,7 @@ fn main() -> Result<()> {
             let mut finder_config = FinderConfig::default()
                 .with_io_threads(args.io_threads)
                 .with_paranoid(args.paranoid)
+                .with_walker_config(walker_config)
                 .with_shutdown_flag(shutdown_flag.clone());
 
             if let Some(ref p) = progress {
@@ -91,8 +91,9 @@ fn main() -> Result<()> {
                         "Starting TUI scan of {}",
                         args.path.canonicalize()?.display()
                     );
-                    // TODO: Launch TUI with scan results (Task 3.4.x)
-                    // For now, run the scan and show a placeholder message
+
+                    // In TUI mode, we run the scan first, then launch the interactive UI
+                    // TODO: Move scan inside run_tui for live progress updates
                     match finder.find_duplicates(&args.path) {
                         Ok((groups, summary)) => {
                             log::info!(
@@ -100,12 +101,10 @@ fn main() -> Result<()> {
                                 summary.duplicate_groups,
                                 summary.reclaimable_display()
                             );
-                            // TODO: Launch TUI with these groups
-                            println!(
-                                "TUI mode not yet fully integrated. Found {} duplicate groups.",
-                                groups.len()
-                            );
-                            println!("Reclaimable space: {}", summary.reclaimable_display());
+
+                            // Initialize TUI with results
+                            let app = rustdupe::tui::App::with_groups(groups);
+                            rustdupe::tui::run_tui(app, Some(shutdown_flag.clone()))?;
                         }
                         Err(e) => {
                             anyhow::bail!("Scan failed: {}", e);
