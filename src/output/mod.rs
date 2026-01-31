@@ -19,7 +19,9 @@
 //! println!("{}", output.to_json_pretty().unwrap());
 //! ```
 
+pub mod csv;
 pub mod json;
 
 // Re-export main types
+pub use csv::CsvOutput;
 pub use json::JsonOutput;

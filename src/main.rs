@@ -134,28 +134,11 @@ fn main() -> Result<()> {
                 }
                 OutputFormat::Csv => {
                     log::info!("Starting CSV scan of {}", args.path.display());
-                    // TODO: Implement CSV output (Task 3.6.3)
                     match finder.find_duplicates(&args.path) {
-                        Ok((groups, summary)) => {
-                            println!("# CSV output not yet implemented");
-                            println!(
-                                "# Found {} duplicate groups, {} reclaimable",
-                                summary.duplicate_groups,
-                                summary.reclaimable_display()
-                            );
-                            // Print placeholder CSV
-                            println!("group_id,hash,path,size");
-                            for (idx, group) in groups.iter().enumerate() {
-                                for path in &group.files {
-                                    println!(
-                                        "{},{},{},{}",
-                                        idx + 1,
-                                        group.hash_hex(),
-                                        path.display(),
-                                        group.size
-                                    );
-                                }
-                            }
+                        Ok((groups, _summary)) => {
+                            let csv_output = output::CsvOutput::new(&groups);
+                            let stdout = io::stdout().lock();
+                            csv_output.write_to(stdout)?;
                         }
                         Err(e) => {
                             anyhow::bail!("Scan failed: {}", e);
