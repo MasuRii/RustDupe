@@ -1,0 +1,29 @@
+# Cargo configuration for RustDupe
+# 
+# This file provides convenient aliases for common development tasks
+# Alternative to pre-commit hooks for developers who prefer manual verification
+
+[alias]
+# Quick format check (no modifications)
+fmtc = "fmt -- --check"
+
+# Run clippy with warnings as errors
+lintc = "clippy -- -D warnings"
+
+# Full check: format + clippy + test
+check-all = ["fmt -- --check", "clippy -- -D warnings", "test --lib"]
+
+# Pre-commit equivalent (run before committing)
+precommit = ["fmt -- --check", "clippy -- -D warnings", "check"]
+
+# Quick development iteration
+quick = ["check", "test --lib"]
+
+[build]
+# Use all available CPU cores for rustc parallelism
+jobs = -1
+
+[target.x86_64-pc-windows-msvc]
+# Windows-specific linker flags (if needed)
+# Uncomment if you encounter linking issues
+# rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,0 +1,59 @@
+# Pre-commit configuration for RustDupe
+# Runs rustfmt and clippy checks before each commit to ensure code quality
+#
+# Installation:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Manual run:
+#   pre-commit run --all-files
+#
+# Skip hooks temporarily:
+#   git commit --no-verify
+#   (Use sparingly - prefer fixing issues)
+
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+
+repos:
+  # Rust formatting with rustfmt
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        description: Format Rust code with rustfmt
+        entry: cargo fmt
+        args: ["--", "--check"]
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        description: Lint Rust code with clippy (warnings as errors)
+        entry: cargo clippy
+        args: ["--", "-D", "warnings"]
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-check
+        name: cargo check
+        description: Type-check Rust code
+        entry: cargo check
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-test
+        name: cargo test
+        description: Run Rust tests
+        entry: cargo test
+        args: ["--lib"]
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-push]
+
+# Default stages for hooks without explicit stages
+default_stages: [pre-commit]
