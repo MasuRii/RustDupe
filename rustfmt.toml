@@ -1,0 +1,35 @@
+# RustDupe - rustfmt configuration
+#
+# This configuration aligns with VS Code settings (100-char ruler, 4-space tabs)
+# and enforces consistent formatting across the codebase.
+#
+# Run: cargo fmt
+# Check only: cargo fmt -- --check
+
+# Use Rust 2021 edition formatting rules
+edition = "2021"
+
+# Maximum line width (matches VS Code ruler setting)
+max_width = 100
+
+# 4 spaces per indentation level (matches VS Code tabSize)
+tab_spaces = 4
+
+# Use balanced heuristics for item layout decisions
+# "Default" = balance between line count and readability
+use_small_heuristics = "Default"
+
+# Use Unix-style line endings for cross-platform consistency
+newline_style = "Unix"
+
+# Reorder imports alphabetically
+reorder_imports = true
+
+# Reorder modules alphabetically
+reorder_modules = true
+
+# Use field init shorthand where possible (e.g., `Point { x }` vs `Point { x: x }`)
+use_field_init_shorthand = true
+
+# Use try shorthand `?` where possible
+use_try_shorthand = true
