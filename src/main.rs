@@ -131,12 +131,51 @@ fn handle_scan(
         // Initialize cache
         let hash_cache = if !args.no_cache {
             log::debug!("Using cache at: {:?}", cache_path);
-            let cache = HashCache::new(&cache_path)?;
-            if args.clear_cache {
-                log::info!("Clearing cache...");
-                cache.clear()?;
+            let cache = match HashCache::new(&cache_path) {
+                Ok(cache) => Some(cache),
+                Err(e) => {
+                    log::warn!(
+                        "Failed to open cache at {:?}: {}. Attempting recovery...",
+                        cache_path,
+                        e
+                    );
+                    if cache_path.exists() {
+                        // Try to delete the corrupted cache and create a new one
+                        if let Err(err) = fs::remove_file(&cache_path) {
+                            log::error!(
+                                "Failed to delete corrupted cache: {}. Caching disabled.",
+                                err
+                            );
+                            None
+                        } else {
+                            match HashCache::new(&cache_path) {
+                                Ok(cache) => {
+                                    log::info!("Cache recovered successfully (reset to empty)");
+                                    Some(cache)
+                                }
+                                Err(e2) => {
+                                    log::error!(
+                                        "Failed to recover cache: {}. Caching disabled.",
+                                        e2
+                                    );
+                                    None
+                                }
+                            }
+                        }
+                    } else {
+                        log::error!("Cache path does not exist but failed to initialize: {}. Caching disabled.", e);
+                        None
+                    }
+                }
+            };
+
+            if let Some(ref cache) = cache {
+                if args.clear_cache {
+                    log::info!("Clearing cache...");
+                    cache.clear()?;
+                }
             }
-            Some(Arc::new(cache))
+            cache.map(Arc::new)
         } else {
             log::debug!("Caching is disabled");
             None

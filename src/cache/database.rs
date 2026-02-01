@@ -706,4 +706,63 @@ mod tests {
         let res = cache.insert_prehash(&entry, [0u8; 32]);
         assert!(matches!(res, Err(CacheError::ConnectionClosed)));
     }
+
+    #[test]
+    fn test_hash_cache_corrupted_blobs() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        let cache = HashCache::new(path).unwrap();
+
+        let now = SystemTime::now();
+        let file_path = Path::new("/test/file.txt");
+
+        // Manually insert an entry with an invalid blob size
+        {
+            let lock = cache.conn.lock().unwrap();
+            let conn = lock.as_ref().unwrap();
+            conn.execute(
+                "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, created_at)
+                 VALUES ('/test/file.txt', 1024, ?1, NULL, x'010203', NULL, ?2)",
+                params![HashCache::system_time_to_ns(now), HashCache::now_secs()],
+            )
+            .unwrap();
+        }
+
+        // Retrieve it - get_prehash should return None because the blob length is not 32
+        let res = cache.get_prehash(file_path, 1024, now).unwrap();
+        assert_eq!(res, None);
+
+        // Same for fullhash with invalid blob
+        {
+            let lock = cache.conn.lock().unwrap();
+            let conn = lock.as_ref().unwrap();
+            conn.execute(
+                "UPDATE hashes SET fullhash = x'FFFF' WHERE path = '/test/file.txt'",
+                [],
+            )
+            .unwrap();
+        }
+        let res = cache.get_fullhash(file_path, 1024, now).unwrap();
+        assert_eq!(res, None);
+    }
+
+    #[test]
+    fn test_hash_cache_invalid_schema() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+
+        // Create a table with wrong columns
+        {
+            let conn = Connection::open(path).unwrap();
+            conn.execute(
+                "CREATE TABLE hashes (path TEXT PRIMARY KEY, wrong_column TEXT)",
+                [],
+            )
+            .unwrap();
+        }
+
+        // Opening it should fail because initialization tries to create an index on missing columns
+        let res = HashCache::new(path);
+        assert!(res.is_err());
+    }
 }
