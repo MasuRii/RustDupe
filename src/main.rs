@@ -168,15 +168,16 @@ fn handle_scan(
         }
     };
 
-    handle_results(
+    handle_results(ResultContext {
         groups,
         summary,
-        args.output,
-        args.save_session,
+        output_format: args.output,
+        save_session: args.save_session,
         scan_paths,
         settings,
         shutdown_flag,
-    )
+        initial_session: None,
+    })
 }
 
 fn handle_load(
@@ -188,18 +189,19 @@ fn handle_load(
     let session = Session::load(&args.path)?;
     let (groups, summary) = session.to_results();
 
-    handle_results(
+    handle_results(ResultContext {
         groups,
         summary,
-        args.output,
-        None,
-        session.scan_paths,
-        session.settings,
+        output_format: args.output,
+        save_session: None,
+        scan_paths: session.scan_paths.clone(),
+        settings: session.settings.clone(),
         shutdown_flag,
-    )
+        initial_session: Some(session),
+    })
 }
 
-fn handle_results(
+struct ResultContext {
     groups: Vec<rustdupe::duplicates::DuplicateGroup>,
     summary: rustdupe::duplicates::ScanSummary,
     output_format: OutputFormat,
@@ -207,30 +209,81 @@ fn handle_results(
     scan_paths: Vec<std::path::PathBuf>,
     settings: SessionSettings,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
-) -> Result<()> {
-    // 1. Save session if requested
-    if let Some(path) = save_session {
-        let session_groups = groups
-            .iter()
-            .enumerate()
-            .map(|(id, g)| SessionGroup {
-                id,
-                hash: g.hash,
-                size: g.size,
-                files: g.files.clone(),
-            })
-            .collect();
-        let session = Session::new(scan_paths.clone(), settings.clone(), session_groups);
-        session.save(&path)?;
-        log::info!("Session saved to {:?}", path);
+    initial_session: Option<Session>,
+}
+
+fn handle_results(ctx: ResultContext) -> Result<()> {
+    let ResultContext {
+        groups,
+        summary,
+        output_format,
+        save_session,
+        scan_paths,
+        settings,
+        shutdown_flag,
+        initial_session,
+    } = ctx;
+
+    // 1. Save session if requested (non-TUI only)
+    if output_format != OutputFormat::Tui {
+        if let Some(ref path) = save_session {
+            let session_groups = groups
+                .iter()
+                .enumerate()
+                .map(|(id, g)| SessionGroup {
+                    id,
+                    hash: g.hash,
+                    size: g.size,
+                    files: g.files.clone(),
+                })
+                .collect();
+            let mut session = Session::new(scan_paths.clone(), settings.clone(), session_groups);
+            if let Some(ref initial) = initial_session {
+                session.user_selections = initial.user_selections.clone();
+                session.group_index = initial.group_index;
+                session.file_index = initial.file_index;
+            }
+            session.save(path)?;
+            log::info!("Session saved to {:?}", path);
+        }
     }
 
     // 2. Output results based on format
     match output_format {
         OutputFormat::Tui => {
             // Initialize TUI with results
-            let app = rustdupe::tui::App::with_groups(groups);
-            rustdupe::tui::run_tui(app, Some(shutdown_flag))?;
+            let mut app = rustdupe::tui::App::with_groups(groups);
+            if let Some(session) = initial_session {
+                app.apply_session(
+                    session.user_selections,
+                    session.group_index,
+                    session.file_index,
+                );
+            }
+            rustdupe::tui::run_tui(&mut app, Some(shutdown_flag))?;
+
+            // Save session after TUI exit if requested
+            if let Some(ref path) = save_session {
+                let (group_index, file_index) = app.navigation_position();
+                let session_groups = app
+                    .groups()
+                    .iter()
+                    .enumerate()
+                    .map(|(id, g)| SessionGroup {
+                        id,
+                        hash: g.hash,
+                        size: g.size,
+                        files: g.files.clone(),
+                    })
+                    .collect();
+
+                let mut session = Session::new(scan_paths, settings, session_groups);
+                session.user_selections = app.selected_files_btree();
+                session.group_index = group_index;
+                session.file_index = file_index;
+                session.save(path)?;
+                log::info!("Session saved to {:?}", path);
+            }
         }
         OutputFormat::Json => {
             let json_output = output::JsonOutput::new(&groups, &summary);
@@ -255,7 +308,12 @@ fn handle_results(
                 })
                 .collect();
 
-            let session = Session::new(scan_paths, settings, session_groups);
+            let mut session = Session::new(scan_paths, settings, session_groups);
+            if let Some(initial) = initial_session {
+                session.user_selections = initial.user_selections;
+                session.group_index = initial.group_index;
+                session.file_index = initial.file_index;
+            }
             let json = session.to_json()?;
             let mut stdout = io::stdout().lock();
             stdout.write_all(json.as_bytes())?;

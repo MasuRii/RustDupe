@@ -34,10 +34,10 @@
 //!         vec![PathBuf::from("/a.txt"), PathBuf::from("/b.txt")],
 //!     ),
 //! ];
-//! let app = App::with_groups(groups);
+//! let mut app = App::with_groups(groups);
 //!
 //! // Run the TUI
-//! run_tui(app, None).unwrap();
+//! run_tui(&mut app, None).unwrap();
 //! ```
 
 use std::io::{self, Stdout};
@@ -123,12 +123,12 @@ type Terminal = ratatui::Terminal<CrosstermBackend<Stdout>>;
 /// ```no_run
 /// use rustdupe::tui::{run_tui, App};
 ///
-/// let app = App::new();
-/// if let Err(e) = run_tui(app, None) {
+/// let mut app = App::new();
+/// if let Err(e) = run_tui(&mut app, None) {
 ///     eprintln!("TUI error: {}", e);
 /// }
 /// ```
-pub fn run_tui(app: App, shutdown_flag: Option<Arc<AtomicBool>>) -> TuiResult<()> {
+pub fn run_tui(app: &mut App, shutdown_flag: Option<Arc<AtomicBool>>) -> TuiResult<()> {
     // Set up panic hook to restore terminal on panic
     let original_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
@@ -149,7 +149,7 @@ pub fn run_tui(app: App, shutdown_flag: Option<Arc<AtomicBool>>) -> TuiResult<()
 /// Inner function that runs the TUI loop.
 ///
 /// This is separated from `run_tui` to ensure cleanup happens correctly.
-fn run_tui_inner(mut app: App, shutdown_flag: Option<Arc<AtomicBool>>) -> TuiResult<()> {
+fn run_tui_inner(app: &mut App, shutdown_flag: Option<Arc<AtomicBool>>) -> TuiResult<()> {
     // Set up the terminal
     let mut terminal = setup_terminal()?;
 
@@ -176,11 +176,11 @@ fn run_tui_inner(mut app: App, shutdown_flag: Option<Arc<AtomicBool>>) -> TuiRes
         }
 
         // Render the current state
-        terminal.draw(|frame| render(frame, &app))?;
+        terminal.draw(|frame| render(frame, app))?;
 
         // Poll for events with timeout
         if let Some(action) = event_handler.poll(POLL_TIMEOUT)? {
-            handle_action(&mut app, action, &shutdown_flag)?;
+            handle_action(app, action, &shutdown_flag)?;
         }
 
         // Frame rate limiting

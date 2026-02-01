@@ -34,10 +34,10 @@
 //!         vec![PathBuf::from("/a.txt"), PathBuf::from("/b.txt")],
 //!     ),
 //! ];
-//! let app = App::with_groups(groups);
+//! let mut app = App::with_groups(groups);
 //!
 //! // Run the TUI (this takes over the terminal)
-//! // run_tui(app, None).unwrap();
+//! // run_tui(&mut app, None).unwrap();
 //! ```
 
 pub mod app;

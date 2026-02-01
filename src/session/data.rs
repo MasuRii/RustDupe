@@ -25,6 +25,10 @@ pub struct Session {
     pub groups: Vec<SessionGroup>,
     /// Paths selected by the user for deletion.
     pub user_selections: BTreeSet<PathBuf>,
+    /// Currently selected group index in TUI.
+    pub group_index: usize,
+    /// Currently selected file index in TUI.
+    pub file_index: usize,
 }
 
 impl Session {
@@ -41,6 +45,8 @@ impl Session {
             settings,
             groups,
             user_selections: BTreeSet::new(),
+            group_index: 0,
+            file_index: 0,
         }
     }
 

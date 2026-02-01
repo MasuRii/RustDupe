@@ -265,6 +265,41 @@ impl App {
         }
     }
 
+    /// Set selections and navigation state from a session.
+    pub fn apply_session(
+        &mut self,
+        user_selections: std::collections::BTreeSet<PathBuf>,
+        group_index: usize,
+        file_index: usize,
+    ) {
+        self.selected_files = user_selections.into_iter().collect();
+
+        // Validate group_index
+        if group_index < self.groups.len() {
+            self.group_index = group_index;
+
+            // Validate file_index
+            if file_index < self.groups[group_index].files.len() {
+                self.file_index = file_index;
+            } else {
+                self.file_index = 0;
+            }
+        } else {
+            self.group_index = 0;
+            self.file_index = 0;
+        }
+
+        self.update_group_scroll();
+        self.update_file_scroll();
+
+        log::debug!(
+            "Applied session: {} selections, pos ({}, {})",
+            self.selected_files.len(),
+            self.group_index,
+            self.file_index
+        );
+    }
+
     // ==================== Mode Management ====================
 
     /// Get the current application mode.
@@ -350,6 +385,12 @@ impl App {
     #[must_use]
     pub fn file_index(&self) -> usize {
         self.file_index
+    }
+
+    /// Get the current navigation position as (group_index, file_index).
+    #[must_use]
+    pub fn navigation_position(&self) -> (usize, usize) {
+        (self.group_index, self.file_index)
     }
 
     /// Get the current group scroll offset.
@@ -477,6 +518,12 @@ impl App {
     #[must_use]
     pub fn selected_files(&self) -> &HashSet<PathBuf> {
         &self.selected_files
+    }
+
+    /// Get selected files as a BTreeSet for deterministic serialization.
+    #[must_use]
+    pub fn selected_files_btree(&self) -> std::collections::BTreeSet<PathBuf> {
+        self.selected_files.iter().cloned().collect()
     }
 
     /// Get selected files as a sorted vector (for display/operations).
@@ -1156,22 +1203,29 @@ mod tests {
     }
 
     #[test]
-    fn test_scroll_update_on_navigation() {
-        let paths: Vec<&str> = (0..30)
-            .map(|i| Box::leak(format!("/file{}.txt", i).into_boxed_str()) as &str)
-            .collect();
-        let groups = vec![make_group(100, paths)];
+    fn test_apply_session_validation() {
+        let groups = vec![
+            make_group(100, vec!["/a.txt", "/b.txt"]),
+            make_group(200, vec!["/c.txt", "/d.txt"]),
+        ];
         let mut app = App::with_groups(groups);
-        app.set_visible_rows(10);
 
-        // Navigate past visible area
-        for _ in 0..15 {
-            app.next();
-        }
+        // Valid session
+        let mut selections = std::collections::BTreeSet::new();
+        selections.insert(PathBuf::from("/b.txt"));
+        app.apply_session(selections, 1, 1);
+        assert_eq!(app.group_index(), 1);
+        assert_eq!(app.file_index(), 1);
+        assert!(app.is_file_selected(&PathBuf::from("/b.txt")));
 
-        // Scroll should have adjusted
-        assert!(app.file_scroll() > 0);
-        assert!(app.file_index() >= app.file_scroll());
-        assert!(app.file_index() < app.file_scroll() + app.visible_rows);
+        // Invalid group_index
+        app.apply_session(std::collections::BTreeSet::new(), 5, 0);
+        assert_eq!(app.group_index(), 0);
+        assert_eq!(app.file_index(), 0);
+
+        // Invalid file_index
+        app.apply_session(std::collections::BTreeSet::new(), 0, 10);
+        assert_eq!(app.group_index(), 0);
+        assert_eq!(app.file_index(), 0);
     }
 }

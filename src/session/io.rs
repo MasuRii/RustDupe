@@ -176,6 +176,22 @@ mod tests {
     }
 
     #[test]
+    fn test_session_navigation_persistence() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session_nav.json");
+
+        let mut session = Session::new(vec!["/tmp".into()], SessionSettings::default(), vec![]);
+        session.group_index = 5;
+        session.file_index = 2;
+
+        session.save(&path).unwrap();
+
+        let loaded = Session::load(&path).unwrap();
+        assert_eq!(loaded.group_index, 5);
+        assert_eq!(loaded.file_index, 2);
+    }
+
+    #[test]
     fn test_session_load_corrupted_checksum() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("session.json");
