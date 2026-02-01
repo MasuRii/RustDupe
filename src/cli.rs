@@ -692,4 +692,35 @@ mod tests {
             _ => panic!("Expected Load command"),
         }
     }
+
+    #[test]
+    fn test_cli_parse_cache_flags() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "scan",
+            "/path",
+            "--cache",
+            "mycache.db",
+            "--clear-cache",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.cache, Some(PathBuf::from("mycache.db")));
+                assert!(args.clear_cache);
+                assert!(!args.no_cache);
+            }
+            _ => panic!("Expected Scan command"),
+        }
+
+        let cli = Cli::try_parse_from(["rustdupe", "scan", "/path", "--no-cache"]).unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert!(args.no_cache);
+                assert!(args.cache.is_none());
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
 }
