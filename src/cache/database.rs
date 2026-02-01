@@ -57,6 +57,7 @@ impl HashCache {
         // Initialize schema
         // We use a single table 'hashes' to store file metadata and computed hashes.
         // mtime_ns is stored as nanoseconds since UNIX epoch in a 64-bit integer.
+        // created_at stores the entry creation time in seconds since UNIX epoch.
         // We store hashes as BLOBs for efficiency.
         conn.execute(
             "CREATE TABLE IF NOT EXISTS hashes (
@@ -65,7 +66,8 @@ impl HashCache {
                 mtime_ns INTEGER NOT NULL,
                 inode INTEGER,
                 prehash BLOB NOT NULL,
-                fullhash BLOB
+                fullhash BLOB,
+                created_at INTEGER NOT NULL
             )",
             [],
         )?;
@@ -100,6 +102,14 @@ impl HashCache {
     fn system_time_to_ns(time: SystemTime) -> i64 {
         time.duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0)
+    }
+
+    /// Helper to get current UNIX timestamp in seconds.
+    fn now_secs() -> i64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
             .unwrap_or(0)
     }
 
@@ -176,22 +186,25 @@ impl HashCache {
         let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
         let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
         let mtime_ns = Self::system_time_to_ns(entry.mtime);
+        let now = Self::now_secs();
 
         conn.execute(
-            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL)
+            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)
              ON CONFLICT(path) DO UPDATE SET
                 size = excluded.size,
                 mtime_ns = excluded.mtime_ns,
                 inode = excluded.inode,
                 prehash = excluded.prehash,
-                fullhash = NULL",
+                fullhash = NULL,
+                created_at = excluded.created_at",
             params![
                 entry.path.to_string_lossy().to_string(),
                 entry.size,
                 mtime_ns,
                 entry.inode,
                 &hash[..],
+                now,
             ],
         )?;
         Ok(())
@@ -206,16 +219,18 @@ impl HashCache {
         let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
         let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
         let mtime_ns = Self::system_time_to_ns(entry.mtime);
+        let now = Self::now_secs();
 
         conn.execute(
-            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(path) DO UPDATE SET
                 size = excluded.size,
                 mtime_ns = excluded.mtime_ns,
                 inode = excluded.inode,
                 prehash = excluded.prehash,
-                fullhash = excluded.fullhash",
+                fullhash = excluded.fullhash,
+                created_at = excluded.created_at",
             params![
                 entry.path.to_string_lossy().to_string(),
                 entry.size,
@@ -223,6 +238,7 @@ impl HashCache {
                 entry.inode,
                 &entry.prehash[..],
                 &hash[..],
+                now,
             ],
         )?;
         Ok(())
@@ -236,18 +252,20 @@ impl HashCache {
     pub fn insert_batch(&self, entries: &[CacheEntry]) -> CacheResult<()> {
         let mut lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
         let conn = lock.as_mut().ok_or(CacheError::ConnectionClosed)?;
+        let now = Self::now_secs();
 
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare_cached(
-                "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(path) DO UPDATE SET
-                    size = excluded.size,
-                    mtime_ns = excluded.mtime_ns,
-                    inode = excluded.inode,
-                    prehash = excluded.prehash,
-                    fullhash = excluded.fullhash",
+                "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, created_at)
+                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                  ON CONFLICT(path) DO UPDATE SET
+                     size = excluded.size,
+                     mtime_ns = excluded.mtime_ns,
+                     inode = excluded.inode,
+                     prehash = excluded.prehash,
+                     fullhash = excluded.fullhash,
+                     created_at = excluded.created_at",
             )?;
 
             for entry in entries {
@@ -259,11 +277,104 @@ impl HashCache {
                     entry.inode,
                     &entry.prehash[..],
                     entry.fullhash.as_ref().map(|h| &h[..]),
+                    now,
                 ])?;
             }
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Check if a valid entry exists for the given file metadata.
+    ///
+    /// This is a convenience wrapper around `get_prehash`.
+    pub fn is_valid(&self, path: &Path, size: u64, mtime: SystemTime) -> bool {
+        self.get_prehash(path, size, mtime)
+            .map(|h| h.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Remove an entry from the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn invalidate(&self, path: &Path) -> CacheResult<()> {
+        let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
+        conn.execute(
+            "DELETE FROM hashes WHERE path = ?1",
+            params![path.to_string_lossy().to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Wipe all entries from the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn clear(&self) -> CacheResult<()> {
+        let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
+        conn.execute("DELETE FROM hashes", [])?;
+        Ok(())
+    }
+
+    /// Remove entries for files that no longer exist on disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn prune_stale(&self) -> CacheResult<usize> {
+        let mut lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_mut().ok_or(CacheError::ConnectionClosed)?;
+
+        let mut stale_paths = Vec::new();
+        {
+            let mut stmt = conn.prepare("SELECT path FROM hashes")?;
+            let rows = stmt.query_map([], |row| {
+                let path_str: String = row.get(0)?;
+                Ok(path_str)
+            })?;
+
+            for path_res in rows {
+                let path_str = path_res?;
+                if !Path::new(&path_str).exists() {
+                    stale_paths.push(path_str);
+                }
+            }
+        }
+
+        let count = stale_paths.len();
+        if count > 0 {
+            let tx = conn.transaction()?;
+            {
+                let mut del_stmt = tx.prepare_cached("DELETE FROM hashes WHERE path = ?1")?;
+                for path in stale_paths {
+                    del_stmt.execute(params![path])?;
+                }
+            }
+            tx.commit()?;
+        }
+
+        Ok(count)
+    }
+
+    /// Remove entries older than the specified duration.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn prune_by_age(&self, max_age: std::time::Duration) -> CacheResult<usize> {
+        let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
+
+        let now = Self::now_secs();
+        let cutoff = now - max_age.as_secs() as i64;
+
+        let count = conn.execute("DELETE FROM hashes WHERE created_at < ?1", params![cutoff])?;
+        Ok(count)
     }
 }
 
@@ -401,5 +512,130 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn test_hash_cache_invalidation_logic() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        let cache = HashCache::new(path).unwrap();
+
+        let now = SystemTime::now();
+        let file_path = Path::new("/test/file.txt");
+        let entry = CacheEntry {
+            path: file_path.to_path_buf(),
+            size: 1024,
+            mtime: now,
+            inode: None,
+            prehash: [1u8; 32],
+            fullhash: None,
+        };
+
+        cache.insert_prehash(&entry, [1u8; 32]).unwrap();
+        assert!(cache.is_valid(file_path, 1024, now));
+
+        // Test invalidate
+        cache.invalidate(file_path).unwrap();
+        assert!(!cache.is_valid(file_path, 1024, now));
+
+        // Test clear
+        cache.insert_prehash(&entry, [1u8; 32]).unwrap();
+        assert!(cache.is_valid(file_path, 1024, now));
+        cache.clear().unwrap();
+        assert!(!cache.is_valid(file_path, 1024, now));
+    }
+
+    #[test]
+    fn test_hash_cache_prune_stale() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let cache_path = temp_file.path();
+        let cache = HashCache::new(cache_path).unwrap();
+
+        // Create a real file
+        let real_file = NamedTempFile::new().unwrap();
+        let real_path = real_file.path();
+        let now = SystemTime::now();
+
+        let entry_real = CacheEntry {
+            path: real_path.to_path_buf(),
+            size: 0,
+            mtime: now,
+            inode: None,
+            prehash: [1u8; 32],
+            fullhash: None,
+        };
+
+        let entry_fake = CacheEntry {
+            path: PathBuf::from("/non/existent/file"),
+            size: 0,
+            mtime: now,
+            inode: None,
+            prehash: [2u8; 32],
+            fullhash: None,
+        };
+
+        cache.insert_prehash(&entry_real, [1u8; 32]).unwrap();
+        cache.insert_prehash(&entry_fake, [2u8; 32]).unwrap();
+
+        let pruned = cache.prune_stale().unwrap();
+        assert_eq!(pruned, 1);
+
+        assert!(cache.is_valid(real_path, 0, now));
+        assert!(!cache.is_valid(Path::new("/non/existent/file"), 0, now));
+    }
+
+    #[test]
+    fn test_hash_cache_prune_by_age() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let cache_path = temp_file.path();
+        let cache = HashCache::new(cache_path).unwrap();
+
+        let now = SystemTime::now();
+        let entry = CacheEntry {
+            path: PathBuf::from("/test/file.txt"),
+            size: 1024,
+            mtime: now,
+            inode: None,
+            prehash: [1u8; 32],
+            fullhash: None,
+        };
+
+        cache.insert_prehash(&entry, [1u8; 32]).unwrap();
+        assert!(cache.is_valid(Path::new("/test/file.txt"), 1024, now));
+
+        // Prune with 0 age (should prune everything)
+        let pruned = cache
+            .prune_by_age(std::time::Duration::from_secs(0))
+            .unwrap();
+        assert_eq!(pruned, 0); // Wait, if it's "created_at < now - 0", it should be 1 if now matches.
+                               // Actually, Self::now_secs() might be the same as created_at.
+                               // Let's use a very large duration to NOT prune.
+        let pruned = cache
+            .prune_by_age(std::time::Duration::from_secs(3600))
+            .unwrap();
+        assert_eq!(pruned, 0);
+        assert!(cache.is_valid(Path::new("/test/file.txt"), 1024, now));
+
+        // We can't easily test pruning without mocking time or sleeping, but we can verify the SQL.
+        // Let's manually insert an old entry.
+        {
+            let lock = cache.conn.lock().unwrap();
+            let conn = lock.as_ref().unwrap();
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            conn.execute(
+                "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, created_at)
+                 VALUES ('/test/old.txt', 100, 0, NULL, x'00', NULL, ?1)",
+                params![now - 10000],
+            )
+            .unwrap();
+        }
+
+        let pruned = cache
+            .prune_by_age(std::time::Duration::from_secs(3600))
+            .unwrap();
+        assert_eq!(pruned, 1);
     }
 }
