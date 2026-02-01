@@ -212,6 +212,7 @@ impl EventHandler {
             (KeyCode::Char('f'), KeyModifiers::NONE) => Some(Action::SelectFolder),
             (KeyCode::Char('F'), KeyModifiers::SHIFT) => Some(Action::SelectFolder),
             (KeyCode::Char('d'), KeyModifiers::NONE) => Some(Action::Delete),
+            (KeyCode::Char('t'), KeyModifiers::NONE) => Some(Action::ToggleTheme),
 
             // Quit
             (KeyCode::Char('q'), KeyModifiers::NONE) => Some(Action::Quit),

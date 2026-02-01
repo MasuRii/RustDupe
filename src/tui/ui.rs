@@ -173,6 +173,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 cmds.push(("d", "Del"));
             }
             cmds.push(("p", "Prv"));
+            cmds.push(("t", "Thm"));
             cmds.push(("q", "Quit"));
             cmds
         }

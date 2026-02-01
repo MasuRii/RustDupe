@@ -707,15 +707,32 @@ mod tests {
 
     #[test]
     fn test_is_in_reference_dir() {
-        let ref_paths = vec![PathBuf::from("/ref/path"), PathBuf::from("/other/ref")];
+        let ref_paths = vec![
+            PathBuf::from("/ref/path"),
+            PathBuf::from("/other/ref"),
+            PathBuf::from("/exact/match"),
+        ];
         let group = DuplicateGroup::new([0u8; 32], 100, Vec::new(), ref_paths);
 
+        // Subdirectory match
         assert!(group.is_in_reference_dir(Path::new("/ref/path/file.txt")));
         assert!(group.is_in_reference_dir(Path::new("/other/ref/sub/file.txt")));
+
+        // Exact match
+        assert!(group.is_in_reference_dir(Path::new("/exact/match")));
+
+        // Non-match
         assert!(!group.is_in_reference_dir(Path::new("/normal/path/file.txt")));
+        assert!(!group.is_in_reference_dir(Path::new("/ref/path_suffix/file.txt")));
+        assert!(!group.is_in_reference_dir(Path::new("/ref/pat")));
 
         if cfg!(windows) {
+            // Case-insensitive on Windows
             assert!(group.is_in_reference_dir(Path::new("/REF/PATH/file.txt")));
+            assert!(group.is_in_reference_dir(Path::new("/Exact/Match")));
+        } else {
+            // Case-sensitive on non-Windows
+            assert!(!group.is_in_reference_dir(Path::new("/REF/PATH/file.txt")));
         }
     }
 

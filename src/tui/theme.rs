@@ -21,6 +21,16 @@ pub struct Theme {
 
 impl Theme {
     /// Create a high-contrast dark theme (default).
+    ///
+    /// Palette:
+    /// - Primary: Cyan (headers, borders)
+    /// - Secondary: Yellow (selections, highlights)
+    /// - Danger: Red (deletions, errors)
+    /// - Success: Green (saved space, originals)
+    /// - Reference: Blue (protected files)
+    /// - Dim: DarkGray (secondary text)
+    /// - Normal: White (main text)
+    /// - Inverted FG: Black (text on colored background)
     pub fn dark() -> Self {
         Self {
             primary: Color::Cyan,
@@ -35,6 +45,16 @@ impl Theme {
     }
 
     /// Create a high-contrast light theme.
+    ///
+    /// Palette:
+    /// - Primary: Blue (headers, borders)
+    /// - Secondary: Magenta (selections, highlights)
+    /// - Danger: Red (deletions, errors)
+    /// - Success: Green (saved space, originals)
+    /// - Reference: Cyan (protected files)
+    /// - Dim: Gray (secondary text)
+    /// - Normal: Black (main text)
+    /// - Inverted FG: White (text on colored background)
     pub fn light() -> Self {
         Self {
             primary: Color::Blue,
@@ -55,6 +75,11 @@ impl Theme {
         } else {
             Self::dark()
         }
+    }
+
+    /// Check if this is a light theme.
+    pub fn is_light(&self) -> bool {
+        self.normal == Color::Black
     }
 }
 

@@ -124,6 +124,8 @@ pub enum Action {
     SelectFolder,
     /// Delete selected files (to trash)
     Delete,
+    /// Toggle theme
+    ToggleTheme,
     /// Confirm current action
     Confirm,
     /// Cancel current action
@@ -220,7 +222,9 @@ pub struct App {
     visible_rows: usize,
     /// Dry-run mode active (no deletions allowed)
     dry_run: bool,
-    /// TUI theme
+    /// TUI theme setting
+    theme_arg: ThemeArg,
+    /// TUI theme colors
     theme: Theme,
 }
 
@@ -260,18 +264,44 @@ impl App {
             reclaimable_space: 0,
             visible_rows: 20, // Default, will be updated by UI
             dry_run: false,
+            theme_arg: ThemeArg::Auto,
             theme: Theme::dark(),
         }
     }
 
     /// Set theme for the application.
     pub fn with_theme(mut self, theme_arg: ThemeArg) -> Self {
+        self.theme_arg = theme_arg;
         self.theme = match theme_arg {
             ThemeArg::Auto => Theme::auto(),
             ThemeArg::Light => Theme::light(),
             ThemeArg::Dark => Theme::dark(),
         };
         self
+    }
+
+    /// Toggle theme between light and dark.
+    pub fn toggle_theme(&mut self) {
+        self.theme_arg = match self.theme_arg {
+            ThemeArg::Auto => {
+                // If it was auto, switch to the opposite of what was detected
+                if self.theme.is_light() {
+                    ThemeArg::Dark
+                } else {
+                    ThemeArg::Light
+                }
+            }
+            ThemeArg::Dark => ThemeArg::Light,
+            ThemeArg::Light => ThemeArg::Dark,
+        };
+
+        self.theme = match self.theme_arg {
+            ThemeArg::Light => Theme::light(),
+            ThemeArg::Dark => Theme::dark(),
+            ThemeArg::Auto => Theme::auto(), // Won't happen
+        };
+
+        log::debug!("Theme toggled to {:?}", self.theme_arg);
     }
 
     /// Get the current theme.
@@ -355,6 +385,7 @@ impl App {
             reclaimable_space: reclaimable,
             visible_rows: 20,
             dry_run: false,
+            theme_arg: ThemeArg::Auto,
             theme: Theme::dark(),
         }
     }
@@ -1089,6 +1120,10 @@ impl App {
                 } else {
                     false
                 }
+            }
+            Action::ToggleTheme => {
+                self.toggle_theme();
+                true
             }
             Action::Confirm => {
                 if self.mode == AppMode::SelectingFolder {
