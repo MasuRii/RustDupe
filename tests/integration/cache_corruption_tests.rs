@@ -88,6 +88,7 @@ fn test_cache_on_readonly_filesystem() {
     }
 
     // Cleanup: must set back to writeable to allow tempfile to delete it
+    #[allow(clippy::permissions_set_readonly_false)]
     perms.set_readonly(false);
     let _ = fs::set_permissions(path, perms);
 }

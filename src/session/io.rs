@@ -368,12 +368,14 @@ mod tests {
 
     #[test]
     fn test_session_settings_serialization() {
-        let mut settings = SessionSettings::default();
-        settings.follow_symlinks = true;
-        settings.skip_hidden = true;
-        settings.min_size = Some(1024);
-        settings.regex_include = vec!["\\.jpg$".to_string()];
-        settings.file_categories = vec![crate::scanner::FileCategory::Images];
+        let settings = SessionSettings {
+            follow_symlinks: true,
+            skip_hidden: true,
+            min_size: Some(1024),
+            regex_include: vec!["\\.jpg$".to_string()],
+            file_categories: vec![crate::scanner::FileCategory::Images],
+            ..Default::default()
+        };
 
         let session = Session::new(vec!["/tmp".into()], settings, vec![]);
         let json = session.to_json().unwrap();
