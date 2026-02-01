@@ -70,118 +70,167 @@ pub struct ScanArgs {
     pub path: Option<PathBuf>,
 
     /// Load a previously saved session instead of scanning
-    #[arg(long, value_name = "SESSION_FILE", conflicts_with = "path")]
+    #[arg(
+        long,
+        value_name = "SESSION_FILE",
+        conflicts_with = "path",
+        help_heading = "Scanning Options"
+    )]
     pub load_session: Option<PathBuf>,
 
     /// Save scan results to a session file
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", help_heading = "Output Options")]
     pub save_session: Option<PathBuf>,
 
     /// Output format (tui for interactive, json/csv for scripting, session for persistence, html for report, script for deletion)
-    #[arg(short, long, value_enum, default_value = "tui")]
+    #[arg(
+        short,
+        long,
+        value_enum,
+        default_value = "tui",
+        help_heading = "Output Options"
+    )]
     pub output: OutputFormat,
 
     /// Write output to a file instead of stdout
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", help_heading = "Output Options")]
     pub output_file: Option<PathBuf>,
 
     /// Type of deletion script to generate
-    #[arg(long, value_enum, value_name = "TYPE")]
+    #[arg(long, value_enum, value_name = "TYPE", help_heading = "Output Options")]
     pub script_type: Option<ScriptTypeArg>,
 
     /// Minimum file size to consider (e.g., 1KB, 1MB, 1GB)
     ///
     /// Supports suffixes: B, KB, KiB, MB, MiB, GB, GiB, TB, TiB
-    #[arg(long, value_name = "SIZE", value_parser = parse_size)]
+    #[arg(long, value_name = "SIZE", value_parser = parse_size, help_heading = "Filtering Options")]
     pub min_size: Option<u64>,
 
     /// Maximum file size to consider (e.g., 1KB, 1MB, 1GB)
     ///
     /// Supports suffixes: B, KB, KiB, MB, MiB, GB, GiB, TB, TiB
-    #[arg(long, value_name = "SIZE", value_parser = parse_size)]
+    #[arg(long, value_name = "SIZE", value_parser = parse_size, help_heading = "Filtering Options")]
     pub max_size: Option<u64>,
 
     /// Only include files modified after this date (YYYY-MM-DD)
-    #[arg(long, value_name = "DATE", value_parser = parse_date)]
+    #[arg(long, value_name = "DATE", value_parser = parse_date, help_heading = "Filtering Options")]
     pub newer_than: Option<std::time::SystemTime>,
 
     /// Only include files modified before this date (YYYY-MM-DD)
-    #[arg(long, value_name = "DATE", value_parser = parse_date)]
+    #[arg(long, value_name = "DATE", value_parser = parse_date, help_heading = "Filtering Options")]
     pub older_than: Option<std::time::SystemTime>,
 
     /// Regex patterns to include (filename must match at least one)
-    #[arg(long = "regex", alias = "regex-include", value_name = "PATTERN")]
+    ///
+    /// Example: --regex ".*\.jpg$"
+    #[arg(
+        long = "regex",
+        alias = "regex-include",
+        value_name = "PATTERN",
+        help_heading = "Filtering Options"
+    )]
     pub regex_include: Vec<String>,
 
     /// Regex patterns to exclude (filename must not match any)
-    #[arg(long = "regex-exclude", value_name = "PATTERN")]
+    ///
+    /// Example: --regex-exclude "temp_.*"
+    #[arg(
+        long = "regex-exclude",
+        value_name = "PATTERN",
+        help_heading = "Filtering Options"
+    )]
     pub regex_exclude: Vec<String>,
 
     /// Filter by file type categories (can be specified multiple times)
-    #[arg(long = "file-type", value_enum, value_name = "TYPE")]
+    #[arg(
+        long = "file-type",
+        value_enum,
+        value_name = "TYPE",
+        help_heading = "Filtering Options"
+    )]
     pub file_types: Vec<FileType>,
 
     /// Glob patterns to ignore (can be specified multiple times)
     ///
     /// These patterns are added to any .gitignore patterns found.
-    #[arg(short, long = "ignore", value_name = "PATTERN")]
+    #[arg(
+        short,
+        long = "ignore",
+        value_name = "PATTERN",
+        help_heading = "Filtering Options"
+    )]
     pub ignore_patterns: Vec<String>,
 
     /// Follow symbolic links during scan
     ///
     /// Warning: May cause infinite loops if symlinks form cycles.
-    #[arg(long)]
+    #[arg(long, help_heading = "Scanning Options")]
     pub follow_symlinks: bool,
 
     /// Skip hidden files and directories (starting with .)
-    #[arg(long)]
+    #[arg(long, help_heading = "Scanning Options")]
     pub skip_hidden: bool,
 
     /// Number of I/O threads for hashing (default: 4)
     ///
     /// Lower values reduce disk thrashing on HDDs.
-    #[arg(long, value_name = "N", default_value = "4")]
+    #[arg(
+        long,
+        value_name = "N",
+        default_value = "4",
+        help_heading = "Scanning Options"
+    )]
     pub io_threads: usize,
 
     /// Enable paranoid mode: byte-by-byte verification after hash match
     ///
     /// Slower but guarantees no hash collisions.
-    #[arg(long)]
+    #[arg(long, help_heading = "Scanning Options")]
     pub paranoid: bool,
 
     /// Use permanent deletion instead of moving to trash
     ///
     /// Warning: Files cannot be recovered after permanent deletion.
-    #[arg(long)]
+    #[arg(long, help_heading = "Safety & Deletion Options")]
     pub permanent: bool,
 
     /// Skip confirmation prompts (required with --permanent in non-interactive mode)
-    #[arg(short = 'y', long)]
+    #[arg(short = 'y', long, help_heading = "Safety & Deletion Options")]
     pub yes: bool,
 
     /// Path to the hash cache database
     ///
     /// If not specified, a default platform-specific path is used.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", help_heading = "Cache Options")]
     pub cache: Option<PathBuf>,
 
     /// Disable hash caching
-    #[arg(long, conflicts_with = "cache")]
+    #[arg(long, conflicts_with = "cache", help_heading = "Cache Options")]
     pub no_cache: bool,
 
     /// Clear the hash cache before scanning
-    #[arg(long)]
+    #[arg(long, help_heading = "Cache Options")]
     pub clear_cache: bool,
 
     /// Do not perform any deletions (read-only mode)
-    #[arg(long, alias = "analyze-only")]
+    #[arg(
+        long,
+        alias = "analyze-only",
+        help_heading = "Safety & Deletion Options"
+    )]
     pub dry_run: bool,
 
     /// Reference directories (files here are never selected for deletion)
     ///
+    /// Example: --reference /backups/photos
+    ///
     /// Can be specified multiple times. Files in these directories will be
     /// marked as protected and cannot be selected for deletion.
-    #[arg(long = "reference", value_name = "PATH")]
+    #[arg(
+        long = "reference",
+        value_name = "PATH",
+        help_heading = "Safety & Deletion Options"
+    )]
     pub reference_paths: Vec<PathBuf>,
 }
 
@@ -193,19 +242,25 @@ pub struct LoadArgs {
     pub path: PathBuf,
 
     /// Output format (tui for interactive, json/csv for scripting, html for report, script for deletion)
-    #[arg(short, long, value_enum, default_value = "tui")]
+    #[arg(
+        short,
+        long,
+        value_enum,
+        default_value = "tui",
+        help_heading = "Output Options"
+    )]
     pub output: OutputFormat,
 
     /// Write output to a file instead of stdout
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", help_heading = "Output Options")]
     pub output_file: Option<PathBuf>,
 
     /// Type of deletion script to generate
-    #[arg(long, value_enum, value_name = "TYPE")]
+    #[arg(long, value_enum, value_name = "TYPE", help_heading = "Output Options")]
     pub script_type: Option<ScriptTypeArg>,
 
     /// Do not perform any deletions (read-only mode)
-    #[arg(long, alias = "analyze-only")]
+    #[arg(long, alias = "analyze-only", help_heading = "Safety Options")]
     pub dry_run: bool,
 }
 
