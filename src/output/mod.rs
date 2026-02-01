@@ -22,8 +22,10 @@
 pub mod csv;
 pub mod html;
 pub mod json;
+pub mod script;
 
 // Re-export main types
 pub use csv::CsvOutput;
 pub use html::HtmlOutput;
 pub use json::JsonOutput;
+pub use script::{ScriptOutput, ScriptType};

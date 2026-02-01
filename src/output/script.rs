@@ -1,0 +1,302 @@
+//! Shell script generation for duplicate file deletion.
+//!
+//! Provides generation of POSIX shell scripts (for Unix/Linux/macOS) and
+//! PowerShell scripts (for Windows) to safely review and execute deletion
+//! of duplicate files.
+
+use std::io::Write;
+use std::path::Path;
+
+use crate::duplicates::{DuplicateGroup, ScanSummary};
+
+/// Type of script to generate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptType {
+    /// POSIX-compliant shell script (sh/bash/zsh)
+    Posix,
+    /// Windows PowerShell script
+    PowerShell,
+}
+
+impl ScriptType {
+    /// Detect the appropriate script type for the current platform.
+    #[must_use]
+    pub fn detect() -> Self {
+        if cfg!(windows) {
+            Self::PowerShell
+        } else {
+            Self::Posix
+        }
+    }
+}
+
+/// Formatter for shell script output.
+pub struct ScriptOutput<'a> {
+    /// Duplicate groups to include in the script
+    pub groups: &'a [DuplicateGroup],
+    /// Scan summary for statistics and comments
+    pub summary: &'a ScanSummary,
+    /// The type of script to generate
+    pub script_type: ScriptType,
+}
+
+impl<'a> ScriptOutput<'a> {
+    /// Create a new script output formatter.
+    #[must_use]
+    pub fn new(
+        groups: &'a [DuplicateGroup],
+        summary: &'a ScanSummary,
+        script_type: ScriptType,
+    ) -> Self {
+        Self {
+            groups,
+            summary,
+            script_type,
+        }
+    }
+
+    /// Write the generated script to a writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing fails.
+    pub fn write_to<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        match self.script_type {
+            ScriptType::Posix => self.write_posix(writer),
+            ScriptType::PowerShell => self.write_powershell(writer),
+        }
+    }
+
+    fn write_posix<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writeln!(writer, "#!/bin/sh")?;
+        writeln!(writer, "# RustDupe Duplicate Deletion Script")?;
+        writeln!(
+            writer,
+            "# Generated on: {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        )?;
+        writeln!(writer, "#")?;
+        writeln!(
+            writer,
+            "# WARNING: This script will PERMANENTLY DELETE files."
+        )?;
+        writeln!(writer, "# Please review carefully before executing.")?;
+        writeln!(writer, "#")?;
+        writeln!(
+            writer,
+            "# Total duplicates found: {}",
+            self.summary.duplicate_files
+        )?;
+        writeln!(
+            writer,
+            "# Reclaimable space: {}",
+            bytesize::ByteSize::b(self.summary.reclaimable_space)
+        )?;
+        writeln!(writer)?;
+
+        writeln!(
+            writer,
+            "# Safety check: require explicit confirmation if run directly"
+        )?;
+        writeln!(writer, "if [ \"$1\" != \"--confirm\" ]; then")?;
+        writeln!(writer, "    echo \"Usage: $0 --confirm\"")?;
+        writeln!(
+            writer,
+            "    echo \"Run with --confirm to actually delete files.\""
+        )?;
+        writeln!(writer, "    exit 1")?;
+        writeln!(writer, "fi")?;
+        writeln!(writer)?;
+
+        for (i, group) in self.groups.iter().enumerate() {
+            writeln!(
+                writer,
+                "# Group {}: Hash {}, Size {}",
+                i + 1,
+                group.hash_hex(),
+                bytesize::ByteSize::b(group.size)
+            )?;
+
+            // In a real script, we might want to know which one we are KEEPING.
+            // For now, we'll just comment it.
+            // Task 3.7.2 will refine this, but basic version is needed for 3.7.1.
+
+            for (j, file) in group.files.iter().enumerate() {
+                let path_str = escape_posix(&file.path);
+                if j == 0 {
+                    writeln!(writer, "# KEEP: {}", path_str)?;
+                } else {
+                    writeln!(writer, "rm {}", path_str)?;
+                }
+            }
+            writeln!(writer)?;
+        }
+
+        writeln!(
+            writer,
+            "echo \"Deletion complete. Reclaimed {}\"",
+            bytesize::ByteSize::b(self.summary.reclaimable_space)
+        )?;
+
+        Ok(())
+    }
+
+    fn write_powershell<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writeln!(writer, "# RustDupe Duplicate Deletion Script")?;
+        writeln!(
+            writer,
+            "# Generated on: {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        )?;
+        writeln!(writer, "#")?;
+        writeln!(
+            writer,
+            "# WARNING: This script will PERMANENTLY DELETE files."
+        )?;
+        writeln!(writer, "# Please review carefully before executing.")?;
+        writeln!(writer, "#")?;
+        writeln!(
+            writer,
+            "# Total duplicates found: {}",
+            self.summary.duplicate_files
+        )?;
+        writeln!(
+            writer,
+            "# Reclaimable space: {}",
+            bytesize::ByteSize::b(self.summary.reclaimable_space)
+        )?;
+        writeln!(writer)?;
+
+        writeln!(writer, "if ($args[0] -ne \"--confirm\") {{")?;
+        writeln!(
+            writer,
+            "    Write-Host \"Usage: .\\$($MyInvocation.MyCommand.Name) --confirm\""
+        )?;
+        writeln!(
+            writer,
+            "    Write-Host \"Run with --confirm to actually delete files.\""
+        )?;
+        writeln!(writer, "    exit 1")?;
+        writeln!(writer, "}}")?;
+        writeln!(writer)?;
+
+        for (i, group) in self.groups.iter().enumerate() {
+            writeln!(
+                writer,
+                "# Group {}: Hash {}, Size {}",
+                i + 1,
+                group.hash_hex(),
+                bytesize::ByteSize::b(group.size)
+            )?;
+
+            for (j, file) in group.files.iter().enumerate() {
+                let path_str = escape_powershell(&file.path);
+                if j == 0 {
+                    writeln!(writer, "# KEEP: {}", path_str)?;
+                } else {
+                    writeln!(writer, "Remove-Item -Path {}", path_str)?;
+                }
+            }
+            writeln!(writer)?;
+        }
+
+        writeln!(
+            writer,
+            "Write-Host \"Deletion complete. Reclaimed {}\"",
+            bytesize::ByteSize::b(self.summary.reclaimable_space)
+        )?;
+
+        Ok(())
+    }
+}
+
+fn escape_posix(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    // Wrap in single quotes, escape single quotes as '\''
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+fn escape_powershell(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    // Wrap in single quotes, escape single quotes as ''
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scanner::FileEntry;
+    use std::path::PathBuf;
+    use std::time::{Duration, SystemTime};
+
+    fn setup_test_data() -> (Vec<DuplicateGroup>, ScanSummary) {
+        let now = SystemTime::now();
+        let groups = vec![DuplicateGroup::new(
+            [0u8; 32],
+            1024,
+            vec![
+                FileEntry::new(PathBuf::from("/test/file1.txt"), 1024, now),
+                FileEntry::new(PathBuf::from("/test/file2.txt"), 1024, now),
+            ],
+            Vec::new(),
+        )];
+        let summary = ScanSummary {
+            total_files: 2,
+            total_size: 2048,
+            duplicate_groups: 1,
+            duplicate_files: 1,
+            reclaimable_space: 1024,
+            scan_duration: Duration::from_secs(1),
+            ..Default::default()
+        };
+        (groups, summary)
+    }
+
+    #[test]
+    fn test_escape_posix() {
+        assert_eq!(escape_posix(Path::new("/foo/bar.txt")), "'/foo/bar.txt'");
+        assert_eq!(
+            escape_posix(Path::new("/foo's/bar.txt")),
+            "'/foo'\\''s/bar.txt'"
+        );
+    }
+
+    #[test]
+    fn test_escape_powershell() {
+        assert_eq!(
+            escape_powershell(Path::new("C:\\foo\\bar.txt")),
+            "'C:\\foo\\bar.txt'"
+        );
+        assert_eq!(
+            escape_powershell(Path::new("C:\\foo's\\bar.txt")),
+            "'C:\\foo''s\\bar.txt'"
+        );
+    }
+
+    #[test]
+    fn test_posix_generation() {
+        let (groups, summary) = setup_test_data();
+        let output = ScriptOutput::new(&groups, &summary, ScriptType::Posix);
+        let mut buffer = Vec::new();
+        output.write_to(&mut buffer).unwrap();
+        let script = String::from_utf8(buffer).unwrap();
+
+        assert!(script.starts_with("#!/bin/sh"));
+        assert!(script.contains("rm '/test/file2.txt'"));
+        assert!(script.contains("# KEEP: '/test/file1.txt'"));
+        assert!(script.contains("--confirm"));
+    }
+
+    #[test]
+    fn test_powershell_generation() {
+        let (groups, summary) = setup_test_data();
+        let output = ScriptOutput::new(&groups, &summary, ScriptType::PowerShell);
+        let mut buffer = Vec::new();
+        output.write_to(&mut buffer).unwrap();
+        let script = String::from_utf8(buffer).unwrap();
+
+        assert!(script.contains("Remove-Item -Path '/test/file2.txt'"));
+        assert!(script.contains("# KEEP: '/test/file1.txt'"));
+        assert!(script.contains("--confirm"));
+    }
+}
