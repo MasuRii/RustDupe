@@ -1,8 +1,13 @@
 //! SQLite-backed hash cache database.
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use std::path::Path;
+use std::sync::Mutex;
+use std::time::SystemTime;
 use thiserror::Error;
+
+use crate::cache::CacheEntry;
+use crate::scanner::Hash;
 
 /// Errors that can occur during cache operations.
 #[derive(Error, Debug)]
@@ -18,14 +23,21 @@ pub enum CacheError {
     /// The database connection is already closed.
     #[error("Database connection already closed")]
     ConnectionClosed,
+
+    /// Failed to acquire database lock.
+    #[error("Database lock error")]
+    LockError,
 }
 
 /// Result type for cache operations.
 pub type CacheResult<T> = std::result::Result<T, CacheError>;
 
 /// Persistent cache for file hashes using SQLite.
+///
+/// This struct is thread-safe and can be shared across multiple threads
+/// using an `Arc<HashCache>`.
 pub struct HashCache {
-    conn: Option<Connection>,
+    conn: Mutex<Option<Connection>>,
 }
 
 impl HashCache {
@@ -66,7 +78,9 @@ impl HashCache {
             [],
         )?;
 
-        Ok(Self { conn: Some(conn) })
+        Ok(Self {
+            conn: Mutex::new(Some(conn)),
+        })
     }
 
     /// Closes the database connection.
@@ -74,10 +88,181 @@ impl HashCache {
     /// # Errors
     ///
     /// Returns `CacheError` if the database connection cannot be closed cleanly.
-    pub fn close(&mut self) -> CacheResult<()> {
-        if let Some(conn) = self.conn.take() {
+    pub fn close(&self) -> CacheResult<()> {
+        let mut lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        if let Some(conn) = lock.take() {
             conn.close().map_err(|(_, e)| CacheError::Database(e))?;
         }
+        Ok(())
+    }
+
+    /// Helper to convert SystemTime to nanoseconds since UNIX epoch.
+    fn system_time_to_ns(time: SystemTime) -> i64 {
+        time.duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0)
+    }
+
+    /// Retrieve the prehash for a file if it exists and metadata matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn get_prehash(
+        &self,
+        path: &Path,
+        size: u64,
+        mtime: SystemTime,
+    ) -> CacheResult<Option<Hash>> {
+        let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
+        let mtime_ns = Self::system_time_to_ns(mtime);
+
+        let mut stmt = conn.prepare_cached(
+            "SELECT prehash FROM hashes WHERE path = ?1 AND size = ?2 AND mtime_ns = ?3",
+        )?;
+        let mut rows = stmt.query(params![path.to_string_lossy().to_string(), size, mtime_ns])?;
+
+        if let Some(row) = rows.next()? {
+            let blob: Vec<u8> = row.get(0)?;
+            if blob.len() == 32 {
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&blob);
+                return Ok(Some(hash));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Retrieve the full hash for a file if it exists and metadata matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn get_fullhash(
+        &self,
+        path: &Path,
+        size: u64,
+        mtime: SystemTime,
+    ) -> CacheResult<Option<Hash>> {
+        let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
+        let mtime_ns = Self::system_time_to_ns(mtime);
+
+        let mut stmt = conn.prepare_cached(
+            "SELECT fullhash FROM hashes WHERE path = ?1 AND size = ?2 AND mtime_ns = ?3",
+        )?;
+        let mut rows = stmt.query(params![path.to_string_lossy().to_string(), size, mtime_ns])?;
+
+        if let Some(row) = rows.next()? {
+            let blob: Option<Vec<u8>> = row.get(0)?;
+            if let Some(blob) = blob {
+                if blob.len() == 32 {
+                    let mut hash = [0u8; 32];
+                    hash.copy_from_slice(&blob);
+                    return Ok(Some(hash));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Insert or update a prehash in the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn insert_prehash(&self, entry: &CacheEntry, hash: Hash) -> CacheResult<()> {
+        let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
+        let mtime_ns = Self::system_time_to_ns(entry.mtime);
+
+        conn.execute(
+            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL)
+             ON CONFLICT(path) DO UPDATE SET
+                size = excluded.size,
+                mtime_ns = excluded.mtime_ns,
+                inode = excluded.inode,
+                prehash = excluded.prehash,
+                fullhash = NULL",
+            params![
+                entry.path.to_string_lossy().to_string(),
+                entry.size,
+                mtime_ns,
+                entry.inode,
+                &hash[..],
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Insert or update a full hash in the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn insert_fullhash(&self, entry: &CacheEntry, hash: Hash) -> CacheResult<()> {
+        let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
+        let mtime_ns = Self::system_time_to_ns(entry.mtime);
+
+        conn.execute(
+            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(path) DO UPDATE SET
+                size = excluded.size,
+                mtime_ns = excluded.mtime_ns,
+                inode = excluded.inode,
+                prehash = excluded.prehash,
+                fullhash = excluded.fullhash",
+            params![
+                entry.path.to_string_lossy().to_string(),
+                entry.size,
+                mtime_ns,
+                entry.inode,
+                &entry.prehash[..],
+                &hash[..],
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Insert multiple entries in a single transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if transaction fails or database access fails.
+    pub fn insert_batch(&self, entries: &[CacheEntry]) -> CacheResult<()> {
+        let mut lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_mut().ok_or(CacheError::ConnectionClosed)?;
+
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(path) DO UPDATE SET
+                    size = excluded.size,
+                    mtime_ns = excluded.mtime_ns,
+                    inode = excluded.inode,
+                    prehash = excluded.prehash,
+                    fullhash = excluded.fullhash",
+            )?;
+
+            for entry in entries {
+                let mtime_ns = Self::system_time_to_ns(entry.mtime);
+                stmt.execute(params![
+                    entry.path.to_string_lossy().to_string(),
+                    entry.size,
+                    mtime_ns,
+                    entry.inode,
+                    &entry.prehash[..],
+                    entry.fullhash.as_ref().map(|h| &h[..]),
+                ])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 }
@@ -85,6 +270,7 @@ impl HashCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -92,11 +278,11 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path();
 
-        let mut cache = HashCache::new(path).unwrap();
-        assert!(cache.conn.is_some());
+        let cache = HashCache::new(path).unwrap();
+        assert!(cache.conn.lock().unwrap().is_some());
 
         cache.close().unwrap();
-        assert!(cache.conn.is_none());
+        assert!(cache.conn.lock().unwrap().is_none());
     }
 
     #[test]
@@ -105,12 +291,115 @@ mod tests {
         let path = temp_file.path();
 
         {
-            let mut cache = HashCache::new(path).unwrap();
+            let cache = HashCache::new(path).unwrap();
             cache.close().unwrap();
         }
 
-        let mut cache = HashCache::new(path).unwrap();
-        assert!(cache.conn.is_some());
+        let cache = HashCache::new(path).unwrap();
+        assert!(cache.conn.lock().unwrap().is_some());
         cache.close().unwrap();
+    }
+
+    #[test]
+    fn test_hash_cache_crud() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        let cache = HashCache::new(path).unwrap();
+
+        let now = SystemTime::now();
+        let file_path = Path::new("/test/file.txt");
+        let entry = CacheEntry {
+            path: file_path.to_path_buf(),
+            size: 1024,
+            mtime: now,
+            inode: Some(123),
+            prehash: [1u8; 32],
+            fullhash: None,
+        };
+
+        // Test insert and get prehash
+        cache.insert_prehash(&entry, [1u8; 32]).unwrap();
+        let cached_prehash = cache.get_prehash(file_path, 1024, now).unwrap();
+        assert_eq!(cached_prehash, Some([1u8; 32]));
+
+        // Test cache miss on metadata change
+        let future = now + std::time::Duration::from_secs(1);
+        assert!(cache
+            .get_prehash(file_path, 1024, future)
+            .unwrap()
+            .is_none());
+        assert!(cache.get_prehash(file_path, 1025, now).unwrap().is_none());
+
+        // Test insert and get fullhash
+        cache.insert_fullhash(&entry, [2u8; 32]).unwrap();
+        let cached_fullhash = cache.get_fullhash(file_path, 1024, now).unwrap();
+        assert_eq!(cached_fullhash, Some([2u8; 32]));
+
+        // Test fullhash insert updates prehash if provided in entry
+        let mut entry2 = entry.clone();
+        entry2.prehash = [3u8; 32];
+        cache.insert_fullhash(&entry2, [4u8; 32]).unwrap();
+        assert_eq!(
+            cache.get_prehash(file_path, 1024, now).unwrap(),
+            Some([3u8; 32])
+        );
+        assert_eq!(
+            cache.get_fullhash(file_path, 1024, now).unwrap(),
+            Some([4u8; 32])
+        );
+    }
+
+    #[test]
+    fn test_hash_cache_batch() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        let cache = HashCache::new(path).unwrap();
+
+        let now = SystemTime::now();
+        let entries = vec![
+            CacheEntry {
+                path: PathBuf::from("/test/1.txt"),
+                size: 100,
+                mtime: now,
+                inode: None,
+                prehash: [1u8; 32],
+                fullhash: Some([11u8; 32]),
+            },
+            CacheEntry {
+                path: PathBuf::from("/test/2.txt"),
+                size: 200,
+                mtime: now,
+                inode: None,
+                prehash: [2u8; 32],
+                fullhash: None,
+            },
+        ];
+
+        cache.insert_batch(&entries).unwrap();
+
+        assert_eq!(
+            cache
+                .get_prehash(Path::new("/test/1.txt"), 100, now)
+                .unwrap(),
+            Some([1u8; 32])
+        );
+        assert_eq!(
+            cache
+                .get_fullhash(Path::new("/test/1.txt"), 100, now)
+                .unwrap(),
+            Some([11u8; 32])
+        );
+        assert_eq!(
+            cache
+                .get_prehash(Path::new("/test/2.txt"), 200, now)
+                .unwrap(),
+            Some([2u8; 32])
+        );
+        assert_eq!(
+            cache
+                .get_fullhash(Path::new("/test/2.txt"), 200, now)
+                .unwrap(),
+            None
+        );
     }
 }
