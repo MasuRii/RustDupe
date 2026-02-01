@@ -189,6 +189,8 @@ pub struct App {
     error_message: Option<String>,
     /// Preview content (for Previewing mode)
     preview_content: Option<String>,
+    /// Protected reference paths
+    reference_paths: Vec<PathBuf>,
     /// Total reclaimable space in bytes
     reclaimable_space: u64,
     /// Number of visible rows in the UI (for scroll calculation)
@@ -225,9 +227,36 @@ impl App {
             scan_progress: ScanProgress::new(),
             error_message: None,
             preview_content: None,
+            reference_paths: Vec::new(),
             reclaimable_space: 0,
             visible_rows: 20, // Default, will be updated by UI
         }
+    }
+
+    /// Set reference paths for the application.
+    pub fn with_reference_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.reference_paths = paths;
+        self
+    }
+
+    /// Set reference paths.
+    pub fn set_reference_paths(&mut self, paths: Vec<PathBuf>) {
+        self.reference_paths = paths;
+    }
+
+    /// Check if a path is in a protected reference directory.
+    pub fn is_in_reference_dir(&self, path: &std::path::Path) -> bool {
+        self.reference_paths.iter().any(|ref_path| {
+            if cfg!(windows) {
+                // Windows is case-insensitive. Convert to lowercase PathBuf for reliable
+                // component-based comparison.
+                let p = std::path::PathBuf::from(path.to_string_lossy().to_lowercase());
+                let r = std::path::PathBuf::from(ref_path.to_string_lossy().to_lowercase());
+                p.starts_with(r)
+            } else {
+                path.starts_with(ref_path)
+            }
+        })
     }
 
     /// Create an App with pre-loaded duplicate groups.
@@ -261,6 +290,7 @@ impl App {
             scan_progress: ScanProgress::new(),
             error_message: None,
             preview_content: None,
+            reference_paths: Vec::new(),
             reclaimable_space: reclaimable,
             visible_rows: 20,
         }
@@ -563,8 +593,14 @@ impl App {
     /// Toggle selection of the currently highlighted file.
     ///
     /// If the file is selected, it will be deselected, and vice versa.
+    /// Cannot select files in protected reference directories.
     pub fn toggle_select(&mut self) {
         if let Some(path) = self.current_file().cloned() {
+            if self.is_in_reference_dir(&path) {
+                self.set_error("Cannot select file in protected reference directory");
+                return;
+            }
+
             if self.selected_files.contains(&path) {
                 self.selected_files.remove(&path);
                 log::debug!("Deselected: {}", path.display());
@@ -576,6 +612,8 @@ impl App {
     }
 
     /// Select a specific file.
+    ///
+    /// Note: This bypasses the reference directory check.
     pub fn select(&mut self, path: PathBuf) {
         self.selected_files.insert(path);
     }
@@ -588,11 +626,19 @@ impl App {
     /// Select all files in the current group except the first one.
     ///
     /// The first file is preserved as the "original" that should be kept.
+    /// Files in protected reference directories are skipped.
     pub fn select_all_in_group(&mut self) {
         // Clone files to avoid borrow conflict
         let files_to_select: Vec<PathBuf> = self
             .current_group()
-            .map(|g| g.files.iter().skip(1).cloned().collect())
+            .map(|g| {
+                g.files
+                    .iter()
+                    .skip(1)
+                    .filter(|p| !self.is_in_reference_dir(p))
+                    .cloned()
+                    .collect()
+            })
             .unwrap_or_default();
 
         let count = files_to_select.len();
@@ -601,7 +647,10 @@ impl App {
         }
 
         if count > 0 {
-            log::debug!("Selected {} files in group (keeping first)", count);
+            log::debug!(
+                "Selected {} files in group (keeping first and skipping references)",
+                count
+            );
         }
     }
 

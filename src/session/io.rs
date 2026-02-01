@@ -116,6 +116,7 @@ mod tests {
             hash: [0u8; 32],
             size: 100,
             files: vec!["/tmp/a.txt".into(), "/tmp/b.txt".into()],
+            reference_paths: Vec::new(),
         }];
         let session = Session::new(vec!["/tmp".into()], settings, groups);
 
@@ -136,6 +137,7 @@ mod tests {
             hash: [1u8; 32],
             size: 200,
             files: vec!["/tmp/c.txt".into(), "/tmp/d.txt".into()],
+            reference_paths: Vec::new(),
         }];
         let mut session = Session::new(vec!["/tmp".into()], settings, groups);
         session.user_selections.insert("/tmp/c.txt".into());
@@ -159,6 +161,7 @@ mod tests {
             hash: [1u8; 32],
             size: 200,
             files: vec!["/tmp/c.txt".into(), "/tmp/d.txt".into()],
+            reference_paths: Vec::new(),
         }];
         let mut session = Session::new(vec!["/tmp".into()], settings, groups);
         session.user_selections.insert("/tmp/c.txt".into());

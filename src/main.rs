@@ -51,12 +51,23 @@ fn handle_scan(
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
     quiet: bool,
 ) -> Result<()> {
-    let (groups, summary, scan_paths, settings) = if let Some(ref session_path) = args.load_session
+    let (groups, summary, scan_paths, settings, reference_paths) = if let Some(ref session_path) =
+        args.load_session
     {
         log::info!("Loading session from {:?}", session_path);
         let session = Session::load(session_path)?;
         let (groups, summary) = session.to_results();
-        (groups, summary, session.scan_paths, session.settings)
+        let reference_paths = groups
+            .first()
+            .map(|g| g.reference_paths.clone())
+            .unwrap_or_default();
+        (
+            groups,
+            summary,
+            session.scan_paths,
+            session.settings,
+            reference_paths,
+        )
     } else {
         let path = args.path.as_ref().ok_or_else(|| {
             anyhow::anyhow!("A path is required for scanning unless --load-session is used")
@@ -132,7 +143,7 @@ fn handle_scan(
             .with_paranoid(args.paranoid)
             .with_walker_config(walker_config)
             .with_shutdown_flag(shutdown_flag.clone())
-            .with_reference_paths(reference_paths);
+            .with_reference_paths(reference_paths.clone());
 
         if let Some(cache) = hash_cache {
             finder_config = finder_config.with_cache(cache);
@@ -166,7 +177,13 @@ fn handle_scan(
                     io_threads: args.io_threads,
                     paranoid: args.paranoid,
                 };
-                (groups, summary, vec![path.clone()], settings)
+                (
+                    groups,
+                    summary,
+                    vec![path.clone()],
+                    settings,
+                    reference_paths,
+                )
             }
             Err(e) => {
                 if args.output == OutputFormat::Json {
@@ -190,6 +207,7 @@ fn handle_scan(
         settings,
         shutdown_flag,
         initial_session: None,
+        reference_paths,
     })
 }
 
@@ -201,6 +219,10 @@ fn handle_load(
     log::info!("Loading session from {:?}", args.path);
     let session = Session::load(&args.path)?;
     let (groups, summary) = session.to_results();
+    let reference_paths = groups
+        .first()
+        .map(|g| g.reference_paths.clone())
+        .unwrap_or_default();
 
     handle_results(ResultContext {
         groups,
@@ -211,6 +233,7 @@ fn handle_load(
         settings: session.settings.clone(),
         shutdown_flag,
         initial_session: Some(session),
+        reference_paths,
     })
 }
 
@@ -223,6 +246,7 @@ struct ResultContext {
     settings: SessionSettings,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
     initial_session: Option<Session>,
+    reference_paths: Vec<std::path::PathBuf>,
 }
 
 fn handle_results(ctx: ResultContext) -> Result<()> {
@@ -235,6 +259,7 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
         settings,
         shutdown_flag,
         initial_session,
+        reference_paths,
     } = ctx;
 
     // 1. Save session if requested (non-TUI only)
@@ -248,6 +273,7 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
                     hash: g.hash,
                     size: g.size,
                     files: g.files.clone(),
+                    reference_paths: g.reference_paths.clone(),
                 })
                 .collect();
             let mut session = Session::new(scan_paths.clone(), settings.clone(), session_groups);
@@ -265,7 +291,8 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
     match output_format {
         OutputFormat::Tui => {
             // Initialize TUI with results
-            let mut app = rustdupe::tui::App::with_groups(groups);
+            let mut app =
+                rustdupe::tui::App::with_groups(groups).with_reference_paths(reference_paths);
             if let Some(session) = initial_session {
                 app.apply_session(
                     session.user_selections,
@@ -287,6 +314,7 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
                         hash: g.hash,
                         size: g.size,
                         files: g.files.clone(),
+                        reference_paths: g.reference_paths.clone(),
                     })
                     .collect();
 
@@ -318,6 +346,7 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
                     hash: g.hash,
                     size: g.size,
                     files: g.files.clone(),
+                    reference_paths: g.reference_paths.clone(),
                 })
                 .collect();
 

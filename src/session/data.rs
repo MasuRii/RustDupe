@@ -102,10 +102,13 @@ pub struct SessionGroup {
     pub size: u64,
     /// Paths to the duplicate files.
     pub files: Vec<PathBuf>,
+    /// Protected reference paths.
+    #[serde(default)]
+    pub reference_paths: Vec<PathBuf>,
 }
 
 impl From<SessionGroup> for DuplicateGroup {
     fn from(sg: SessionGroup) -> Self {
-        DuplicateGroup::new(sg.hash, sg.size, sg.files, Vec::new())
+        DuplicateGroup::new(sg.hash, sg.size, sg.files, sg.reference_paths)
     }
 }

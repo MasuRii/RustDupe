@@ -361,6 +361,7 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, path)| {
             let is_selected = app.is_file_selected(path);
+            let is_ref = app.is_in_reference_dir(path);
             let is_first = i == 0;
 
             let path_str = path.to_string_lossy();
@@ -368,6 +369,8 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
 
             let prefix = if is_selected {
                 "[X]"
+            } else if is_ref {
+                "[R]" // Reference marker
             } else if is_first {
                 "[*]" // Original/keep marker
             } else {
@@ -382,6 +385,11 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
                         .fg(Color::Black)
                         .bg(Color::Red)
                         .add_modifier(Modifier::BOLD)
+                } else if is_ref {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Blue)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                         .fg(Color::Black)
@@ -390,6 +398,8 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
                 }
             } else if is_selected {
                 Style::default().fg(Color::Red)
+            } else if is_ref {
+                Style::default().fg(Color::Blue)
             } else if is_first {
                 Style::default().fg(Color::Green) // Original is green
             } else {
