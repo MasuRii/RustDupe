@@ -86,9 +86,12 @@ fn handle_scan(
             reference_paths,
         )
     } else {
-        let path = args.path.as_ref().ok_or_else(|| {
+        let raw_path = args.path.as_ref().ok_or_else(|| {
             anyhow::anyhow!("A path is required for scanning unless --load-session is used")
         })?;
+
+        // Canonicalize the scan path to ensure consistent path matching (especially on Windows)
+        let path = raw_path.canonicalize()?;
 
         log::debug!("Scanning path: {:?}", path);
         log::debug!("Output format: {}", args.output);
@@ -196,16 +199,9 @@ fn handle_scan(
 
         let finder = DuplicateFinder::new(finder_config);
 
-        log::info!(
-            "Starting scan of {}",
-            if args.output == OutputFormat::Tui {
-                path.canonicalize()?.display().to_string()
-            } else {
-                path.display().to_string()
-            }
-        );
+        log::info!("Starting scan of {}", path.display());
 
-        match finder.find_duplicates(path) {
+        match finder.find_duplicates(&path) {
             Ok((groups, summary)) => {
                 let settings = SessionSettings {
                     follow_symlinks: args.follow_symlinks,
