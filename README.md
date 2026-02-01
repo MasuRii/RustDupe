@@ -25,7 +25,11 @@
 ## Features
 
 - **High Performance**: Parallel directory walking and BLAKE3 hashing for maximum speed.
-- **Interactive TUI**: Review duplicate groups, preview files, and select copies for deletion in a navigable interface.
+- **Hash Caching**: Persistent SQLite cache for lightning-fast rescans by skipping unchanged files.
+- **Interactive TUI**: Review duplicate groups, preview files, and select copies for deletion with support for batch selection and themes.
+- **Session Management**: Save and resume duplicate review sessions with checksum-verified integrity.
+- **Reference Directories**: Protect original source directories from accidental deletion.
+- **Advanced Export**: Generate self-contained HTML reports and safety-first shell scripts (POSIX/PowerShell).
 - **Multi-Phase Optimization**:
   1. Group by file size (instant filtering).
   2. Compare 4KB pre-hashes (fast rejection).
@@ -34,7 +38,7 @@
 - **Safe Deletion**: Moves files to system trash by default (cross-platform support).
 - **Hardlink Aware**: Automatically detects and skips hardlinks (same inode) to prevent false positives.
 - **Unicode Support**: Handles macOS NFD vs. Windows/Linux NFC normalization issues.
-- **Machine Readable**: Export results to JSON or CSV for scripting and automation.
+- **Theming**: Light, Dark, and Auto-detected terminal themes.
 
 ## Installation
 
@@ -76,30 +80,80 @@ The binary will be available at `target/release/rustdupe`.
 rustdupe scan ~/Downloads
 ```
 
-### Non-Interactive Modes (Automation)
+### Incremental Scanning (Cache)
+
+Speed up subsequent scans of the same directories by enabling the persistent hash cache.
 
 ```bash
-# Export to JSON
-rustdupe scan ~/Documents --output json > duplicates.json
+# Uses default platform-specific cache path
+rustdupe scan ~/Documents
 
-# Export to CSV
-rustdupe scan /path/to/media --output csv > duplicates.csv
+# Specify a custom cache path
+rustdupe scan ~/Documents --cache ./my-hashes.db
+
+# Force a full rescan by clearing the cache
+rustdupe scan ~/Documents --clear-cache
 ```
 
-### Advanced Options
+### Workflow Persistence (Sessions)
+
+Save your progress and resume your duplicate review later.
 
 ```bash
-# Filter by size
-rustdupe scan . --min-size 1MB --max-size 1GB
+# Save scan results to a session file
+rustdupe scan ~/Photos --save-session backup.json
 
-# Ignore specific patterns
-rustdupe scan . --ignore "*.tmp" --ignore "node_modules"
+# Load and resume a session in the TUI
+rustdupe load backup.json
 
-# Enable paranoid byte-by-byte verification
-rustdupe scan . --paranoid
+# Load a session and export to a different format
+rustdupe load backup.json --output html --output-file report.html
+```
 
-# Custom I/O threads (default: 4)
-rustdupe scan . --io-threads 8
+### Protected Paths (Reference Directories)
+
+Protect "golden" copies of your files. Files in reference directories are never selected by batch operations and cannot be manually selected for deletion.
+
+```bash
+rustdupe scan ./working-dir --reference ./backup-drive/originals
+```
+
+### Advanced Export (Reports & Scripts)
+
+Generate self-contained HTML reports for sharing or shell scripts for automated/reviewed deletion.
+
+```bash
+# Generate a responsive HTML report with summary stats
+rustdupe scan ~/Downloads --output html > report.html
+
+# Generate a POSIX deletion script (dry-run by default)
+rustdupe scan ~/Downloads --output script --script-type posix > cleanup.sh
+
+# Generate a PowerShell deletion script
+rustdupe scan ~/Downloads --output script --script-type powershell > cleanup.ps1
+```
+
+### Advanced Filtering
+
+Narrow down results using size, date, regex, or file type categories.
+
+```bash
+# Filter by size and date range
+rustdupe scan . --min-size 1MB --newer-than 2025-01-01 --older-than 2026-01-01
+
+# Use regex for inclusion/exclusion
+rustdupe scan . --regex "IMG_.*\.jpg" --regex-exclude ".*_backup\..*"
+
+# Filter by file type categories
+rustdupe scan . --file-type images --file-type videos
+```
+
+### Dry-Run Mode
+
+Analyze duplicates safely without any risk of modification. Deletion actions are disabled in the TUI.
+
+```bash
+rustdupe scan . --dry-run
 ```
 
 ## CLI Reference
@@ -109,30 +163,59 @@ Usage: rustdupe [OPTIONS] <COMMAND>
 
 Commands:
   scan  Scan a directory for duplicate files
+  load  Load a previously saved session
   help  Print this message or the help of the given subcommand(s)
 
-Arguments:
-  <PATH>  Directory path to scan for duplicates
-
 Options:
-  -v, --verbose...       Increase verbosity level (-v for debug, -vv for trace)
-  -q, --quiet            Suppress all output except errors
-      --no-color         Disable colored output
-  -h, --help             Print help
-  -V, --version          Print version
+  -v, --verbose...           Increase verbosity level (-v for debug, -vv for trace)
+  -q, --quiet                Suppress all output except errors
+      --no-color             Disable colored output
+      --theme <THEME>        TUI theme (light, dark, auto) [default: auto]
+  -h, --help                 Print help
+  -V, --version              Print version
 
 Scan Subcommand Options:
-  -o, --output <OUTPUT>  Output format (tui, json, csv) [default: tui]
-      --min-size <SIZE>  Minimum file size to consider (e.g., 1KB, 1MB)
-      --max-size <SIZE>  Maximum file size to consider (e.g., 1KB, 1MB)
-  -i, --ignore <PATTERN> Glob patterns to ignore
-      --follow-symlinks  Follow symbolic links
-      --skip-hidden      Skip hidden files and directories
-      --io-threads <N>   Number of I/O threads for hashing [default: 4]
-      --paranoid         Enable byte-by-byte verification
-      --permanent        Use permanent deletion instead of trash
-  -y, --yes              Skip confirmation prompts
+  -o, --output <OUTPUT>      Output format (tui, json, csv, html, session, script) [default: tui]
+      --output-file <PATH>   Write output to a file instead of stdout
+      --script-type <TYPE>   Type of deletion script to generate (posix, powershell)
+      --min-size <SIZE>      Minimum file size to consider (e.g., 1KB, 1MB)
+      --max-size <SIZE>      Maximum file size to consider (e.g., 1KB, 1MB)
+      --newer-than <DATE>    Only include files modified after (YYYY-MM-DD)
+      --older-than <DATE>    Only include files modified before (YYYY-MM-DD)
+      --regex <PATTERN>      Regex patterns to include (alias: --regex-include)
+      --regex-exclude <PAT>  Regex patterns to exclude
+      --file-type <TYPE>     Filter by categories (images, videos, audio, documents, archives)
+  -i, --ignore <PATTERN>     Glob patterns to ignore
+      --follow-symlinks      Follow symbolic links
+      --skip-hidden          Skip hidden files and directories
+      --io-threads <N>       Number of I/O threads for hashing [default: 4]
+      --paranoid             Enable byte-by-byte verification
+      --permanent            Use permanent deletion instead of trash
+  -y, --yes                  Skip confirmation prompts
+      --cache <PATH>         Path to the hash cache database
+      --no-cache             Disable hash caching
+      --clear-cache          Clear the hash cache before scanning
+      --dry-run              Do not perform any deletions (alias: --analyze-only)
+      --reference <PATH>     Reference directories (protected from deletion)
 ```
+
+### TUI Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `↑/↓` or `j/k` | Navigate files and groups |
+| `Space` | Toggle selection for current file |
+| `Enter` | Preview current file (external opener) |
+| `A` | Select all duplicates (keep first) across ALL groups |
+| `O` | Select oldest file in each group (keep newest) |
+| `N` | Select newest file in each group (keep oldest) |
+| `S` | Select all but largest file in each group |
+| `L` | Select all but smallest file in each group |
+| `F` | Enter folder-based selection mode |
+| `Delete` | Delete selected files (moves to trash by default) |
+| `t` | Toggle between Light and Dark themes |
+| `q` or `Esc` | Quit / Go back |
+
 
 ## Performance
 
