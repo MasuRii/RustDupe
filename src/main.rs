@@ -7,7 +7,7 @@ use clap::Parser;
 use directories::ProjectDirs;
 use rustdupe::{
     cache::HashCache,
-    cli::{Cli, Commands, LoadArgs, OutputFormat, ScanArgs},
+    cli::{Cli, Commands, LoadArgs, OutputFormat, ScanArgs, ScriptTypeArg},
     duplicates::{DuplicateFinder, FinderConfig},
     logging, output,
     scanner::WalkerConfig,
@@ -227,6 +227,7 @@ fn handle_scan(
         summary,
         output_format: args.output,
         output_file: args.output_file,
+        script_type: args.script_type,
         save_session: args.save_session,
         scan_paths,
         settings,
@@ -254,6 +255,7 @@ fn handle_load(
         summary,
         output_format: args.output,
         output_file: args.output_file,
+        script_type: args.script_type,
         save_session: None,
         scan_paths: session.scan_paths.clone(),
         settings: session.settings.clone(),
@@ -268,6 +270,7 @@ struct ResultContext {
     summary: rustdupe::duplicates::ScanSummary,
     output_format: OutputFormat,
     output_file: Option<std::path::PathBuf>,
+    script_type: Option<ScriptTypeArg>,
     save_session: Option<std::path::PathBuf>,
     scan_paths: Vec<std::path::PathBuf>,
     settings: SessionSettings,
@@ -282,6 +285,7 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
         summary,
         output_format,
         output_file,
+        script_type,
         save_session,
         scan_paths,
         settings,
@@ -417,6 +421,32 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
             } else {
                 let mut stdout = io::stdout().lock();
                 stdout.write_all(json.as_bytes())?;
+                stdout.flush()?;
+            }
+        }
+        OutputFormat::Script => {
+            let script_type = match script_type {
+                Some(ScriptTypeArg::Posix) => rustdupe::output::ScriptType::Posix,
+                Some(ScriptTypeArg::Powershell) => rustdupe::output::ScriptType::PowerShell,
+                None => rustdupe::output::ScriptType::detect(),
+            };
+
+            let mut script_output =
+                rustdupe::output::ScriptOutput::new(&groups, &summary, script_type);
+
+            // If we have an initial session with user selections, use them
+            if let Some(ref session) = initial_session {
+                script_output = script_output.with_user_selections(&session.user_selections);
+            }
+
+            if let Some(path) = output_file {
+                let mut file = fs::File::create(&path)?;
+                script_output.write_to(&mut file)?;
+                file.flush()?;
+                log::info!("Deletion script saved to {:?}", path);
+            } else {
+                let mut stdout = io::stdout().lock();
+                script_output.write_to(&mut stdout)?;
                 stdout.flush()?;
             }
         }

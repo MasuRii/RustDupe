@@ -73,13 +73,17 @@ pub struct ScanArgs {
     #[arg(long, value_name = "PATH")]
     pub save_session: Option<PathBuf>,
 
-    /// Output format (tui for interactive, json/csv for scripting, session for persistence, html for report)
+    /// Output format (tui for interactive, json/csv for scripting, session for persistence, html for report, script for deletion)
     #[arg(short, long, value_enum, default_value = "tui")]
     pub output: OutputFormat,
 
     /// Write output to a file instead of stdout
     #[arg(long, value_name = "PATH")]
     pub output_file: Option<PathBuf>,
+
+    /// Type of deletion script to generate
+    #[arg(long, value_enum, value_name = "TYPE")]
+    pub script_type: Option<ScriptTypeArg>,
 
     /// Minimum file size to consider (e.g., 1KB, 1MB, 1GB)
     ///
@@ -180,13 +184,17 @@ pub struct LoadArgs {
     #[arg(value_name = "SESSION_FILE")]
     pub path: PathBuf,
 
-    /// Output format (tui for interactive, json/csv for scripting, html for report)
+    /// Output format (tui for interactive, json/csv for scripting, html for report, script for deletion)
     #[arg(short, long, value_enum, default_value = "tui")]
     pub output: OutputFormat,
 
     /// Write output to a file instead of stdout
     #[arg(long, value_name = "PATH")]
     pub output_file: Option<PathBuf>,
+
+    /// Type of deletion script to generate
+    #[arg(long, value_enum, value_name = "TYPE")]
+    pub script_type: Option<ScriptTypeArg>,
 }
 
 /// Output format for scan results.
@@ -202,6 +210,17 @@ pub enum OutputFormat {
     Html,
     /// Session file format for persistence
     Session,
+    /// Shell script for deletion
+    Script,
+}
+
+/// Script type for deletion script generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ScriptTypeArg {
+    /// POSIX-compliant shell script (sh/bash/zsh)
+    Posix,
+    /// Windows PowerShell script
+    Powershell,
 }
 
 /// File type categories for filtering.
@@ -239,6 +258,7 @@ impl std::fmt::Display for OutputFormat {
             OutputFormat::Csv => write!(f, "csv"),
             OutputFormat::Html => write!(f, "html"),
             OutputFormat::Session => write!(f, "session"),
+            OutputFormat::Script => write!(f, "script"),
         }
     }
 }
@@ -461,6 +481,48 @@ mod tests {
         assert!(parse_date("2026-02-01").is_ok());
         assert!(parse_date("2026-02-31").is_err()); // Invalid day
         assert!(parse_date("not-a-date").is_err());
+    }
+
+    #[test]
+    fn test_cli_parse_scan_script() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "scan",
+            "/path",
+            "--output",
+            "script",
+            "--script-type",
+            "posix",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.output, OutputFormat::Script);
+                assert_eq!(args.script_type, Some(ScriptTypeArg::Posix));
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_load_script() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "load",
+            "session.json",
+            "--output",
+            "script",
+            "--script-type",
+            "powershell",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Load(args) => {
+                assert_eq!(args.output, OutputFormat::Script);
+                assert_eq!(args.script_type, Some(ScriptTypeArg::Powershell));
+            }
+            _ => panic!("Expected Load command"),
+        }
     }
 
     #[test]
