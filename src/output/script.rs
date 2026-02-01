@@ -4,8 +4,9 @@
 //! PowerShell scripts (for Windows) to safely review and execute deletion
 //! of duplicate files.
 
+use std::collections::BTreeSet;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::duplicates::{DuplicateGroup, ScanSummary};
 
@@ -38,6 +39,8 @@ pub struct ScriptOutput<'a> {
     pub summary: &'a ScanSummary,
     /// The type of script to generate
     pub script_type: ScriptType,
+    /// Optional user selections from a session
+    pub user_selections: Option<&'a BTreeSet<PathBuf>>,
 }
 
 impl<'a> ScriptOutput<'a> {
@@ -52,7 +55,15 @@ impl<'a> ScriptOutput<'a> {
             groups,
             summary,
             script_type,
+            user_selections: None,
         }
+    }
+
+    /// Set user selections for the script.
+    #[must_use]
+    pub fn with_user_selections(mut self, selections: &'a BTreeSet<PathBuf>) -> Self {
+        self.user_selections = Some(selections);
+        self
     }
 
     /// Write the generated script to a writer.
@@ -94,18 +105,28 @@ impl<'a> ScriptOutput<'a> {
         )?;
         writeln!(writer)?;
 
+        writeln!(writer, "# Default to dry-run mode for safety")?;
+        writeln!(writer, "DRY_RUN=1")?;
+        writeln!(writer, "if [ \"$1\" = \"--confirm\" ]; then")?;
+        writeln!(writer, "    DRY_RUN=0")?;
+        writeln!(writer, "fi")?;
+        writeln!(writer)?;
+
+        writeln!(writer, "if [ \"$DRY_RUN\" -eq 1 ]; then")?;
         writeln!(
             writer,
-            "# Safety check: require explicit confirmation if run directly"
+            "    echo \"DRY RUN MODE. No files will be deleted.\""
         )?;
-        writeln!(writer, "if [ \"$1\" != \"--confirm\" ]; then")?;
-        writeln!(writer, "    echo \"Usage: $0 --confirm\"")?;
         writeln!(
             writer,
             "    echo \"Run with --confirm to actually delete files.\""
         )?;
-        writeln!(writer, "    exit 1")?;
+        writeln!(writer, "    echo")?;
         writeln!(writer, "fi")?;
+        writeln!(writer)?;
+
+        writeln!(writer, "DELETED_COUNT=0")?;
+        writeln!(writer, "RECLAIMED_BYTES=0")?;
         writeln!(writer)?;
 
         for (i, group) in self.groups.iter().enumerate() {
@@ -117,26 +138,51 @@ impl<'a> ScriptOutput<'a> {
                 bytesize::ByteSize::b(group.size)
             )?;
 
-            // In a real script, we might want to know which one we are KEEPING.
-            // For now, we'll just comment it.
-            // Task 3.7.2 will refine this, but basic version is needed for 3.7.1.
-
+            let mut group_has_deletion = false;
             for (j, file) in group.files.iter().enumerate() {
                 let path_str = escape_posix(&file.path);
-                if j == 0 {
-                    writeln!(writer, "# KEEP: {}", path_str)?;
+                let should_delete = if let Some(selections) = self.user_selections {
+                    selections.contains(&file.path)
                 } else {
-                    writeln!(writer, "rm {}", path_str)?;
+                    // Default logic: keep first, delete others
+                    j > 0
+                };
+
+                if should_delete {
+                    writeln!(writer, "# DELETE: {}", path_str)?;
+                    writeln!(writer, "if [ \"$DRY_RUN\" -eq 0 ]; then")?;
+                    writeln!(writer, "    rm {} && \\", path_str)?;
+                    writeln!(writer, "    DELETED_COUNT=$((DELETED_COUNT + 1)) && \\")?;
+                    writeln!(
+                        writer,
+                        "    RECLAIMED_BYTES=$((RECLAIMED_BYTES + {}))",
+                        group.size
+                    )?;
+                    writeln!(writer, "else")?;
+                    writeln!(writer, "    echo \"would delete: {}\"", path_str)?;
+                    writeln!(writer, "fi")?;
+                    group_has_deletion = true;
+                } else {
+                    writeln!(writer, "# KEEP:   {}", path_str)?;
                 }
             }
-            writeln!(writer)?;
+            if group_has_deletion {
+                writeln!(writer)?;
+            }
         }
 
+        writeln!(writer, "if [ \"$DRY_RUN\" -eq 0 ]; then")?;
         writeln!(
             writer,
-            "echo \"Deletion complete. Reclaimed {}\"",
-            bytesize::ByteSize::b(self.summary.reclaimable_space)
+            "    echo \"Deletion complete. Deleted $DELETED_COUNT files.\""
         )?;
+        writeln!(writer, "    echo \"Reclaimed $RECLAIMED_BYTES bytes.\"")?;
+        writeln!(writer, "else")?;
+        writeln!(
+            writer,
+            "    echo \"Dry run complete. No files were deleted.\""
+        )?;
+        writeln!(writer, "fi")?;
 
         Ok(())
     }
@@ -167,17 +213,28 @@ impl<'a> ScriptOutput<'a> {
         )?;
         writeln!(writer)?;
 
-        writeln!(writer, "if ($args[0] -ne \"--confirm\") {{")?;
+        writeln!(writer, "# Default to dry-run mode for safety")?;
+        writeln!(writer, "$DryRun = $true")?;
+        writeln!(writer, "if ($args[0] -eq \"--confirm\") {{")?;
+        writeln!(writer, "    $DryRun = $false")?;
+        writeln!(writer, "}}")?;
+        writeln!(writer)?;
+
+        writeln!(writer, "if ($DryRun) {{")?;
         writeln!(
             writer,
-            "    Write-Host \"Usage: .\\$($MyInvocation.MyCommand.Name) --confirm\""
+            "    Write-Host \"DRY RUN MODE. No files will be deleted.\""
         )?;
         writeln!(
             writer,
             "    Write-Host \"Run with --confirm to actually delete files.\""
         )?;
-        writeln!(writer, "    exit 1")?;
+        writeln!(writer, "    Write-Host \"\"")?;
         writeln!(writer, "}}")?;
+        writeln!(writer)?;
+
+        writeln!(writer, "$DeletedCount = 0")?;
+        writeln!(writer, "$ReclaimedBytes = 0")?;
         writeln!(writer)?;
 
         for (i, group) in self.groups.iter().enumerate() {
@@ -189,22 +246,56 @@ impl<'a> ScriptOutput<'a> {
                 bytesize::ByteSize::b(group.size)
             )?;
 
+            let mut group_has_deletion = false;
             for (j, file) in group.files.iter().enumerate() {
                 let path_str = escape_powershell(&file.path);
-                if j == 0 {
-                    writeln!(writer, "# KEEP: {}", path_str)?;
+                let should_delete = if let Some(selections) = self.user_selections {
+                    selections.contains(&file.path)
                 } else {
-                    writeln!(writer, "Remove-Item -Path {}", path_str)?;
+                    // Default logic: keep first, delete others
+                    j > 0
+                };
+
+                if should_delete {
+                    writeln!(writer, "# DELETE: {}", path_str)?;
+                    writeln!(writer, "if (-not $DryRun) {{")?;
+                    writeln!(
+                        writer,
+                        "    Remove-Item -Path {} -ErrorAction SilentlyContinue",
+                        path_str
+                    )?;
+                    writeln!(writer, "    if ($?) {{")?;
+                    writeln!(writer, "        $DeletedCount++")?;
+                    writeln!(writer, "        $ReclaimedBytes += {}", group.size)?;
+                    writeln!(writer, "    }}")?;
+                    writeln!(writer, "}} else {{")?;
+                    writeln!(writer, "    Write-Host \"would delete: {}\"", path_str)?;
+                    writeln!(writer, "}}")?;
+                    group_has_deletion = true;
+                } else {
+                    writeln!(writer, "# KEEP:   {}", path_str)?;
                 }
             }
-            writeln!(writer)?;
+            if group_has_deletion {
+                writeln!(writer)?;
+            }
         }
 
+        writeln!(writer, "if (-not $DryRun) {{")?;
         writeln!(
             writer,
-            "Write-Host \"Deletion complete. Reclaimed {}\"",
-            bytesize::ByteSize::b(self.summary.reclaimable_space)
+            "    Write-Host \"Deletion complete. Deleted $DeletedCount files.\""
         )?;
+        writeln!(
+            writer,
+            "    Write-Host \"Reclaimed $ReclaimedBytes bytes.\""
+        )?;
+        writeln!(writer, "}} else {{")?;
+        writeln!(
+            writer,
+            "    Write-Host \"Dry run complete. No files were deleted.\""
+        )?;
+        writeln!(writer, "fi")?;
 
         Ok(())
     }
@@ -282,8 +373,10 @@ mod tests {
         let script = String::from_utf8(buffer).unwrap();
 
         assert!(script.starts_with("#!/bin/sh"));
+        assert!(script.contains("DRY_RUN=1"));
+        assert!(script.contains("would delete: '/test/file2.txt'"));
         assert!(script.contains("rm '/test/file2.txt'"));
-        assert!(script.contains("# KEEP: '/test/file1.txt'"));
+        assert!(script.contains("# KEEP:   '/test/file1.txt'"));
         assert!(script.contains("--confirm"));
     }
 
@@ -295,8 +388,26 @@ mod tests {
         output.write_to(&mut buffer).unwrap();
         let script = String::from_utf8(buffer).unwrap();
 
+        assert!(script.contains("$DryRun = $true"));
+        assert!(script.contains("would delete: '/test/file2.txt'"));
         assert!(script.contains("Remove-Item -Path '/test/file2.txt'"));
-        assert!(script.contains("# KEEP: '/test/file1.txt'"));
+        assert!(script.contains("# KEEP:   '/test/file1.txt'"));
         assert!(script.contains("--confirm"));
+    }
+
+    #[test]
+    fn test_with_user_selections() {
+        let (groups, summary) = setup_test_data();
+        let mut selections = BTreeSet::new();
+        selections.insert(PathBuf::from("/test/file1.txt")); // Select first one instead of second
+
+        let output = ScriptOutput::new(&groups, &summary, ScriptType::Posix)
+            .with_user_selections(&selections);
+        let mut buffer = Vec::new();
+        output.write_to(&mut buffer).unwrap();
+        let script = String::from_utf8(buffer).unwrap();
+
+        assert!(script.contains("# DELETE: '/test/file1.txt'"));
+        assert!(script.contains("# KEEP:   '/test/file2.txt'"));
     }
 }
