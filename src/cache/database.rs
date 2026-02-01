@@ -638,4 +638,72 @@ mod tests {
             .unwrap();
         assert_eq!(pruned, 1);
     }
+
+    #[test]
+    fn test_hash_cache_performance() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        let cache = HashCache::new(path).unwrap();
+
+        let now = SystemTime::now();
+        let count = 10_000;
+        let mut entries = Vec::with_capacity(count);
+
+        for i in 0..count {
+            entries.push(CacheEntry {
+                path: PathBuf::from(format!("/test/file_{}.txt", i)),
+                size: i as u64,
+                mtime: now,
+                inode: Some(i as u64),
+                prehash: [i as u8; 32],
+                fullhash: Some([i as u8; 32]),
+            });
+        }
+
+        // Test batch insert performance
+        let start = std::time::Instant::now();
+        cache.insert_batch(&entries).unwrap();
+        let duration = start.elapsed();
+        println!("Inserted {} entries in {:?}", count, duration);
+
+        // Test retrieval performance
+        let start = std::time::Instant::now();
+        for i in 0..count {
+            let path = PathBuf::from(format!("/test/file_{}.txt", i));
+            let hash = cache.get_fullhash(&path, i as u64, now).unwrap();
+            assert!(hash.is_some());
+        }
+        let duration = start.elapsed();
+        println!("Retrieved {} entries in {:?}", count, duration);
+
+        // Test prune performance
+        let start = std::time::Instant::now();
+        let pruned = cache.prune_stale().unwrap();
+        assert_eq!(pruned, count);
+        let duration = start.elapsed();
+        println!("Pruned {} stale entries in {:?}", count, duration);
+    }
+
+    #[test]
+    fn test_hash_cache_connection_closed() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        let cache = HashCache::new(path).unwrap();
+
+        cache.close().unwrap();
+
+        let res = cache.get_prehash(Path::new("test"), 0, SystemTime::now());
+        assert!(matches!(res, Err(CacheError::ConnectionClosed)));
+
+        let entry = CacheEntry {
+            path: PathBuf::from("test"),
+            size: 0,
+            mtime: SystemTime::now(),
+            inode: None,
+            prehash: [0u8; 32],
+            fullhash: None,
+        };
+        let res = cache.insert_prehash(&entry, [0u8; 32]);
+        assert!(matches!(res, Err(CacheError::ConnectionClosed)));
+    }
 }
