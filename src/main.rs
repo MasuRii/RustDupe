@@ -74,6 +74,18 @@ fn handle_scan(
             anyhow::bail!("Path is not a directory: {}", path.display());
         }
 
+        // Validate and canonicalize reference paths
+        let mut reference_paths = Vec::new();
+        for ref_path in args.reference_paths {
+            if !ref_path.exists() {
+                anyhow::bail!("Reference path does not exist: {}", ref_path.display());
+            }
+            if !ref_path.is_dir() {
+                anyhow::bail!("Reference path is not a directory: {}", ref_path.display());
+            }
+            reference_paths.push(ref_path.canonicalize()?);
+        }
+
         // Resolve cache path
         let cache_path = if let Some(path) = args.cache {
             path

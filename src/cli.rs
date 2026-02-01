@@ -140,6 +140,13 @@ pub struct ScanArgs {
     /// Clear the hash cache before scanning
     #[arg(long)]
     pub clear_cache: bool,
+
+    /// Reference directories (files here are never selected for deletion)
+    ///
+    /// Can be specified multiple times. Files in these directories will be
+    /// marked as protected and cannot be selected for deletion.
+    #[arg(long = "reference", value_name = "PATH")]
+    pub reference_paths: Vec<PathBuf>,
 }
 
 /// Arguments for the load subcommand.
@@ -435,6 +442,10 @@ mod tests {
             "/path",
             "--save-session",
             "session.json",
+            "--reference",
+            "/ref1",
+            "--reference",
+            "/ref2",
         ])
         .unwrap();
 
@@ -442,6 +453,10 @@ mod tests {
             Commands::Scan(args) => {
                 assert_eq!(args.path, Some(PathBuf::from("/path")));
                 assert_eq!(args.save_session, Some(PathBuf::from("session.json")));
+                assert_eq!(
+                    args.reference_paths,
+                    vec![PathBuf::from("/ref1"), PathBuf::from("/ref2")]
+                );
             }
             _ => panic!("Expected Scan command"),
         }
