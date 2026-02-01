@@ -160,8 +160,18 @@ impl<'a> ScriptOutput<'a> {
                 let should_delete = if let Some(selections) = self.user_selections {
                     selections.contains(&file.path)
                 } else {
-                    // Default logic: keep first, delete others
-                    j > 0
+                    // Default logic: keep reference files and the first file if no reference files exist
+                    let has_ref_in_group = group
+                        .files
+                        .iter()
+                        .any(|f| group.is_in_reference_dir(&f.path));
+                    if has_ref_in_group {
+                        // Keep ALL reference files, delete others
+                        !group.is_in_reference_dir(&file.path)
+                    } else {
+                        // No reference files, keep first, delete others
+                        j > 0
+                    }
                 };
 
                 if should_delete {
@@ -268,8 +278,18 @@ impl<'a> ScriptOutput<'a> {
                 let should_delete = if let Some(selections) = self.user_selections {
                     selections.contains(&file.path)
                 } else {
-                    // Default logic: keep first, delete others
-                    j > 0
+                    // Default logic: keep reference files and the first file if no reference files exist
+                    let has_ref_in_group = group
+                        .files
+                        .iter()
+                        .any(|f| group.is_in_reference_dir(&f.path));
+                    if has_ref_in_group {
+                        // Keep ALL reference files, delete others
+                        !group.is_in_reference_dir(&file.path)
+                    } else {
+                        // No reference files, keep first, delete others
+                        j > 0
+                    }
                 };
 
                 if should_delete {
@@ -507,5 +527,59 @@ mod tests {
 
         assert!(script.contains("# DELETE: '/test/file1.txt'"));
         assert!(script.contains("# KEEP:   '/test/file2.txt'"));
+    }
+
+    #[test]
+    fn test_reference_directory_selection() {
+        let now = SystemTime::now();
+        let ref_path = PathBuf::from("/ref/original.txt");
+        let groups = vec![DuplicateGroup::new(
+            [1u8; 32],
+            100,
+            vec![
+                FileEntry::new(ref_path.clone(), 100, now),
+                FileEntry::new(PathBuf::from("/tmp/dupe1.txt"), 100, now),
+                FileEntry::new(PathBuf::from("/tmp/dupe2.txt"), 100, now),
+            ],
+            vec![ref_path.clone()],
+        )];
+
+        let summary = ScanSummary {
+            duplicate_files: 2,
+            reclaimable_space: 200,
+            ..Default::default()
+        };
+
+        let output = ScriptOutput::new(&groups, &summary, ScriptType::Posix);
+        let mut buffer = Vec::new();
+        output.write_to(&mut buffer).unwrap();
+        let script = String::from_utf8(buffer).unwrap();
+
+        // Should keep the reference file even if it's the first one
+        assert!(script.contains("# KEEP:   '/ref/original.txt'"));
+        assert!(script.contains("# DELETE: '/tmp/dupe1.txt'"));
+        assert!(script.contains("# DELETE: '/tmp/dupe2.txt'"));
+
+        // Now test with reference file as NOT the first one
+        let groups2 = vec![DuplicateGroup::new(
+            [1u8; 32],
+            100,
+            vec![
+                FileEntry::new(PathBuf::from("/tmp/dupe1.txt"), 100, now),
+                FileEntry::new(ref_path.clone(), 100, now),
+                FileEntry::new(PathBuf::from("/tmp/dupe2.txt"), 100, now),
+            ],
+            vec![ref_path],
+        )];
+
+        let output2 = ScriptOutput::new(&groups2, &summary, ScriptType::Posix);
+        let mut buffer2 = Vec::new();
+        output2.write_to(&mut buffer2).unwrap();
+        let script2 = String::from_utf8(buffer2).unwrap();
+
+        // Should keep the reference file and DELETE the first file (since there's a reference file)
+        assert!(script2.contains("# DELETE: '/tmp/dupe1.txt'"));
+        assert!(script2.contains("# KEEP:   '/ref/original.txt'"));
+        assert!(script2.contains("# DELETE: '/tmp/dupe2.txt'"));
     }
 }
