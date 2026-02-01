@@ -24,7 +24,7 @@
 use bytesize::ByteSize;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
         Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
@@ -121,14 +121,14 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     let header = Paragraph::new(header_text)
         .style(
             Style::default()
-                .fg(Color::Cyan)
+                .fg(app.theme().primary)
                 .add_modifier(Modifier::BOLD),
         )
         .alignment(Alignment::Center)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(app.theme().primary)),
         );
 
     frame.render_widget(header, area);
@@ -142,8 +142,17 @@ fn render_content(frame: &mut Frame, app: &App, area: Rect) {
         | AppMode::Previewing
         | AppMode::Confirming
         | AppMode::SelectingFolder => render_reviewing_content(frame, app, area),
-        AppMode::Quitting => render_quitting_content(frame, area),
+        AppMode::Quitting => render_quitting_content(frame, app, area),
     }
+}
+
+/// Render quitting message.
+fn render_quitting_content(frame: &mut Frame, app: &App, area: Rect) {
+    let message = Paragraph::new("Goodbye! Thanks for using rustdupe.")
+        .style(Style::default().fg(app.theme().success))
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL));
+    frame.render_widget(message, area);
 }
 
 /// Render the footer with available commands.
@@ -184,17 +193,20 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
             if key.is_empty() {
                 vec![Span::styled(
                     format!(" {} ", desc),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(app.theme().dim),
                 )]
             } else {
                 vec![
                     Span::styled(
                         format!("[{}]", key),
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(app.theme().secondary)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(format!("{} ", desc), Style::default().fg(Color::White)),
+                    Span::styled(
+                        format!("{} ", desc),
+                        Style::default().fg(app.theme().normal),
+                    ),
                 ]
             }
         })
@@ -205,7 +217,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(Style::default().fg(app.theme().dim)),
         );
 
     frame.render_widget(footer, area);
@@ -229,7 +241,7 @@ fn render_scanning_content(frame: &mut Frame, app: &App, area: Rect) {
     // Phase label
     let phase_text = format!("Phase: {}", progress.phase);
     let phase = Paragraph::new(phase_text)
-        .style(Style::default().fg(Color::White))
+        .style(Style::default().fg(app.theme().normal))
         .alignment(Alignment::Center);
     frame.render_widget(phase, chunks[0]);
 
@@ -237,7 +249,7 @@ fn render_scanning_content(frame: &mut Frame, app: &App, area: Rect) {
     let percentage = progress.percentage();
     let gauge = Gauge::default()
         .block(Block::default().borders(Borders::NONE))
-        .gauge_style(Style::default().fg(Color::Green).bg(Color::DarkGray))
+        .gauge_style(Style::default().fg(app.theme().success).bg(app.theme().dim))
         .percent(percentage)
         .label(format!("{}%", percentage));
     frame.render_widget(gauge, chunks[1]);
@@ -248,14 +260,14 @@ fn render_scanning_content(frame: &mut Frame, app: &App, area: Rect) {
         area.width.saturating_sub(4) as usize,
     );
     let path = Paragraph::new(path_text)
-        .style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().fg(app.theme().dim))
         .alignment(Alignment::Center);
     frame.render_widget(path, chunks[2]);
 
     // Message
     if !progress.message.is_empty() {
         let message = Paragraph::new(progress.message.clone())
-            .style(Style::default().fg(Color::White))
+            .style(Style::default().fg(app.theme().normal))
             .alignment(Alignment::Center);
         frame.render_widget(message, chunks[3]);
     }
@@ -265,7 +277,7 @@ fn render_scanning_content(frame: &mut Frame, app: &App, area: Rect) {
 fn render_reviewing_content(frame: &mut Frame, app: &App, area: Rect) {
     if !app.has_groups() {
         let message = Paragraph::new("No duplicate files found.")
-            .style(Style::default().fg(Color::Green))
+            .style(Style::default().fg(app.theme().success))
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL).title("Results"));
         frame.render_widget(message, area);
@@ -323,11 +335,11 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
 
             let style = if i == selected_group {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .fg(app.theme().inverted_fg)
+                    .bg(app.theme().primary)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(app.theme().normal)
             };
 
             ListItem::new(text).style(style)
@@ -350,12 +362,12 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
                     selected_group + 1,
                     groups.len()
                 ))
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(app.theme().primary)),
         )
         .highlight_style(
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(app.theme().inverted_fg)
+                .bg(app.theme().primary)
                 .add_modifier(Modifier::BOLD),
         );
 
@@ -416,28 +428,28 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
             let style = if i == selected_file {
                 if is_selected {
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Red)
+                        .fg(app.theme().inverted_fg)
+                        .bg(app.theme().danger)
                         .add_modifier(Modifier::BOLD)
                 } else if is_ref {
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Blue)
+                        .fg(app.theme().inverted_fg)
+                        .bg(app.theme().reference)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Yellow)
+                        .fg(app.theme().inverted_fg)
+                        .bg(app.theme().secondary)
                         .add_modifier(Modifier::BOLD)
                 }
             } else if is_selected {
-                Style::default().fg(Color::Red)
+                Style::default().fg(app.theme().danger)
             } else if is_ref {
-                Style::default().fg(Color::Blue)
+                Style::default().fg(app.theme().reference)
             } else if is_first {
-                Style::default().fg(Color::Green) // Original is green
+                Style::default().fg(app.theme().success) // Original is green
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(app.theme().normal)
             };
 
             ListItem::new(text).style(style)
@@ -473,12 +485,12 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(title)
-                .border_style(Style::default().fg(Color::Yellow)),
+                .border_style(Style::default().fg(app.theme().secondary)),
         )
         .highlight_style(
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow)
+                .fg(app.theme().inverted_fg)
+                .bg(app.theme().secondary)
                 .add_modifier(Modifier::BOLD),
         );
 
@@ -500,15 +512,6 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-/// Render quitting message.
-fn render_quitting_content(frame: &mut Frame, area: Rect) {
-    let message = Paragraph::new("Goodbye! Thanks for using rustdupe.")
-        .style(Style::default().fg(Color::Green))
-        .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(message, area);
-}
-
 /// Render preview dialog.
 fn render_preview_dialog(frame: &mut Frame, app: &App, area: Rect) {
     let dialog_area = centered_rect(80, 80, area);
@@ -525,13 +528,13 @@ fn render_preview_dialog(frame: &mut Frame, app: &App, area: Rect) {
         .to_string();
 
     let preview = Paragraph::new(content)
-        .style(Style::default().fg(Color::White))
+        .style(Style::default().fg(app.theme().normal))
         .wrap(Wrap { trim: false })
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(format!("Preview: {}", truncate_path(&path, 50)))
-                .border_style(Style::default().fg(Color::Magenta)),
+                .border_style(Style::default().fg(app.theme().secondary)),
         );
 
     frame.render_widget(preview, dialog_area);
@@ -560,7 +563,9 @@ fn render_confirm_dialog(frame: &mut Frame, app: &App, area: Rect) {
     let text = vec![
         Line::from(Span::styled(
             "Confirm Deletion",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(app.theme().danger)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(format!(
@@ -571,7 +576,7 @@ fn render_confirm_dialog(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "This action moves files to the system trash.",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(app.theme().secondary),
         )),
         Line::from(""),
         Line::from("Files to delete:"),
@@ -593,7 +598,7 @@ fn render_confirm_dialog(frame: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "[Enter] Confirm    [Esc] Cancel",
-        Style::default().fg(Color::Cyan),
+        Style::default().fg(app.theme().primary),
     )));
 
     let confirm = Paragraph::new(Text::from(lines))
@@ -602,7 +607,7 @@ fn render_confirm_dialog(frame: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title("Confirm")
-                .border_style(Style::default().fg(Color::Red)),
+                .border_style(Style::default().fg(app.theme().danger)),
         );
 
     frame.render_widget(confirm, dialog_area);
@@ -622,11 +627,11 @@ fn render_folder_selection_dialog(frame: &mut Frame, app: &App, area: Rect) {
         .map(|(i, folder)| {
             let style = if i == selected_idx {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .fg(app.theme().inverted_fg)
+                    .bg(app.theme().primary)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(app.theme().normal)
             };
             ListItem::new(folder.to_string_lossy().to_string()).style(style)
         })
@@ -637,12 +642,12 @@ fn render_folder_selection_dialog(frame: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title("Select Folder to Mark All Duplicates")
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(app.theme().primary)),
         )
         .highlight_style(
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(app.theme().inverted_fg)
+                .bg(app.theme().primary)
                 .add_modifier(Modifier::BOLD),
         );
 
@@ -659,21 +664,23 @@ fn render_error_dialog(frame: &mut Frame, app: &App, area: Rect) {
     let error = Paragraph::new(vec![
         Line::from(Span::styled(
             "Error",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(app.theme().danger)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(message),
         Line::from(""),
         Line::from(Span::styled(
             "Press any key to dismiss",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(app.theme().dim),
         )),
     ])
     .alignment(Alignment::Center)
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Red)),
+            .border_style(Style::default().fg(app.theme().danger)),
     );
 
     frame.render_widget(error, dialog_area);

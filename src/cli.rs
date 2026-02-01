@@ -44,6 +44,10 @@ pub struct Cli {
     #[arg(long, global = true, env = "NO_COLOR")]
     pub no_color: bool,
 
+    /// TUI theme (light, dark, auto)
+    #[arg(long, value_enum, default_value = "auto", global = true)]
+    pub theme: ThemeArg,
+
     /// Subcommand to execute
     #[command(subcommand)]
     pub command: Commands,
@@ -244,6 +248,20 @@ pub enum FileType {
     Documents,
     /// Archive files (zip, tar, etc.)
     Archives,
+}
+
+/// TUI theme options.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default, serde::Serialize, serde::Deserialize,
+)]
+pub enum ThemeArg {
+    /// Use terminal's default color scheme or detect automatically
+    #[default]
+    Auto,
+    /// High-contrast light theme
+    Light,
+    /// High-contrast dark theme
+    Dark,
 }
 
 impl From<FileType> for crate::scanner::FileCategory {

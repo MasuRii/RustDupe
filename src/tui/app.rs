@@ -49,7 +49,9 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use crate::cli::ThemeArg;
 use crate::duplicates::DuplicateGroup;
+use crate::tui::theme::Theme;
 
 /// Application mode/state.
 ///
@@ -218,6 +220,8 @@ pub struct App {
     visible_rows: usize,
     /// Dry-run mode active (no deletions allowed)
     dry_run: bool,
+    /// TUI theme
+    theme: Theme,
 }
 
 impl Default for App {
@@ -256,7 +260,24 @@ impl App {
             reclaimable_space: 0,
             visible_rows: 20, // Default, will be updated by UI
             dry_run: false,
+            theme: Theme::dark(),
         }
+    }
+
+    /// Set theme for the application.
+    pub fn with_theme(mut self, theme_arg: ThemeArg) -> Self {
+        self.theme = match theme_arg {
+            ThemeArg::Auto => Theme::auto(),
+            ThemeArg::Light => Theme::light(),
+            ThemeArg::Dark => Theme::dark(),
+        };
+        self
+    }
+
+    /// Get the current theme.
+    #[must_use]
+    pub fn theme(&self) -> &Theme {
+        &self.theme
     }
 
     /// Set dry-run mode for the application.
@@ -334,6 +355,7 @@ impl App {
             reclaimable_space: reclaimable,
             visible_rows: 20,
             dry_run: false,
+            theme: Theme::dark(),
         }
     }
 

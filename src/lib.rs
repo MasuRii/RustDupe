@@ -43,6 +43,7 @@
 pub mod actions;
 pub mod cache;
 pub mod cli;
+pub mod config;
 pub mod duplicates;
 pub mod logging;
 pub mod output;

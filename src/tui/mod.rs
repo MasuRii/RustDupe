@@ -47,6 +47,7 @@
 pub mod app;
 pub mod events;
 mod run;
+pub mod theme;
 pub mod ui;
 
 // Re-export commonly used types
