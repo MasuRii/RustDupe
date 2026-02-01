@@ -14,6 +14,7 @@
 //! - [`duplicates`]: Duplicate detection engine
 //! - [`tui`]: Interactive terminal user interface
 //! - [`actions`]: File operations (delete, preview)
+//! - [`cache`]: Persistent hash caching for faster rescans
 //! - [`output`]: Output formatters (JSON, CSV)
 
 // =============================================================================
@@ -40,6 +41,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod actions;
+pub mod cache;
 pub mod cli;
 pub mod duplicates;
 pub mod logging;
