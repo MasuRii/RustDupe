@@ -54,11 +54,42 @@ pub use path_utils::{
 use regex::Regex;
 pub use walker::Walker;
 
+/// File categories for filtering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileCategory {
+    /// Image files (jpg, png, etc.)
+    Images,
+    /// Video files (mp4, mkv, etc.)
+    Videos,
+    /// Audio files (mp3, wav, etc.)
+    Audio,
+    /// Document files (pdf, docx, etc.)
+    Documents,
+    /// Archive files (zip, tar, etc.)
+    Archives,
+}
+
+impl FileCategory {
+    /// Get the list of extensions for this category.
+    pub fn extensions(&self) -> &'static [&'static str] {
+        match self {
+            FileCategory::Images => &["jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "svg"],
+            FileCategory::Videos => &["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm"],
+            FileCategory::Audio => &["mp3", "wav", "flac", "m4a", "ogg", "wma"],
+            FileCategory::Documents => &[
+                "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "rtf", "odt", "ods",
+                "odp",
+            ],
+            FileCategory::Archives => &["zip", "tar", "gz", "7z", "rar", "bz2", "xz"],
+        }
+    }
+}
+
 /// Metadata for a discovered file.
 ///
 /// Contains all information needed for duplicate detection,
 /// including path, size, modification time, and link status.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct FileEntry {
     /// Absolute path to the file
     pub path: PathBuf,
@@ -127,6 +158,9 @@ pub struct WalkerConfig {
 
     /// Regex patterns to exclude (filename must not match any).
     pub regex_exclude: Vec<Regex>,
+
+    /// File categories to include (if empty, all types are included).
+    pub file_categories: Vec<FileCategory>,
 }
 
 impl WalkerConfig {
@@ -161,6 +195,7 @@ impl WalkerConfig {
             ignore_patterns,
             regex_include: Vec::new(),
             regex_exclude: Vec::new(),
+            file_categories: Vec::new(),
         }
     }
 
@@ -224,6 +259,13 @@ impl WalkerConfig {
     #[must_use]
     pub fn with_regex_exclude(mut self, regexes: Vec<Regex>) -> Self {
         self.regex_exclude = regexes;
+        self
+    }
+
+    /// Set file categories to include.
+    #[must_use]
+    pub fn with_file_categories(mut self, categories: Vec<FileCategory>) -> Self {
+        self.file_categories = categories;
         self
     }
 }

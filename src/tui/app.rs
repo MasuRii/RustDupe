@@ -29,7 +29,10 @@
 //!     DuplicateGroup::new(
 //!         [0u8; 32],
 //!         1000,
-//!         vec![PathBuf::from("/a.txt"), PathBuf::from("/b.txt")],
+//!         vec![
+//!             rustdupe::scanner::FileEntry::new(PathBuf::from("/a.txt"), 1000, std::time::SystemTime::now()),
+//!             rustdupe::scanner::FileEntry::new(PathBuf::from("/b.txt"), 1000, std::time::SystemTime::now()),
+//!         ],
 //!         vec![],
 //!     ),
 //! ];
@@ -99,6 +102,16 @@ pub enum Action {
     ToggleSelect,
     /// Select all files in current group (except first)
     SelectAllInGroup,
+    /// Select all duplicates across ALL groups (keeping first in each)
+    SelectAllDuplicates,
+    /// Select oldest file in each group (keep newest)
+    SelectOldest,
+    /// Select newest file in each group (keep oldest)
+    SelectNewest,
+    /// Select smallest file in each group (actually selects all but first since they match)
+    SelectSmallest,
+    /// Select largest file in each group (actually selects all but first since they match)
+    SelectLargest,
     /// Deselect all files
     DeselectAll,
     /// Preview the selected file
@@ -452,6 +465,14 @@ impl App {
     pub fn current_file(&self) -> Option<&PathBuf> {
         self.current_group()
             .and_then(|g| g.files.get(self.file_index))
+            .map(|f| &f.path)
+    }
+
+    /// Get the currently selected file entry (if any).
+    #[must_use]
+    pub fn current_file_entry(&self) -> Option<&crate::scanner::FileEntry> {
+        self.current_group()
+            .and_then(|g| g.files.get(self.file_index))
     }
 
     /// Navigate to the next file in the current group.
@@ -635,8 +656,8 @@ impl App {
                 g.files
                     .iter()
                     .skip(1)
-                    .filter(|p| !self.is_in_reference_dir(p))
-                    .cloned()
+                    .filter(|f| !self.is_in_reference_dir(&f.path))
+                    .map(|f| f.path.clone())
                     .collect()
             })
             .unwrap_or_default();
@@ -654,6 +675,71 @@ impl App {
         }
     }
 
+    /// Select all duplicates across ALL groups (keeping first in each).
+    pub fn select_all_duplicates(&mut self) {
+        let mut count = 0;
+        for group in &self.groups {
+            for file in group.files.iter().skip(1) {
+                if !self.is_in_reference_dir(&file.path)
+                    && self.selected_files.insert(file.path.clone())
+                {
+                    count += 1;
+                }
+            }
+        }
+        log::info!("Selected {} duplicates across ALL groups", count);
+    }
+
+    /// Select the oldest file in each group (keeping the newest).
+    pub fn select_oldest(&mut self) {
+        let mut count = 0;
+        for group in &self.groups {
+            // Find the newest file to keep
+            if let Some(newest) = group.files.iter().max_by_key(|f| f.modified) {
+                for file in &group.files {
+                    if file.path != newest.path
+                        && !self.is_in_reference_dir(&file.path)
+                        && self.selected_files.insert(file.path.clone())
+                    {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        log::info!("Selected {} oldest files (kept newest)", count);
+    }
+
+    /// Select the newest file in each group (keeping the oldest).
+    pub fn select_newest(&mut self) {
+        let mut count = 0;
+        for group in &self.groups {
+            // Find the oldest file to keep
+            if let Some(oldest) = group.files.iter().min_by_key(|f| f.modified) {
+                for file in &group.files {
+                    if file.path != oldest.path
+                        && !self.is_in_reference_dir(&file.path)
+                        && self.selected_files.insert(file.path.clone())
+                    {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        log::info!("Selected {} newest files (kept oldest)", count);
+    }
+
+    /// Select all but the first file in each group (same size, so "smallest" is arbitrary).
+    pub fn select_smallest(&mut self) {
+        // Since all files in a group have the same size, we just pick the first to keep.
+        self.select_all_duplicates();
+    }
+
+    /// Select all but the first file in each group (same size, so "largest" is arbitrary).
+    pub fn select_largest(&mut self) {
+        // Since all files in a group have the same size, we just pick the first to keep.
+        self.select_all_duplicates();
+    }
+
     /// Deselect all files.
     pub fn deselect_all(&mut self) {
         let count = self.selected_files.len();
@@ -665,14 +751,14 @@ impl App {
     ///
     /// This updates the internal state to reflect deleted files.
     pub fn remove_deleted_files(&mut self, deleted: &[PathBuf]) {
-        let deleted_set: HashSet<&PathBuf> = deleted.iter().collect();
+        let deleted_set: std::collections::HashSet<&PathBuf> = deleted.iter().collect();
 
         // Remove from selection
         self.selected_files.retain(|p| !deleted_set.contains(p));
 
         // Remove from groups and filter empty groups
         for group in &mut self.groups {
-            group.files.retain(|p| !deleted_set.contains(p));
+            group.files.retain(|f| !deleted_set.contains(&f.path));
         }
 
         // Remove groups with less than 2 files (no longer duplicates)
@@ -800,6 +886,26 @@ impl App {
                 self.select_all_in_group();
                 true
             }
+            Action::SelectAllDuplicates => {
+                self.select_all_duplicates();
+                true
+            }
+            Action::SelectOldest => {
+                self.select_oldest();
+                true
+            }
+            Action::SelectNewest => {
+                self.select_newest();
+                true
+            }
+            Action::SelectSmallest => {
+                self.select_smallest();
+                true
+            }
+            Action::SelectLargest => {
+                self.select_largest();
+                true
+            }
             Action::DeselectAll => {
                 self.deselect_all();
                 true
@@ -853,7 +959,16 @@ mod tests {
         DuplicateGroup::new(
             [0u8; 32],
             size,
-            paths.into_iter().map(PathBuf::from).collect(),
+            paths
+                .into_iter()
+                .map(|p| {
+                    crate::scanner::FileEntry::new(
+                        PathBuf::from(p),
+                        size,
+                        std::time::SystemTime::now(),
+                    )
+                })
+                .collect(),
             Vec::new(),
         )
     }
@@ -1043,7 +1158,10 @@ mod tests {
 
         // /b.txt should be removed from first group
         assert_eq!(app.groups()[0].files.len(), 2);
-        assert!(!app.groups()[0].files.contains(&PathBuf::from("/b.txt")));
+        assert!(!app.groups()[0]
+            .files
+            .iter()
+            .any(|f| f.path == PathBuf::from("/b.txt")));
 
         // Second group now has only 1 file, so it's removed (not duplicates anymore)
         assert_eq!(app.group_count(), 1);

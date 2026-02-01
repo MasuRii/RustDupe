@@ -72,7 +72,7 @@ impl JsonDuplicateGroup {
             files: group
                 .files
                 .iter()
-                .map(|p| normalize_path(p.as_path()))
+                .map(|f| normalize_path(f.path.as_path()))
                 .collect(),
         }
     }
@@ -139,8 +139,8 @@ impl JsonOutput {
     ///
     /// let groups = vec![
     ///     DuplicateGroup::new([0u8; 32], 1024, vec![
-    ///         PathBuf::from("/file1.txt"),
-    ///         PathBuf::from("/file2.txt"),
+    ///         rustdupe::scanner::FileEntry::new(PathBuf::from("/file1.txt"), 1024, std::time::SystemTime::now()),
+    ///         rustdupe::scanner::FileEntry::new(PathBuf::from("/file2.txt"), 1024, std::time::SystemTime::now()),
     ///     ], Vec::new()),
     /// ];
     /// let summary = ScanSummary::default();
@@ -269,13 +269,14 @@ mod tests {
     }
 
     fn create_test_groups() -> Vec<DuplicateGroup> {
+        let now = std::time::SystemTime::now();
         vec![
             DuplicateGroup::new(
                 [0u8; 32],
                 1024,
                 vec![
-                    PathBuf::from("/path/to/file1.txt"),
-                    PathBuf::from("/path/to/file2.txt"),
+                    crate::scanner::FileEntry::new(PathBuf::from("/path/to/file1.txt"), 1024, now),
+                    crate::scanner::FileEntry::new(PathBuf::from("/path/to/file2.txt"), 1024, now),
                 ],
                 Vec::new(),
             ),
@@ -283,9 +284,9 @@ mod tests {
                 [1u8; 32],
                 2048,
                 vec![
-                    PathBuf::from("/path/to/fileA.txt"),
-                    PathBuf::from("/path/to/fileB.txt"),
-                    PathBuf::from("/path/to/fileC.txt"),
+                    crate::scanner::FileEntry::new(PathBuf::from("/path/to/fileA.txt"), 2048, now),
+                    crate::scanner::FileEntry::new(PathBuf::from("/path/to/fileB.txt"), 2048, now),
+                    crate::scanner::FileEntry::new(PathBuf::from("/path/to/fileC.txt"), 2048, now),
                 ],
                 Vec::new(),
             ),
@@ -355,10 +356,15 @@ mod tests {
 
     #[test]
     fn test_hash_format() {
+        let now = std::time::SystemTime::now();
         let groups = vec![DuplicateGroup::new(
             [0xab; 32],
             1024,
-            vec![PathBuf::from("/test.txt")],
+            vec![crate::scanner::FileEntry::new(
+                PathBuf::from("/test.txt"),
+                1024,
+                now,
+            )],
             Vec::new(),
         )];
         let output = JsonOutput::new(&groups, &ScanSummary::default());

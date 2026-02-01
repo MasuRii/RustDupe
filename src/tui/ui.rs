@@ -135,12 +135,14 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let commands = match app.mode() {
         AppMode::Scanning => vec![("q", "Quit"), ("", "Press Ctrl+C to cancel scan")],
         AppMode::Reviewing => vec![
-            ("j/k", "Navigate"),
-            ("n/N", "Next/Prev Group"),
-            ("Space", "Select"),
-            ("a", "Select All"),
-            ("d", "Delete"),
-            ("p", "Preview"),
+            ("j/k", "Nav"),
+            ("J/K", "Group"),
+            ("Space", "Sel"),
+            ("a/A", "Group/All"),
+            ("o/n", "Old/New"),
+            ("s/l", "Size"),
+            ("d", "Del"),
+            ("p", "Prev"),
             ("q", "Quit"),
         ],
         AppMode::Previewing => vec![("Esc", "Close"), ("q", "Quit")],
@@ -272,8 +274,12 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
             let label = group
                 .files
                 .first()
-                .and_then(|p| p.file_name())
-                .map(|n| n.to_string_lossy().to_string())
+                .map(|f| {
+                    f.path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "Unknown".to_string())
+                })
                 .unwrap_or_else(|| "Unknown".to_string());
 
             let label = truncate_string(&label, 20);
@@ -359,12 +365,12 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
         .files
         .iter()
         .enumerate()
-        .map(|(i, path)| {
-            let is_selected = app.is_file_selected(path);
-            let is_ref = app.is_in_reference_dir(path);
+        .map(|(i, entry)| {
+            let is_selected = app.is_file_selected(&entry.path);
+            let is_ref = app.is_in_reference_dir(&entry.path);
             let is_first = i == 0;
 
-            let path_str = path.to_string_lossy();
+            let path_str = entry.path.to_string_lossy();
             let path_display = truncate_path(&path_str, max_path_len);
 
             let prefix = if is_selected {
@@ -514,7 +520,7 @@ fn render_confirm_dialog(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .filter_map(|p| {
             app.groups().iter().find_map(|g| {
-                if g.files.contains(p) {
+                if g.files.iter().any(|f| &f.path == p) {
                     Some(g.size)
                 } else {
                     None
@@ -800,10 +806,14 @@ mod tests {
         use std::path::PathBuf;
 
         fn make_group(size: u64, paths: Vec<&str>) -> DuplicateGroup {
+            let now = std::time::SystemTime::now();
             DuplicateGroup::new(
                 [0u8; 32],
                 size,
-                paths.into_iter().map(PathBuf::from).collect(),
+                paths
+                    .into_iter()
+                    .map(|p| crate::scanner::FileEntry::new(PathBuf::from(p), size, now))
+                    .collect(),
                 Vec::new(),
             )
         }

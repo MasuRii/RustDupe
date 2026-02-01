@@ -7,6 +7,7 @@ use clap::Parser;
 use directories::ProjectDirs;
 use rustdupe::{
     cache::HashCache,
+    cli::{Cli, Commands, LoadArgs, OutputFormat, ScanArgs},
     duplicates::{DuplicateFinder, FinderConfig},
     logging, output,
     scanner::WalkerConfig,
@@ -16,10 +17,6 @@ use rustdupe::{
 use std::fs;
 use std::io::{self, Write};
 use std::sync::Arc;
-
-mod cli;
-
-use cli::{Cli, Commands, LoadArgs, OutputFormat, ScanArgs};
 
 fn main() -> Result<()> {
     // Parse command-line arguments
@@ -149,7 +146,8 @@ fn handle_scan(
             .with_older_than(args.older_than)
             .with_patterns(args.ignore_patterns.clone())
             .with_regex_include(regex_include)
-            .with_regex_exclude(regex_exclude);
+            .with_regex_exclude(regex_exclude)
+            .with_file_categories(args.file_types.iter().map(|&t| t.into()).collect());
 
         // Configure progress reporting for non-TUI modes
         let progress = if args.output != OutputFormat::Tui {
@@ -199,6 +197,7 @@ fn handle_scan(
                     ignore_patterns: args.ignore_patterns.clone(),
                     regex_include: args.regex_include.clone(),
                     regex_exclude: args.regex_exclude.clone(),
+                    file_categories: args.file_types.iter().map(|&t| t.into()).collect(),
                     io_threads: args.io_threads,
                     paranoid: args.paranoid,
                 };

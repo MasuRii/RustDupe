@@ -105,6 +105,10 @@ pub struct ScanArgs {
     #[arg(long = "regex-exclude", value_name = "PATTERN")]
     pub regex_exclude: Vec<String>,
 
+    /// Filter by file type categories (can be specified multiple times)
+    #[arg(long = "file-type", value_enum, value_name = "TYPE")]
+    pub file_types: Vec<FileType>,
+
     /// Glob patterns to ignore (can be specified multiple times)
     ///
     /// These patterns are added to any .gitignore patterns found.
@@ -188,6 +192,33 @@ pub enum OutputFormat {
     Csv,
     /// Session file format for persistence
     Session,
+}
+
+/// File type categories for filtering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FileType {
+    /// Image files (jpg, png, etc.)
+    Images,
+    /// Video files (mp4, mkv, etc.)
+    Videos,
+    /// Audio files (mp3, wav, etc.)
+    Audio,
+    /// Document files (pdf, docx, etc.)
+    Documents,
+    /// Archive files (zip, tar, etc.)
+    Archives,
+}
+
+impl From<FileType> for crate::scanner::FileCategory {
+    fn from(t: FileType) -> Self {
+        match t {
+            FileType::Images => crate::scanner::FileCategory::Images,
+            FileType::Videos => crate::scanner::FileCategory::Videos,
+            FileType::Audio => crate::scanner::FileCategory::Audio,
+            FileType::Documents => crate::scanner::FileCategory::Documents,
+            FileType::Archives => crate::scanner::FileCategory::Archives,
+        }
+    }
 }
 
 impl std::fmt::Display for OutputFormat {
@@ -388,6 +419,27 @@ mod tests {
                 assert_eq!(args.ignore_patterns, vec!["*.tmp", "node_modules"]);
                 assert_eq!(args.regex_include, vec!["foo.*"]);
                 assert_eq!(args.regex_exclude, vec!["bar.*"]);
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_scan_file_types() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "scan",
+            "/path",
+            "--file-type",
+            "images",
+            "--file-type",
+            "documents",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.file_types, vec![FileType::Images, FileType::Documents]);
             }
             _ => panic!("Expected Scan command"),
         }

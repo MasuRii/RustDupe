@@ -31,7 +31,10 @@
 //!     DuplicateGroup::new(
 //!         [0u8; 32],
 //!         1000,
-//!         vec![PathBuf::from("/a.txt"), PathBuf::from("/b.txt")],
+//!         vec![
+//!             rustdupe::scanner::FileEntry::new(PathBuf::from("/a.txt"), 1000, std::time::SystemTime::now()),
+//!             rustdupe::scanner::FileEntry::new(PathBuf::from("/b.txt"), 1000, std::time::SystemTime::now()),
+//!         ],
 //!         vec![],
 //!     ),
 //! ];
@@ -266,8 +269,8 @@ fn perform_deletion(app: &mut App) -> Result<usize, TuiError> {
     // Validate that we're not deleting all copies
     // We need to check for each group
     for group in app.groups() {
-        let group_files: Vec<_> = group.files.clone();
-        if let Err(_e) = validate_preserves_copy(&selected_files, &group_files) {
+        let group_paths = group.paths();
+        if let Err(_e) = validate_preserves_copy(&selected_files, &group_paths) {
             return Err(TuiError::DeleteError(
                 "Cannot delete all copies - at least one file must be preserved".to_string(),
             ));
@@ -462,7 +465,16 @@ mod tests {
             DuplicateGroup::new(
                 [0u8; 32],
                 size,
-                paths.into_iter().map(PathBuf::from).collect(),
+                paths
+                    .into_iter()
+                    .map(|p| {
+                        crate::scanner::FileEntry::new(
+                            PathBuf::from(p),
+                            size,
+                            std::time::SystemTime::now(),
+                        )
+                    })
+                    .collect(),
                 Vec::new(),
             )
         }

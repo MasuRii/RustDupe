@@ -827,14 +827,13 @@ pub fn phase3_fullhash(
         .filter(|(_, files)| files.len() > 1)
         .map(|(hash, files)| {
             let size = files.first().map_or(0, |f| f.size);
-            let paths: Vec<PathBuf> = files.into_iter().map(|f| f.path).collect();
             log::debug!(
                 "Duplicate group {}: {} files, {} bytes each",
                 crate::scanner::hash_to_hex(&hash),
-                paths.len(),
+                files.len(),
                 size
             );
-            super::DuplicateGroup::new(hash, size, paths, config.reference_paths.clone())
+            super::DuplicateGroup::new(hash, size, files, config.reference_paths.clone())
         })
         .collect();
 

@@ -183,18 +183,24 @@ impl EventHandler {
             (KeyCode::Char('J'), KeyModifiers::SHIFT) => Some(Action::NextGroup),
             (KeyCode::Char('J'), KeyModifiers::NONE) => Some(Action::NextGroup), // Some terminals
             (KeyCode::PageDown, KeyModifiers::NONE) => Some(Action::NextGroup),
-            (KeyCode::Char('n'), KeyModifiers::NONE) => Some(Action::NextGroup),
 
             // Navigation - previous group
             (KeyCode::Char('K'), KeyModifiers::SHIFT) => Some(Action::PreviousGroup),
             (KeyCode::Char('K'), KeyModifiers::NONE) => Some(Action::PreviousGroup), // Some terminals
             (KeyCode::PageUp, KeyModifiers::NONE) => Some(Action::PreviousGroup),
-            (KeyCode::Char('N'), KeyModifiers::SHIFT) => Some(Action::PreviousGroup),
-            (KeyCode::Char('N'), KeyModifiers::NONE) => Some(Action::PreviousGroup),
 
             // Selection
             (KeyCode::Char(' '), KeyModifiers::NONE) => Some(Action::ToggleSelect),
             (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::SelectAllInGroup),
+            (KeyCode::Char('A'), KeyModifiers::SHIFT) => Some(Action::SelectAllDuplicates),
+            (KeyCode::Char('O'), KeyModifiers::SHIFT) => Some(Action::SelectOldest),
+            (KeyCode::Char('o'), KeyModifiers::NONE) => Some(Action::SelectOldest),
+            (KeyCode::Char('N'), KeyModifiers::SHIFT) => Some(Action::SelectNewest),
+            (KeyCode::Char('n'), KeyModifiers::NONE) => Some(Action::SelectNewest),
+            (KeyCode::Char('S'), KeyModifiers::SHIFT) => Some(Action::SelectSmallest),
+            (KeyCode::Char('s'), KeyModifiers::NONE) => Some(Action::SelectSmallest),
+            (KeyCode::Char('L'), KeyModifiers::SHIFT) => Some(Action::SelectLargest),
+            (KeyCode::Char('l'), KeyModifiers::NONE) => Some(Action::SelectLargest),
             (KeyCode::Char('u'), KeyModifiers::NONE) => Some(Action::DeselectAll),
 
             // Confirm/Cancel
@@ -283,10 +289,6 @@ mod tests {
         // Page Down
         let key = make_key(KeyCode::PageDown, KeyModifiers::NONE);
         assert_eq!(handler.translate_key(key), Some(Action::NextGroup));
-
-        // 'n' key
-        let key = make_key(KeyCode::Char('n'), KeyModifiers::NONE);
-        assert_eq!(handler.translate_key(key), Some(Action::NextGroup));
     }
 
     #[test]
@@ -299,10 +301,6 @@ mod tests {
 
         // Page Up
         let key = make_key(KeyCode::PageUp, KeyModifiers::NONE);
-        assert_eq!(handler.translate_key(key), Some(Action::PreviousGroup));
-
-        // 'N' with shift
-        let key = make_key(KeyCode::Char('N'), KeyModifiers::SHIFT);
         assert_eq!(handler.translate_key(key), Some(Action::PreviousGroup));
     }
 
@@ -328,6 +326,36 @@ mod tests {
 
         let key = make_key(KeyCode::Char('u'), KeyModifiers::NONE);
         assert_eq!(handler.translate_key(key), Some(Action::DeselectAll));
+    }
+
+    #[test]
+    fn test_translate_batch_selections() {
+        let handler = EventHandler::new();
+
+        // All duplicates
+        let key = make_key(KeyCode::Char('A'), KeyModifiers::SHIFT);
+        assert_eq!(
+            handler.translate_key(key),
+            Some(Action::SelectAllDuplicates)
+        );
+
+        // Oldest
+        let key = make_key(KeyCode::Char('o'), KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::SelectOldest));
+        let key = make_key(KeyCode::Char('O'), KeyModifiers::SHIFT);
+        assert_eq!(handler.translate_key(key), Some(Action::SelectOldest));
+
+        // Newest
+        let key = make_key(KeyCode::Char('n'), KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::SelectNewest));
+        let key = make_key(KeyCode::Char('N'), KeyModifiers::SHIFT);
+        assert_eq!(handler.translate_key(key), Some(Action::SelectNewest));
+
+        // Size
+        let key = make_key(KeyCode::Char('s'), KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::SelectSmallest));
+        let key = make_key(KeyCode::Char('l'), KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::SelectLargest));
     }
 
     #[test]

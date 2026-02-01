@@ -233,6 +233,27 @@ impl Walker {
         true
     }
 
+    /// Check if a file passes file type filters.
+    fn passes_file_type_filter(&self, path: &Path) -> bool {
+        if self.config.file_categories.is_empty() {
+            return true;
+        }
+
+        let extension = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+
+        for category in &self.config.file_categories {
+            if category.extensions().contains(&extension.as_str()) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// Walk the directory tree, yielding file entries.
     ///
     /// Returns an iterator over [`FileEntry`] results. Errors are yielded
@@ -390,6 +411,12 @@ impl Walker {
         // Apply regex filters
         if !self.passes_regex_filter(&path) {
             log::trace!("Skipping file due to regex filter: {}", path.display());
+            return None;
+        }
+
+        // Apply file type filters
+        if !self.passes_file_type_filter(&path) {
+            log::trace!("Skipping file due to file type filter: {}", path.display());
             return None;
         }
 
@@ -709,6 +736,51 @@ mod tests {
         let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path.file_name().unwrap(), "file2.txt");
+    }
+
+    #[test]
+    fn test_walker_file_type_filters() {
+        use super::super::FileCategory;
+        let dir = TempDir::new().unwrap();
+
+        // Create files with different extensions (ensure they are not empty)
+        let image = dir.path().join("photo.jpg");
+        let mut f = File::create(&image).unwrap();
+        writeln!(f, "image content").unwrap();
+
+        let doc = dir.path().join("report.pdf");
+        let mut f = File::create(&doc).unwrap();
+        writeln!(f, "document content").unwrap();
+
+        let audio = dir.path().join("song.mp3");
+        let mut f = File::create(&audio).unwrap();
+        writeln!(f, "audio content").unwrap();
+
+        // Test filtering for images
+        let config = WalkerConfig::default().with_file_categories(vec![FileCategory::Images]);
+        let walker = Walker::new(dir.path(), config);
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path.file_name().unwrap(), "photo.jpg");
+
+        // Test filtering for documents and audio
+        let config = WalkerConfig::default()
+            .with_file_categories(vec![FileCategory::Documents, FileCategory::Audio]);
+        let walker = Walker::new(dir.path(), config);
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 2);
+        let names: Vec<_> = files
+            .iter()
+            .map(|f| f.path.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert!(names.contains(&"report.pdf"));
+        assert!(names.contains(&"song.mp3"));
+
+        // Test with no match
+        let config = WalkerConfig::default().with_file_categories(vec![FileCategory::Videos]);
+        let walker = Walker::new(dir.path(), config);
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 0);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crate::duplicates::{DuplicateGroup, ScanSummary};
 
 /// Current version of the session file format.
-pub const SESSION_VERSION: u32 = 1;
+pub const SESSION_VERSION: u32 = 2;
 
 /// Represents a saved scan session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,7 +61,10 @@ impl Session {
             // Total files and size are not fully known from session alone,
             // so we provide estimates based on duplicate groups.
             total_files: groups.iter().map(|g| g.files.len()).sum(),
-            total_size: groups.iter().map(|g| g.files.len() as u64 * g.size).sum(),
+            total_size: groups
+                .iter()
+                .map(|g| g.files.iter().map(|f| f.size).sum::<u64>())
+                .sum(),
             ..ScanSummary::default()
         };
 
@@ -90,6 +93,8 @@ pub struct SessionSettings {
     pub regex_include: Vec<String>,
     /// Regex patterns to exclude.
     pub regex_exclude: Vec<String>,
+    /// File categories to include.
+    pub file_categories: Vec<crate::scanner::FileCategory>,
     /// Number of I/O threads used for hashing.
     pub io_threads: usize,
     /// Whether byte-by-byte verification was enabled.
@@ -108,8 +113,8 @@ pub struct SessionGroup {
     pub hash: [u8; 32],
     /// File size in bytes.
     pub size: u64,
-    /// Paths to the duplicate files.
-    pub files: Vec<PathBuf>,
+    /// Detailed file information for each duplicate.
+    pub files: Vec<crate::scanner::FileEntry>,
     /// Protected reference paths.
     #[serde(default)]
     pub reference_paths: Vec<PathBuf>,

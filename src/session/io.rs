@@ -88,10 +88,10 @@ impl Session {
         // Validate that referenced files still exist
         for group in &session.groups {
             for file in &group.files {
-                if !file.exists() {
+                if !file.path.exists() {
                     log::warn!(
                         "File referenced in session no longer exists: {}",
-                        file.display()
+                        file.path.display()
                     );
                 }
             }
@@ -111,11 +111,15 @@ mod tests {
     #[test]
     fn test_session_to_json() {
         let settings = SessionSettings::default();
+        let now = std::time::SystemTime::now();
         let groups = vec![SessionGroup {
             id: 1,
             hash: [0u8; 32],
             size: 100,
-            files: vec!["/tmp/a.txt".into(), "/tmp/b.txt".into()],
+            files: vec![
+                crate::scanner::FileEntry::new("/tmp/a.txt".into(), 100, now),
+                crate::scanner::FileEntry::new("/tmp/b.txt".into(), 100, now),
+            ],
             reference_paths: Vec::new(),
         }];
         let session = Session::new(vec!["/tmp".into()], settings, groups);
@@ -130,13 +134,17 @@ mod tests {
     fn test_session_save() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("session.json");
+        let now = std::time::SystemTime::now();
 
         let settings = SessionSettings::default();
         let groups = vec![SessionGroup {
             id: 1,
             hash: [1u8; 32],
             size: 200,
-            files: vec!["/tmp/c.txt".into(), "/tmp/d.txt".into()],
+            files: vec![
+                crate::scanner::FileEntry::new("/tmp/c.txt".into(), 200, now),
+                crate::scanner::FileEntry::new("/tmp/d.txt".into(), 200, now),
+            ],
             reference_paths: Vec::new(),
         }];
         let mut session = Session::new(vec!["/tmp".into()], settings, groups);
@@ -154,13 +162,17 @@ mod tests {
     fn test_session_load_success() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("session.json");
+        let now = std::time::SystemTime::now();
 
         let settings = SessionSettings::default();
         let groups = vec![SessionGroup {
             id: 1,
             hash: [1u8; 32],
             size: 200,
-            files: vec!["/tmp/c.txt".into(), "/tmp/d.txt".into()],
+            files: vec![
+                crate::scanner::FileEntry::new("/tmp/c.txt".into(), 200, now),
+                crate::scanner::FileEntry::new("/tmp/d.txt".into(), 200, now),
+            ],
             reference_paths: Vec::new(),
         }];
         let mut session = Session::new(vec!["/tmp".into()], settings, groups);

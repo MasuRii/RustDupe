@@ -11,10 +11,14 @@ fn setup_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
 }
 
 fn make_group(size: u64, paths: Vec<&str>) -> DuplicateGroup {
+    let now = std::time::SystemTime::now();
     DuplicateGroup::new(
         [0u8; 32],
         size,
-        paths.into_iter().map(PathBuf::from).collect(),
+        paths
+            .into_iter()
+            .map(|p| rustdupe::scanner::FileEntry::new(PathBuf::from(p), size, now))
+            .collect(),
         Vec::new(),
     )
 }
@@ -122,9 +126,9 @@ fn test_render_footer() {
 
     // Footer should contain commands
     assert!(content.contains("[j/k]"));
-    assert!(content.contains("Navigate"));
+    assert!(content.contains("Nav"));
     assert!(content.contains("[d]"));
-    assert!(content.contains("Delete"));
+    assert!(content.contains("Del"));
 }
 
 #[test]

@@ -88,13 +88,14 @@ impl<'a> CsvOutput<'a> {
             let group_id = idx + 1;
             let hash_hex = group.hash_hex();
 
-            for path in &group.files {
-                let modified = get_modified_time(path);
+            for file in &group.files {
+                let datetime: DateTime<Utc> = file.modified.into();
+                let modified = datetime.to_rfc3339();
 
                 let row = CsvRow {
                     group_id,
                     hash: hash_hex.clone(),
-                    path: path.to_string_lossy().to_string(),
+                    path: file.path.to_string_lossy().to_string(),
                     size: group.size,
                     modified,
                 };
@@ -126,18 +127,6 @@ impl<'a> CsvOutput<'a> {
     }
 }
 
-/// Helper function to get formatted modified time for a file.
-/// Falls back to "unknown" if metadata cannot be read.
-fn get_modified_time(path: &std::path::Path) -> String {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .map(|m| {
-            let datetime: DateTime<Utc> = m.into();
-            datetime.to_rfc3339()
-        })
-        .unwrap_or_else(|_| "unknown".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,11 +141,15 @@ mod tests {
         let file2 = dir.path().join("file2.txt");
         File::create(&file1).unwrap().write_all(b"content").unwrap();
         File::create(&file2).unwrap().write_all(b"content").unwrap();
+        let now = std::time::SystemTime::now();
 
         let groups = vec![DuplicateGroup::new(
             [0u8; 32],
             7,
-            vec![file1.clone(), file2.clone()],
+            vec![
+                crate::scanner::FileEntry::new(file1.clone(), 7, now),
+                crate::scanner::FileEntry::new(file2.clone(), 7, now),
+            ],
             Vec::new(),
         )];
 
@@ -182,11 +175,12 @@ mod tests {
             .unwrap()
             .write_all(b"content")
             .unwrap();
+        let now = std::time::SystemTime::now();
 
         let groups = vec![DuplicateGroup::new(
             [0u8; 32],
             7,
-            vec![file_with_comma],
+            vec![crate::scanner::FileEntry::new(file_with_comma, 7, now)],
             Vec::new(),
         )];
 

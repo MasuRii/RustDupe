@@ -1,7 +1,7 @@
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use rustdupe::duplicates::DuplicateGroup;
-use rustdupe::tui::app::{App, AppMode};
+use rustdupe::tui::app::App;
 use rustdupe::tui::ui::render;
 use std::path::PathBuf;
 
@@ -11,10 +11,14 @@ fn setup_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
 }
 
 fn make_group_with_refs(size: u64, paths: Vec<&str>, refs: Vec<&str>) -> DuplicateGroup {
+    let now = std::time::SystemTime::now();
     DuplicateGroup::new(
         [0u8; 32],
         size,
-        paths.into_iter().map(PathBuf::from).collect(),
+        paths
+            .into_iter()
+            .map(|p| rustdupe::scanner::FileEntry::new(PathBuf::from(p), size, now))
+            .collect(),
         refs.into_iter().map(PathBuf::from).collect(),
     )
 }

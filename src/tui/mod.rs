@@ -31,7 +31,10 @@
 //!     DuplicateGroup::new(
 //!         [0u8; 32],
 //!         1000,
-//!         vec![PathBuf::from("/a.txt"), PathBuf::from("/b.txt")],
+//!         vec![
+//!             rustdupe::scanner::FileEntry::new(PathBuf::from("/a.txt"), 1000, std::time::SystemTime::now()),
+//!             rustdupe::scanner::FileEntry::new(PathBuf::from("/b.txt"), 1000, std::time::SystemTime::now()),
+//!         ],
 //!         vec![],
 //!     ),
 //! ];

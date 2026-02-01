@@ -132,8 +132,8 @@ pub struct DuplicateGroup {
     pub hash: [u8; 32],
     /// File size in bytes (shared by all files)
     pub size: u64,
-    /// Paths to the duplicate files
-    pub files: Vec<std::path::PathBuf>,
+    /// Detailed file information for each duplicate
+    pub files: Vec<FileEntry>,
     /// Protected reference paths
     pub reference_paths: Vec<std::path::PathBuf>,
 }
@@ -145,13 +145,13 @@ impl DuplicateGroup {
     ///
     /// * `hash` - BLAKE3 content hash
     /// * `size` - File size in bytes
-    /// * `files` - Paths to duplicate files
+    /// * `files` - Detailed file entries
     /// * `reference_paths` - Protected reference paths
     #[must_use]
     pub fn new(
         hash: [u8; 32],
         size: u64,
-        files: Vec<std::path::PathBuf>,
+        files: Vec<FileEntry>,
         reference_paths: Vec<std::path::PathBuf>,
     ) -> Self {
         Self {
@@ -194,6 +194,12 @@ impl DuplicateGroup {
     #[must_use]
     pub fn hash_hex(&self) -> String {
         crate::scanner::hash_to_hex(&self.hash)
+    }
+
+    /// Get just the paths of files in this group.
+    #[must_use]
+    pub fn paths(&self) -> Vec<std::path::PathBuf> {
+        self.files.iter().map(|f| f.path.clone()).collect()
     }
 
     /// Check if a path is in a protected reference directory.
@@ -511,9 +517,9 @@ mod tests {
             [0u8; 32],
             1000,
             vec![
-                PathBuf::from("/a.txt"),
-                PathBuf::from("/b.txt"),
-                PathBuf::from("/c.txt"),
+                make_file("/a.txt", 1000),
+                make_file("/b.txt", 1000),
+                make_file("/c.txt", 1000),
             ],
             Vec::new(),
         );
@@ -524,7 +530,8 @@ mod tests {
 
     #[test]
     fn test_duplicate_group_single_file() {
-        let group = DuplicateGroup::new([0u8; 32], 1000, vec![PathBuf::from("/a.txt")], Vec::new());
+        let group =
+            DuplicateGroup::new([0u8; 32], 1000, vec![make_file("/a.txt", 1000)], Vec::new());
 
         assert_eq!(group.wasted_space(), 0);
         assert_eq!(group.duplicate_count(), 0);
@@ -690,7 +697,7 @@ mod tests {
         hash[1] = 0xCD;
         hash[31] = 0xEF;
 
-        let group = DuplicateGroup::new(hash, 100, vec![PathBuf::from("/a.txt")], Vec::new());
+        let group = DuplicateGroup::new(hash, 100, vec![make_file("/a.txt", 100)], Vec::new());
         let hex = group.hash_hex();
 
         assert!(hex.starts_with("abcd"));
