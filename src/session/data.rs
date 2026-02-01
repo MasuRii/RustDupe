@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 /// Current version of the session file format.
@@ -22,7 +22,7 @@ pub struct Session {
     /// Duplicate groups found during the scan.
     pub groups: Vec<SessionGroup>,
     /// Paths selected by the user for deletion.
-    pub user_selections: HashSet<PathBuf>,
+    pub user_selections: BTreeSet<PathBuf>,
 }
 
 impl Session {
@@ -38,7 +38,7 @@ impl Session {
             scan_paths,
             settings,
             groups,
-            user_selections: HashSet::new(),
+            user_selections: BTreeSet::new(),
         }
     }
 }
