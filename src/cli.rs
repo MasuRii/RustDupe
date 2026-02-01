@@ -73,9 +73,13 @@ pub struct ScanArgs {
     #[arg(long, value_name = "PATH")]
     pub save_session: Option<PathBuf>,
 
-    /// Output format (tui for interactive, json/csv for scripting, session for persistence)
+    /// Output format (tui for interactive, json/csv for scripting, session for persistence, html for report)
     #[arg(short, long, value_enum, default_value = "tui")]
     pub output: OutputFormat,
+
+    /// Write output to a file instead of stdout
+    #[arg(long, value_name = "PATH")]
+    pub output_file: Option<PathBuf>,
 
     /// Minimum file size to consider (e.g., 1KB, 1MB, 1GB)
     ///
@@ -176,9 +180,13 @@ pub struct LoadArgs {
     #[arg(value_name = "SESSION_FILE")]
     pub path: PathBuf,
 
-    /// Output format (tui for interactive, json/csv for scripting)
+    /// Output format (tui for interactive, json/csv for scripting, html for report)
     #[arg(short, long, value_enum, default_value = "tui")]
     pub output: OutputFormat,
+
+    /// Write output to a file instead of stdout
+    #[arg(long, value_name = "PATH")]
+    pub output_file: Option<PathBuf>,
 }
 
 /// Output format for scan results.
@@ -190,6 +198,8 @@ pub enum OutputFormat {
     Json,
     /// CSV output for spreadsheets
     Csv,
+    /// HTML report for browser viewing
+    Html,
     /// Session file format for persistence
     Session,
 }
@@ -227,6 +237,7 @@ impl std::fmt::Display for OutputFormat {
             OutputFormat::Tui => write!(f, "tui"),
             OutputFormat::Json => write!(f, "json"),
             OutputFormat::Csv => write!(f, "csv"),
+            OutputFormat::Html => write!(f, "html"),
             OutputFormat::Session => write!(f, "session"),
         }
     }

@@ -226,6 +226,7 @@ fn handle_scan(
         groups,
         summary,
         output_format: args.output,
+        output_file: args.output_file,
         save_session: args.save_session,
         scan_paths,
         settings,
@@ -252,6 +253,7 @@ fn handle_load(
         groups,
         summary,
         output_format: args.output,
+        output_file: args.output_file,
         save_session: None,
         scan_paths: session.scan_paths.clone(),
         settings: session.settings.clone(),
@@ -265,6 +267,7 @@ struct ResultContext {
     groups: Vec<rustdupe::duplicates::DuplicateGroup>,
     summary: rustdupe::duplicates::ScanSummary,
     output_format: OutputFormat,
+    output_file: Option<std::path::PathBuf>,
     save_session: Option<std::path::PathBuf>,
     scan_paths: Vec<std::path::PathBuf>,
     settings: SessionSettings,
@@ -278,6 +281,7 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
         groups,
         summary,
         output_format,
+        output_file,
         save_session,
         scan_paths,
         settings,
@@ -352,14 +356,40 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
         }
         OutputFormat::Json => {
             let json_output = output::JsonOutput::new(&groups, &summary);
-            let mut stdout = io::stdout().lock();
-            json_output.write_to(&mut stdout, true)?;
-            stdout.flush()?;
+            if let Some(path) = output_file {
+                let mut file = fs::File::create(&path)?;
+                json_output.write_to(&mut file, true)?;
+                file.flush()?;
+                log::info!("JSON results saved to {:?}", path);
+            } else {
+                let mut stdout = io::stdout().lock();
+                json_output.write_to(&mut stdout, true)?;
+                stdout.flush()?;
+            }
         }
         OutputFormat::Csv => {
             let csv_output = output::CsvOutput::new(&groups);
-            let stdout = io::stdout().lock();
-            csv_output.write_to(stdout)?;
+            if let Some(path) = output_file {
+                let file = fs::File::create(&path)?;
+                csv_output.write_to(file)?;
+                log::info!("CSV results saved to {:?}", path);
+            } else {
+                let stdout = io::stdout().lock();
+                csv_output.write_to(stdout)?;
+            }
+        }
+        OutputFormat::Html => {
+            let html_output = output::HtmlOutput::new(&groups, &summary);
+            if let Some(path) = output_file {
+                let mut file = fs::File::create(&path)?;
+                html_output.write_to(&mut file)?;
+                file.flush()?;
+                log::info!("HTML report saved to {:?}", path);
+            } else {
+                let mut stdout = io::stdout().lock();
+                html_output.write_to(&mut stdout)?;
+                stdout.flush()?;
+            }
         }
         OutputFormat::Session => {
             let session_groups = groups
@@ -381,9 +411,14 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
                 session.file_index = initial.file_index;
             }
             let json = session.to_json()?;
-            let mut stdout = io::stdout().lock();
-            stdout.write_all(json.as_bytes())?;
-            stdout.flush()?;
+            if let Some(path) = output_file {
+                fs::write(&path, json)?;
+                log::info!("Session saved to {:?}", path);
+            } else {
+                let mut stdout = io::stdout().lock();
+                stdout.write_all(json.as_bytes())?;
+                stdout.flush()?;
+            }
         }
     }
 
