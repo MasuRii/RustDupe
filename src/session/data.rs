@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use crate::duplicates::{DuplicateGroup, ScanSummary};
+
 /// Current version of the session file format.
 pub const SESSION_VERSION: u32 = 1;
 
@@ -41,6 +43,24 @@ impl Session {
             user_selections: BTreeSet::new(),
         }
     }
+
+    /// Converts the session back to scan results (duplicate groups and summary).
+    pub fn to_results(&self) -> (Vec<DuplicateGroup>, ScanSummary) {
+        let groups: Vec<DuplicateGroup> = self.groups.iter().cloned().map(Into::into).collect();
+
+        let summary = ScanSummary {
+            duplicate_groups: groups.len(),
+            duplicate_files: groups.iter().map(|g| g.duplicate_count()).sum(),
+            reclaimable_space: groups.iter().map(|g| g.wasted_space()).sum(),
+            // Total files and size are not fully known from session alone,
+            // so we provide estimates based on duplicate groups.
+            total_files: groups.iter().map(|g| g.files.len()).sum(),
+            total_size: groups.iter().map(|g| g.files.len() as u64 * g.size).sum(),
+            ..ScanSummary::default()
+        };
+
+        (groups, summary)
+    }
 }
 
 /// Settings used during the scan that produced the session.
@@ -76,4 +96,10 @@ pub struct SessionGroup {
     pub size: u64,
     /// Paths to the duplicate files.
     pub files: Vec<PathBuf>,
+}
+
+impl From<SessionGroup> for DuplicateGroup {
+    fn from(sg: SessionGroup) -> Self {
+        Self::new(sg.hash, sg.size, sg.files)
+    }
 }

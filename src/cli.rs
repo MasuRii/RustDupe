@@ -54,14 +54,24 @@ pub struct Cli {
 pub enum Commands {
     /// Scan a directory for duplicate files
     Scan(ScanArgs),
+    /// Load a previously saved session
+    Load(LoadArgs),
 }
 
 /// Arguments for the scan subcommand.
 #[derive(Debug, Args)]
 pub struct ScanArgs {
     /// Directory path to scan for duplicates
-    #[arg(value_name = "PATH")]
-    pub path: PathBuf,
+    #[arg(value_name = "PATH", required_unless_present = "load_session")]
+    pub path: Option<PathBuf>,
+
+    /// Load a previously saved session instead of scanning
+    #[arg(long, value_name = "SESSION_FILE", conflicts_with = "path")]
+    pub load_session: Option<PathBuf>,
+
+    /// Save scan results to a session file
+    #[arg(long, value_name = "PATH")]
+    pub save_session: Option<PathBuf>,
 
     /// Output format (tui for interactive, json/csv for scripting, session for persistence)
     #[arg(short, long, value_enum, default_value = "tui")]
@@ -130,6 +140,18 @@ pub struct ScanArgs {
     /// Clear the hash cache before scanning
     #[arg(long)]
     pub clear_cache: bool,
+}
+
+/// Arguments for the load subcommand.
+#[derive(Debug, Args)]
+pub struct LoadArgs {
+    /// Session file to load
+    #[arg(value_name = "SESSION_FILE")]
+    pub path: PathBuf,
+
+    /// Output format (tui for interactive, json/csv for scripting)
+    #[arg(short, long, value_enum, default_value = "tui")]
+    pub output: OutputFormat,
 }
 
 /// Output format for scan results.
@@ -284,9 +306,10 @@ mod tests {
         assert_eq!(cli.verbose, 0);
         match cli.command {
             Commands::Scan(args) => {
-                assert_eq!(args.path, PathBuf::from("/some/path"));
+                assert_eq!(args.path, Some(PathBuf::from("/some/path")));
                 assert_eq!(args.output, OutputFormat::Tui);
             }
+            _ => panic!("Expected Scan command"),
         }
     }
 
@@ -319,6 +342,7 @@ mod tests {
                 assert_eq!(args.max_size, Some(1_000_000_000));
                 assert_eq!(args.ignore_patterns, vec!["*.tmp", "node_modules"]);
             }
+            _ => panic!("Expected Scan command"),
         }
     }
 
@@ -335,6 +359,7 @@ mod tests {
             Commands::Scan(args) => {
                 assert_eq!(args.output, OutputFormat::Csv);
             }
+            _ => panic!("Expected Scan command"),
         }
     }
 
@@ -370,6 +395,7 @@ mod tests {
                 assert!(args.permanent);
                 assert!(args.yes);
             }
+            _ => panic!("Expected Scan command"),
         }
     }
 
@@ -399,5 +425,48 @@ mod tests {
     fn test_cli_version_flag() {
         let result = Cli::try_parse_from(["rustdupe", "--version"]);
         assert!(result.is_err()); // clap exits on --version
+    }
+
+    #[test]
+    fn test_cli_parse_scan_session_flags() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "scan",
+            "/path",
+            "--save-session",
+            "session.json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.path, Some(PathBuf::from("/path")));
+                assert_eq!(args.save_session, Some(PathBuf::from("session.json")));
+            }
+            _ => panic!("Expected Scan command"),
+        }
+
+        let cli =
+            Cli::try_parse_from(["rustdupe", "scan", "--load-session", "session.json"]).unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.path, None);
+                assert_eq!(args.load_session, Some(PathBuf::from("session.json")));
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_load_subcommand() {
+        let cli =
+            Cli::try_parse_from(["rustdupe", "load", "session.json", "--output", "json"]).unwrap();
+        match cli.command {
+            Commands::Load(args) => {
+                assert_eq!(args.path, PathBuf::from("session.json"));
+                assert_eq!(args.output, OutputFormat::Json);
+            }
+            _ => panic!("Expected Load command"),
+        }
     }
 }
