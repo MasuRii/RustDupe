@@ -350,6 +350,14 @@ mod tests {
             escape_posix(Path::new("/foo's/bar.txt")),
             "'/foo'\\''s/bar.txt'"
         );
+        assert_eq!(
+            escape_posix(Path::new("/foo bar/baz.txt")),
+            "'/foo bar/baz.txt'"
+        );
+        assert_eq!(
+            escape_posix(Path::new("/foo$bar/`baz`.txt")),
+            "'/foo$bar/`baz`.txt'"
+        );
     }
 
     #[test]
@@ -362,6 +370,80 @@ mod tests {
             escape_powershell(Path::new("C:\\foo's\\bar.txt")),
             "'C:\\foo''s\\bar.txt'"
         );
+        assert_eq!(
+            escape_powershell(Path::new("C:\\foo bar\\baz.txt")),
+            "'C:\\foo bar\\baz.txt'"
+        );
+        assert_eq!(
+            escape_powershell(Path::new("C:\\foo$bar\\`baz`.txt")),
+            "'C:\\foo$bar\\`baz`.txt'"
+        );
+    }
+
+    #[test]
+    fn test_complex_script_generation() {
+        let now = SystemTime::now();
+        let groups = vec![
+            DuplicateGroup::new(
+                [1u8; 32],
+                100,
+                vec![
+                    FileEntry::new(PathBuf::from("/keep/me.txt"), 100, now),
+                    FileEntry::new(PathBuf::from("/delete/me.txt"), 100, now),
+                    FileEntry::new(PathBuf::from("/delete/too.txt"), 100, now),
+                ],
+                Vec::new(),
+            ),
+            DuplicateGroup::new(
+                [2u8; 32],
+                200,
+                vec![
+                    FileEntry::new(PathBuf::from("/path with spaces/file1.txt"), 200, now),
+                    FileEntry::new(PathBuf::from("/path with spaces/file2.txt"), 200, now),
+                ],
+                Vec::new(),
+            ),
+        ];
+
+        let summary = ScanSummary {
+            duplicate_files: 3,
+            reclaimable_space: 400, // (100*2) + 200
+            ..Default::default()
+        };
+
+        // Test POSIX with default selections
+        let output = ScriptOutput::new(&groups, &summary, ScriptType::Posix);
+        let mut buffer = Vec::new();
+        output.write_to(&mut buffer).unwrap();
+        let script = String::from_utf8(buffer).unwrap();
+
+        assert!(script.contains("# KEEP:   '/keep/me.txt'"));
+        assert!(script.contains("# DELETE: '/delete/me.txt'"));
+        assert!(script.contains("# DELETE: '/delete/too.txt'"));
+        assert!(script.contains("# KEEP:   '/path with spaces/file1.txt'"));
+        assert!(script.contains("# DELETE: '/path with spaces/file2.txt'"));
+        assert!(script.contains("rm '/delete/me.txt'"));
+        assert!(script.contains("rm '/delete/too.txt'"));
+        assert!(script.contains("rm '/path with spaces/file2.txt'"));
+
+        // Test PowerShell with user selections
+        let mut selections = BTreeSet::new();
+        selections.insert(PathBuf::from("/keep/me.txt"));
+        selections.insert(PathBuf::from("/path with spaces/file1.txt"));
+
+        let output = ScriptOutput::new(&groups, &summary, ScriptType::PowerShell)
+            .with_user_selections(&selections);
+        let mut buffer = Vec::new();
+        output.write_to(&mut buffer).unwrap();
+        let script = String::from_utf8(buffer).unwrap();
+
+        assert!(script.contains("# DELETE: '/keep/me.txt'"));
+        assert!(script.contains("# KEEP:   '/delete/me.txt'"));
+        assert!(script.contains("# KEEP:   '/delete/too.txt'"));
+        assert!(script.contains("# DELETE: '/path with spaces/file1.txt'"));
+        assert!(script.contains("# KEEP:   '/path with spaces/file2.txt'"));
+        assert!(script.contains("Remove-Item -Path '/keep/me.txt'"));
+        assert!(script.contains("Remove-Item -Path '/path with spaces/file1.txt'"));
     }
 
     #[test]
