@@ -53,7 +53,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Scan a directory for duplicate files
-    Scan(ScanArgs),
+    Scan(Box<ScanArgs>),
     /// Load a previously saved session
     Load(LoadArgs),
 }
@@ -88,6 +88,22 @@ pub struct ScanArgs {
     /// Supports suffixes: B, KB, KiB, MB, MiB, GB, GiB, TB, TiB
     #[arg(long, value_name = "SIZE", value_parser = parse_size)]
     pub max_size: Option<u64>,
+
+    /// Only include files modified after this date (YYYY-MM-DD)
+    #[arg(long, value_name = "DATE", value_parser = parse_date)]
+    pub newer_than: Option<std::time::SystemTime>,
+
+    /// Only include files modified before this date (YYYY-MM-DD)
+    #[arg(long, value_name = "DATE", value_parser = parse_date)]
+    pub older_than: Option<std::time::SystemTime>,
+
+    /// Regex patterns to include (filename must match at least one)
+    #[arg(long = "regex", alias = "regex-include", value_name = "PATTERN")]
+    pub regex_include: Vec<String>,
+
+    /// Regex patterns to exclude (filename must not match any)
+    #[arg(long = "regex-exclude", value_name = "PATTERN")]
+    pub regex_exclude: Vec<String>,
 
     /// Glob patterns to ignore (can be specified multiple times)
     ///
@@ -241,6 +257,18 @@ pub fn parse_size(s: &str) -> Result<u64, String> {
     Ok((num * multiplier as f64) as u64)
 }
 
+/// Parse a date string in YYYY-MM-DD format into SystemTime.
+pub fn parse_date(s: &str) -> Result<std::time::SystemTime, String> {
+    use chrono::{NaiveDate, TimeZone, Utc};
+    NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .map(|d| {
+            // Use 00:00:00 UTC for the date
+            let dt = Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap());
+            std::time::SystemTime::from(dt)
+        })
+        .map_err(|e| format!("Invalid date format (expected YYYY-MM-DD): {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,10 +361,18 @@ mod tests {
             "1MB",
             "--max-size",
             "1GB",
+            "--newer-than",
+            "2026-01-01",
+            "--older-than",
+            "2026-12-31",
             "--ignore",
             "*.tmp",
             "--ignore",
             "node_modules",
+            "--regex",
+            "foo.*",
+            "--regex-exclude",
+            "bar.*",
         ])
         .unwrap();
 
@@ -347,10 +383,21 @@ mod tests {
                 assert_eq!(args.output, OutputFormat::Json);
                 assert_eq!(args.min_size, Some(1_000_000));
                 assert_eq!(args.max_size, Some(1_000_000_000));
+                assert!(args.newer_than.is_some());
+                assert!(args.older_than.is_some());
                 assert_eq!(args.ignore_patterns, vec!["*.tmp", "node_modules"]);
+                assert_eq!(args.regex_include, vec!["foo.*"]);
+                assert_eq!(args.regex_exclude, vec!["bar.*"]);
             }
             _ => panic!("Expected Scan command"),
         }
+    }
+
+    #[test]
+    fn test_parse_date() {
+        assert!(parse_date("2026-02-01").is_ok());
+        assert!(parse_date("2026-02-31").is_err()); // Invalid day
+        assert!(parse_date("not-a-date").is_err());
     }
 
     #[test]

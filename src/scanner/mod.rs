@@ -51,6 +51,7 @@ pub use path_utils::{
     is_nfc, normalize_path_str, normalize_path_str_cow, normalize_pathbuf, path_key, paths_equal,
     paths_equal_normalized,
 };
+use regex::Regex;
 pub use walker::Walker;
 
 /// Metadata for a discovered file.
@@ -111,9 +112,21 @@ pub struct WalkerConfig {
     /// Files larger than this are skipped.
     pub max_size: Option<u64>,
 
+    /// Only include files modified after this time.
+    pub newer_than: Option<SystemTime>,
+
+    /// Only include files modified before this time.
+    pub older_than: Option<SystemTime>,
+
     /// Glob patterns to ignore (gitignore-style).
     /// These are applied in addition to any .gitignore files.
     pub ignore_patterns: Vec<String>,
+
+    /// Regex patterns to include (filename must match at least one).
+    pub regex_include: Vec<Regex>,
+
+    /// Regex patterns to exclude (filename must not match any).
+    pub regex_exclude: Vec<Regex>,
 }
 
 impl WalkerConfig {
@@ -125,6 +138,8 @@ impl WalkerConfig {
     /// * `skip_hidden` - Whether to skip hidden files
     /// * `min_size` - Minimum file size filter
     /// * `max_size` - Maximum file size filter
+    /// * `newer_than` - Only include files modified after this time
+    /// * `older_than` - Only include files modified before this time
     /// * `ignore_patterns` - Glob patterns to ignore
     #[must_use]
     pub fn new(
@@ -132,6 +147,8 @@ impl WalkerConfig {
         skip_hidden: bool,
         min_size: Option<u64>,
         max_size: Option<u64>,
+        newer_than: Option<SystemTime>,
+        older_than: Option<SystemTime>,
         ignore_patterns: Vec<String>,
     ) -> Self {
         Self {
@@ -139,7 +156,11 @@ impl WalkerConfig {
             skip_hidden,
             min_size,
             max_size,
+            newer_than,
+            older_than,
             ignore_patterns,
+            regex_include: Vec::new(),
+            regex_exclude: Vec::new(),
         }
     }
 
@@ -171,10 +192,38 @@ impl WalkerConfig {
         self
     }
 
+    /// Set newer-than date filter.
+    #[must_use]
+    pub fn with_newer_than(mut self, time: Option<SystemTime>) -> Self {
+        self.newer_than = time;
+        self
+    }
+
+    /// Set older-than date filter.
+    #[must_use]
+    pub fn with_older_than(mut self, time: Option<SystemTime>) -> Self {
+        self.older_than = time;
+        self
+    }
+
     /// Set glob patterns to ignore.
     #[must_use]
     pub fn with_patterns(mut self, patterns: Vec<String>) -> Self {
         self.ignore_patterns = patterns;
+        self
+    }
+
+    /// Set regex include patterns.
+    #[must_use]
+    pub fn with_regex_include(mut self, regexes: Vec<Regex>) -> Self {
+        self.regex_include = regexes;
+        self
+    }
+
+    /// Set regex exclude patterns.
+    #[must_use]
+    pub fn with_regex_exclude(mut self, regexes: Vec<Regex>) -> Self {
+        self.regex_exclude = regexes;
         self
     }
 }
@@ -259,6 +308,8 @@ mod tests {
             true,
             Some(1024),
             Some(1_000_000),
+            None,
+            None,
             vec!["*.tmp".to_string()],
         );
 
@@ -266,6 +317,8 @@ mod tests {
         assert!(config.skip_hidden);
         assert_eq!(config.min_size, Some(1024));
         assert_eq!(config.max_size, Some(1_000_000));
+        assert!(config.newer_than.is_none());
+        assert!(config.older_than.is_none());
         assert_eq!(config.ignore_patterns, vec!["*.tmp".to_string()]);
     }
 

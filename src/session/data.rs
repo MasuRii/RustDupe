@@ -80,8 +80,16 @@ pub struct SessionSettings {
     pub min_size: Option<u64>,
     /// Maximum file size to include (in bytes).
     pub max_size: Option<u64>,
+    /// Only include files modified after this date.
+    pub newer_than: Option<DateTime<Utc>>,
+    /// Only include files modified before this date.
+    pub older_than: Option<DateTime<Utc>>,
     /// Glob patterns to ignore.
     pub ignore_patterns: Vec<String>,
+    /// Regex patterns to include.
+    pub regex_include: Vec<String>,
+    /// Regex patterns to exclude.
+    pub regex_exclude: Vec<String>,
     /// Number of I/O threads used for hashing.
     pub io_threads: usize,
     /// Whether byte-by-byte verification was enabled.

@@ -187,6 +187,52 @@ impl Walker {
         true
     }
 
+    /// Check if a file passes date filters.
+    fn passes_date_filter(&self, modified: SystemTime) -> bool {
+        if let Some(newer_than) = self.config.newer_than {
+            if modified < newer_than {
+                return false;
+            }
+        }
+        if let Some(older_than) = self.config.older_than {
+            if modified > older_than {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Check if a file passes regex filters.
+    fn passes_regex_filter(&self, path: &Path) -> bool {
+        let filename = path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
+
+        // If include patterns are specified, at least one must match
+        if !self.config.regex_include.is_empty() {
+            let mut matched = false;
+            for re in &self.config.regex_include {
+                if re.is_match(&filename) {
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                return false;
+            }
+        }
+
+        // If exclude patterns are specified, none must match
+        for re in &self.config.regex_exclude {
+            if re.is_match(&filename) {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Walk the directory tree, yielding file entries.
     ///
     /// Returns an iterator over [`FileEntry`] results. Errors are yielded
@@ -334,6 +380,18 @@ impl Walker {
 
         // Get modification time
         let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+
+        // Apply date filters
+        if !self.passes_date_filter(modified) {
+            log::trace!("Skipping file due to date filter: {}", path.display());
+            return None;
+        }
+
+        // Apply regex filters
+        if !self.passes_regex_filter(&path) {
+            log::trace!("Skipping file due to regex filter: {}", path.display());
+            return None;
+        }
 
         // Check for hardlinks using the tracker
         if hardlink_tracker.is_hardlink(&metadata) {
@@ -567,6 +625,90 @@ mod tests {
             assert!(!name.ends_with(".tmp"), "Should skip .tmp files");
             assert!(!name.ends_with(".log"), "Should skip .log files");
         }
+    }
+
+    #[test]
+    fn test_walker_date_filters() {
+        use chrono::{TimeZone, Utc};
+        let dir = TempDir::new().unwrap();
+
+        // Create a file modified in the past
+        let past_file = dir.path().join("past.txt");
+        let mut f = File::create(&past_file).unwrap();
+        writeln!(f, "past content").unwrap();
+        let past_time = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
+        filetime::set_file_mtime(
+            &past_file,
+            filetime::FileTime::from_system_time(past_time.into()),
+        )
+        .unwrap();
+
+        // Create a file modified recently
+        let recent_file = dir.path().join("recent.txt");
+        let mut f = File::create(&recent_file).unwrap();
+        writeln!(f, "recent content").unwrap();
+        let recent_time = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        filetime::set_file_mtime(
+            &recent_file,
+            filetime::FileTime::from_system_time(recent_time.into()),
+        )
+        .unwrap();
+
+        // Test newer_than
+        let config = WalkerConfig::default().with_newer_than(Some(
+            Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap().into(),
+        ));
+        let walker = Walker::new(dir.path(), config);
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path.file_name().unwrap(), "recent.txt");
+
+        // Test older_than
+        let config = WalkerConfig::default().with_older_than(Some(
+            Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap().into(),
+        ));
+        let walker = Walker::new(dir.path(), config);
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path.file_name().unwrap(), "past.txt");
+    }
+
+    #[test]
+    fn test_walker_regex_filters() {
+        use regex::Regex;
+        let dir = create_test_dir();
+
+        // create_test_dir creates: file1.txt, file2.txt, subdir/nested.txt
+
+        // Test regex include
+        let config = WalkerConfig::default().with_regex_include(vec![Regex::new("file1").unwrap()]);
+        let walker = Walker::new(dir.path(), config);
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path.file_name().unwrap(), "file1.txt");
+
+        // Test regex exclude
+        let config = WalkerConfig::default().with_regex_exclude(vec![Regex::new("file2").unwrap()]);
+        let walker = Walker::new(dir.path(), config);
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        // Should have file1.txt and nested.txt
+        assert_eq!(files.len(), 2);
+        let names: Vec<_> = files
+            .iter()
+            .map(|f| f.path.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert!(names.contains(&"file1.txt"));
+        assert!(names.contains(&"nested.txt"));
+        assert!(!names.contains(&"file2.txt"));
+
+        // Test combined
+        let config = WalkerConfig::default()
+            .with_regex_include(vec![Regex::new("file").unwrap()])
+            .with_regex_exclude(vec![Regex::new("1").unwrap()]);
+        let walker = Walker::new(dir.path(), config);
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path.file_name().unwrap(), "file2.txt");
     }
 
     #[test]

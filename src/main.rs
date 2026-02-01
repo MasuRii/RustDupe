@@ -34,7 +34,7 @@ fn main() -> Result<()> {
 
     // Handle subcommands
     match cli.command {
-        Commands::Scan(args) => handle_scan(args, shutdown_flag, cli.quiet),
+        Commands::Scan(args) => handle_scan(*args, shutdown_flag, cli.quiet),
         Commands::Load(args) => handle_load(args, shutdown_flag, cli.quiet),
     }?;
 
@@ -122,13 +122,34 @@ fn handle_scan(
             None
         };
 
+        // Compile regex patterns
+        let mut regex_include = Vec::new();
+        for pattern in &args.regex_include {
+            match regex::Regex::new(pattern) {
+                Ok(re) => regex_include.push(re),
+                Err(e) => anyhow::bail!("Invalid include regex '{}': {}", pattern, e),
+            }
+        }
+
+        let mut regex_exclude = Vec::new();
+        for pattern in &args.regex_exclude {
+            match regex::Regex::new(pattern) {
+                Ok(re) => regex_exclude.push(re),
+                Err(e) => anyhow::bail!("Invalid exclude regex '{}': {}", pattern, e),
+            }
+        }
+
         // Configure the walker
         let walker_config = WalkerConfig::default()
             .with_follow_symlinks(args.follow_symlinks)
             .with_skip_hidden(args.skip_hidden)
             .with_min_size(args.min_size)
             .with_max_size(args.max_size)
-            .with_patterns(args.ignore_patterns.clone());
+            .with_newer_than(args.newer_than)
+            .with_older_than(args.older_than)
+            .with_patterns(args.ignore_patterns.clone())
+            .with_regex_include(regex_include)
+            .with_regex_exclude(regex_exclude);
 
         // Configure progress reporting for non-TUI modes
         let progress = if args.output != OutputFormat::Tui {
@@ -173,7 +194,11 @@ fn handle_scan(
                     skip_hidden: args.skip_hidden,
                     min_size: args.min_size,
                     max_size: args.max_size,
+                    newer_than: args.newer_than.map(chrono::DateTime::from),
+                    older_than: args.older_than.map(chrono::DateTime::from),
                     ignore_patterns: args.ignore_patterns.clone(),
+                    regex_include: args.regex_include.clone(),
+                    regex_exclude: args.regex_exclude.clone(),
                     io_threads: args.io_threads,
                     paranoid: args.paranoid,
                 };

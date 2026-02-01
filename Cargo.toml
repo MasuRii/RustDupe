@@ -99,6 +99,8 @@ embed-resource = "2"
 proptest = "1"
 # Temp file/directory creation for tests
 tempfile = "3"
+# File modification time for tests
+filetime = "0.2"
 
 [profile.release]
 lto = "thin"           # Link-time optimization (good balance)
