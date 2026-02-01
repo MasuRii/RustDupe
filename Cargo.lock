@@ -1378,6 +1378,7 @@ dependencies = [
  "proptest",
  "ratatui",
  "rayon",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
