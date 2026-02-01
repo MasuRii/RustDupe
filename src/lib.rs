@@ -48,5 +48,6 @@ pub mod logging;
 pub mod output;
 pub mod progress;
 pub mod scanner;
+pub mod session;
 pub mod signal;
 pub mod tui;
