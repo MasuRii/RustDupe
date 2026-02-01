@@ -116,6 +116,20 @@ pub struct ScanArgs {
     /// Skip confirmation prompts (required with --permanent in non-interactive mode)
     #[arg(short = 'y', long)]
     pub yes: bool,
+
+    /// Path to the hash cache database
+    ///
+    /// If not specified, a default platform-specific path is used.
+    #[arg(long, value_name = "PATH")]
+    pub cache: Option<PathBuf>,
+
+    /// Disable hash caching
+    #[arg(long, conflicts_with = "cache")]
+    pub no_cache: bool,
+
+    /// Clear the hash cache before scanning
+    #[arg(long)]
+    pub clear_cache: bool,
 }
 
 /// Output format for scan results.

@@ -4,12 +4,15 @@
 
 use anyhow::Result;
 use clap::Parser;
+use directories::ProjectDirs;
 use rustdupe::{
+    cache::HashCache,
     duplicates::{DuplicateFinder, FinderConfig},
     logging, output,
     scanner::WalkerConfig,
     signal,
 };
+use std::fs;
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -43,6 +46,31 @@ fn main() -> Result<()> {
                 anyhow::bail!("Path is not a directory: {}", args.path.display());
             }
 
+            // Resolve cache path
+            let cache_path = if let Some(path) = args.cache {
+                path
+            } else {
+                let project_dirs = ProjectDirs::from("com", "rustdupe", "rustdupe")
+                    .ok_or_else(|| anyhow::anyhow!("Failed to determine project directories"))?;
+                let cache_dir = project_dirs.cache_dir();
+                fs::create_dir_all(cache_dir)?;
+                cache_dir.join("hashes.db")
+            };
+
+            // Initialize cache
+            let hash_cache = if !args.no_cache {
+                log::debug!("Using cache at: {:?}", cache_path);
+                let cache = HashCache::new(&cache_path)?;
+                if args.clear_cache {
+                    log::info!("Clearing cache...");
+                    cache.clear()?;
+                }
+                Some(Arc::new(cache))
+            } else {
+                log::debug!("Caching is disabled");
+                None
+            };
+
             // Log configuration
             if let Some(min) = args.min_size {
                 log::debug!("Minimum file size: {} bytes", min);
@@ -75,6 +103,10 @@ fn main() -> Result<()> {
                 .with_paranoid(args.paranoid)
                 .with_walker_config(walker_config)
                 .with_shutdown_flag(shutdown_flag.clone());
+
+            if let Some(cache) = hash_cache {
+                finder_config = finder_config.with_cache(cache);
+            }
 
             if let Some(ref p) = progress {
                 finder_config = finder_config.with_progress_callback(
