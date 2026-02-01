@@ -1,7 +1,24 @@
 //! HTML output formatter for duplicate scan results.
 //!
-//! Provides a self-contained HTML report with embedded CSS, responsive layout,
-//! and collapsible sections for reviewing duplicates in a browser.
+//! This module provides a high-performance, self-contained HTML report generator
+//! using the `askama` template engine.
+//!
+//! # Features
+//!
+//! * **Self-contained**: All CSS is embedded in the HTML file for easy sharing.
+//! * **Responsive**: The layout adjusts to different screen sizes.
+//! * **Interactive**: Includes collapsible sections for each duplicate group.
+//! * **Safe**: Automatically escapes file paths to prevent XSS.
+//! * **Themed**: Supports dark mode via system media queries.
+//!
+//! # Usage
+//!
+//! ```rust,ignore
+//! use rustdupe::output::html::HtmlOutput;
+//!
+//! let output = HtmlOutput::new(&groups, &summary);
+//! let html = output.to_html().unwrap();
+//! ```
 
 use std::io::Write;
 use std::time::SystemTime;

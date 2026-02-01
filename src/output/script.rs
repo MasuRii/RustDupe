@@ -1,8 +1,24 @@
 //! Shell script generation for duplicate file deletion.
 //!
-//! Provides generation of POSIX shell scripts (for Unix/Linux/macOS) and
-//! PowerShell scripts (for Windows) to safely review and execute deletion
-//! of duplicate files.
+//! This module enables users to export their deletion selections as a shell script,
+//! allowing for manual review and execution of file removals.
+//!
+//! # Features
+//!
+//! * **Multi-platform**: Supports POSIX shell scripts (Unix) and PowerShell (Windows).
+//! * **Safety-first**: Scripts default to dry-run mode and require a `--confirm` flag.
+//! * **Robust Escaping**: Handles spaces, quotes, and special characters in file paths.
+//! * **Informative**: Includes comments with file hashes, sizes, and group info.
+//! * **Summary**: Displays total deleted count and reclaimed space upon completion.
+//!
+//! # Usage
+//!
+//! ```rust,ignore
+//! use rustdupe::output::script::{ScriptOutput, ScriptType};
+//!
+//! let output = ScriptOutput::new(&groups, &summary, ScriptType::detect());
+//! output.write_to(&mut std::io::stdout()).unwrap();
+//! ```
 
 use std::collections::BTreeSet;
 use std::io::Write;

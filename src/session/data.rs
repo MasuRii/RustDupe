@@ -33,6 +33,12 @@ pub struct Session {
 
 impl Session {
     /// Create a new session with current timestamp and default version.
+    ///
+    /// # Arguments
+    ///
+    /// * `scan_paths` - Root paths that were scanned
+    /// * `settings` - Scan settings used
+    /// * `groups` - Duplicate groups found
     pub fn new(
         scan_paths: Vec<PathBuf>,
         settings: SessionSettings,
@@ -51,6 +57,14 @@ impl Session {
     }
 
     /// Converts the session back to scan results (duplicate groups and summary).
+    ///
+    /// This allows the rest of the application to treat loaded sessions as
+    /// if they were fresh scan results.
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing the list of duplicate groups and a calculated scan summary.
+    #[must_use]
     pub fn to_results(&self) -> (Vec<DuplicateGroup>, ScanSummary) {
         let groups: Vec<DuplicateGroup> = self.groups.iter().cloned().map(Into::into).collect();
 
@@ -122,6 +136,12 @@ pub struct SessionGroup {
 
 impl SessionGroup {
     /// Creates a session group from a duplicate group.
+    ///
+    /// # Arguments
+    ///
+    /// * `group` - The original duplicate group
+    /// * `id` - A unique identifier for this group in the session
+    #[must_use]
     pub fn from_duplicate_group(group: &DuplicateGroup, id: usize) -> Self {
         Self {
             id,

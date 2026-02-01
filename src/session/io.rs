@@ -19,6 +19,14 @@ struct SessionEnvelope {
 
 impl Session {
     /// Saves the session to a file with an integrity checksum.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The destination file path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails or if the file cannot be written.
     pub fn save(&self, path: &Path) -> Result<()> {
         let json = self.to_json()?;
         let mut file = File::create(path)
@@ -29,6 +37,13 @@ impl Session {
     }
 
     /// Serializes the session to a JSON string with an integrity checksum.
+    ///
+    /// The session is wrapped in an internal envelope which includes a SHA256
+    /// checksum of the session data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization fails.
     pub fn to_json(&self) -> Result<String> {
         // First serialize the session to get the data to hash
         let session_json = serde_json::to_string(&self)
@@ -53,6 +68,18 @@ impl Session {
     }
 
     /// Loads a session from a file and verifies its integrity.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to the session file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// * The file cannot be read.
+    /// * The JSON is malformed.
+    /// * The integrity checksum mismatch.
+    /// * The session version is unsupported.
     pub fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read session file: {}", path.display()))?;
