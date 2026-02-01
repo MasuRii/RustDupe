@@ -198,4 +198,89 @@ mod tests {
         assert!(html.contains("abababab")); // hash
         assert!(html.contains("file1.txt"));
     }
+
+    #[test]
+    fn test_html_escaping() {
+        let now = SystemTime::now();
+        // Path with characters that need escaping: <, >, &, ", '
+        let tricky_path = PathBuf::from("/test/<script>alert('xss')</script> & \"quote\".txt");
+        let groups = vec![DuplicateGroup::new(
+            [0u8; 32],
+            1024,
+            vec![
+                FileEntry::new(tricky_path, 1024, now),
+                FileEntry::new(PathBuf::from("/test/file2.txt"), 1024, now),
+            ],
+            Vec::new(),
+        )];
+        let summary = ScanSummary::default();
+
+        let output = HtmlOutput::new(&groups, &summary);
+        let html = output.to_html().expect("Failed to render HTML");
+
+        // Check that the tricky characters are escaped
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(html.contains("alert(&#x27;xss&#x27;)"));
+        assert!(html.contains("&amp;"));
+        assert!(html.contains("&quot;quote&quot;"));
+    }
+
+    #[test]
+    fn test_empty_report() {
+        let groups = Vec::new();
+        let summary = ScanSummary::default();
+
+        let output = HtmlOutput::new(&groups, &summary);
+        let html = output.to_html().expect("Failed to render HTML");
+
+        assert!(html.contains("Duplicate Report"));
+        assert!(html.contains("0 files"));
+        assert!(html.contains("0 B"));
+        // Check for absence of group cards in the body
+        assert!(!html.contains("class=\"group-card\""));
+    }
+
+    #[test]
+    fn test_summary_stats_rendering() {
+        let summary = ScanSummary {
+            total_files: 1234,
+            total_size: 1024 * 1024 * 10, // 10 MiB
+            duplicate_groups: 50,
+            duplicate_files: 100,
+            reclaimable_space: 1024 * 1024 * 5, // 5 MiB
+            scan_duration: Duration::from_secs(42),
+            ..Default::default()
+        };
+
+        let output = HtmlOutput::new(&[], &summary);
+        let html = output.to_html().expect("Failed to render HTML");
+
+        assert!(html.contains("1234 files"));
+        assert!(html.contains("10.5") || html.contains("10.0")); // 10 MiB vs 10 MB
+        assert!(html.contains("50")); // duplicate groups
+        assert!(html.contains("5.2") || html.contains("5.0")); // reclaimable
+    }
+
+    #[test]
+    fn test_reference_badge_rendering() {
+        let now = SystemTime::now();
+        let ref_path = PathBuf::from("/ref/original.jpg");
+        let groups = vec![DuplicateGroup::new(
+            [0u8; 32],
+            1024,
+            vec![
+                FileEntry::new(ref_path.clone(), 1024, now),
+                FileEntry::new(PathBuf::from("/tmp/dupe.jpg"), 1024, now),
+            ],
+            vec![ref_path],
+        )];
+        let summary = ScanSummary::default();
+
+        let output = HtmlOutput::new(&groups, &summary);
+        let html = output.to_html().expect("Failed to render HTML");
+
+        assert!(html.contains("badge-ref"));
+        assert!(html.contains("Reference"));
+    }
 }
