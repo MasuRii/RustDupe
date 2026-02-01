@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Persistent Hash Caching: SQLite-backed cache for skipping unchanged files during rescans.
+- Session Management: Save/load duplicate reviews with SHA256 integrity verification.
+- Reference Directories: Protected path support to prevent deletion of original source files.
+- Advanced Filtering: New flags for modification date ranges, regex patterns, and file type categories (images, videos, etc.).
+- HTML Report Export: Self-contained, responsive HTML reports with dark mode support.
+- Shell Script Generation: Safety-first POSIX and PowerShell scripts for reviewing and executing deletions.
+- TUI Batch Selection: New operations to select all duplicates, oldest/newest files, and folder-based selection.
+- Dry-run Mode: `--dry-run` and `--analyze-only` flags for safe, read-only analysis.
+- TUI Theming: Support for Light, Dark, and Auto themes with runtime switching ('t' key).
+- Improved CLI Help: Grouped options into logical categories and added descriptive examples.
+- Comprehensive module and item documentation for all new features.
+- Additional integration tests for sessions, caching, and cross-platform path edge cases.
+
+### Changed
+- Refactored `DuplicateGroup` to store `FileEntry` objects for metadata-aware batch operations.
+- Updated session format to version 2 to support enhanced data structures.
+- Improved path handling to be more robust against special characters and long paths.
+
 ## [0.1.0] - 2026-02-01
 
 ### Added
