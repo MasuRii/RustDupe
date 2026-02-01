@@ -85,6 +85,9 @@ serde_json = "1"
 csv = "1"
 chrono = "0.4"
 
+# Templating for HTML reports
+askama = "0.12"
+
 [build-dependencies]
 # Windows manifest embedding for long path support (>260 chars)
 embed-resource = "2"
