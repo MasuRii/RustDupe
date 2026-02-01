@@ -70,6 +70,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     match app.mode() {
         AppMode::Previewing => render_preview_dialog(frame, app, area),
         AppMode::Confirming => render_confirm_dialog(frame, app, area),
+        AppMode::SelectingFolder => render_folder_selection_dialog(frame, app, area),
         _ => {}
     }
 }
@@ -81,6 +82,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         AppMode::Reviewing => "rustdupe - Smart Duplicate Finder",
         AppMode::Previewing => "rustdupe - Smart Duplicate Finder [Preview]",
         AppMode::Confirming => "rustdupe - Smart Duplicate Finder [Confirm Delete]",
+        AppMode::SelectingFolder => "rustdupe - Smart Duplicate Finder [Select Folder]",
         AppMode::Quitting => "rustdupe - Goodbye!",
     };
 
@@ -123,9 +125,10 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
 fn render_content(frame: &mut Frame, app: &App, area: Rect) {
     match app.mode() {
         AppMode::Scanning => render_scanning_content(frame, app, area),
-        AppMode::Reviewing | AppMode::Previewing | AppMode::Confirming => {
-            render_reviewing_content(frame, app, area)
-        }
+        AppMode::Reviewing
+        | AppMode::Previewing
+        | AppMode::Confirming
+        | AppMode::SelectingFolder => render_reviewing_content(frame, app, area),
         AppMode::Quitting => render_quitting_content(frame, area),
     }
 }
@@ -136,17 +139,24 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         AppMode::Scanning => vec![("q", "Quit"), ("", "Press Ctrl+C to cancel scan")],
         AppMode::Reviewing => vec![
             ("j/k", "Nav"),
-            ("J/K", "Group"),
+            ("J/K", "Grp"),
             ("Space", "Sel"),
-            ("a/A", "Group/All"),
-            ("o/n", "Old/New"),
+            ("a/A", "All"),
+            ("o/n", "Age"),
+            ("f", "Dir"),
             ("s/l", "Size"),
             ("d", "Del"),
-            ("p", "Prev"),
+            ("p", "Prv"),
             ("q", "Quit"),
         ],
         AppMode::Previewing => vec![("Esc", "Close"), ("q", "Quit")],
         AppMode::Confirming => vec![("Enter", "Confirm"), ("Esc", "Cancel")],
+        AppMode::SelectingFolder => vec![
+            ("j/k", "Nav"),
+            ("Enter", "Select"),
+            ("Esc", "Cancel"),
+            ("q", "Quit"),
+        ],
         AppMode::Quitting => vec![],
     };
 
@@ -578,6 +588,47 @@ fn render_confirm_dialog(frame: &mut Frame, app: &App, area: Rect) {
         );
 
     frame.render_widget(confirm, dialog_area);
+}
+
+/// Render folder selection dialog.
+fn render_folder_selection_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let dialog_area = centered_rect(70, 60, area);
+    frame.render_widget(Clear, dialog_area);
+
+    let folders = app.folder_list();
+    let selected_idx = app.folder_index();
+
+    let items: Vec<ListItem> = folders
+        .iter()
+        .enumerate()
+        .map(|(i, folder)| {
+            let style = if i == selected_idx {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            ListItem::new(folder.to_string_lossy().to_string()).style(style)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Select Folder to Mark All Duplicates")
+                .border_style(Style::default().fg(Color::Cyan)),
+        )
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    frame.render_widget(list, dialog_area);
 }
 
 /// Render error dialog.

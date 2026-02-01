@@ -209,6 +209,8 @@ impl EventHandler {
 
             // Actions
             (KeyCode::Char('p'), KeyModifiers::NONE) => Some(Action::Preview),
+            (KeyCode::Char('f'), KeyModifiers::NONE) => Some(Action::SelectFolder),
+            (KeyCode::Char('F'), KeyModifiers::SHIFT) => Some(Action::SelectFolder),
             (KeyCode::Char('d'), KeyModifiers::NONE) => Some(Action::Delete),
 
             // Quit

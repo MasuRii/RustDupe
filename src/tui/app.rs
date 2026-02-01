@@ -66,6 +66,8 @@ pub enum AppMode {
     Previewing,
     /// Confirming a deletion operation
     Confirming,
+    /// Selecting a folder for batch selection
+    SelectingFolder,
     /// Application is quitting
     Quitting,
 }
@@ -74,7 +76,7 @@ impl AppMode {
     /// Check if the application is in a navigable state.
     #[must_use]
     pub fn is_navigable(&self) -> bool {
-        matches!(self, Self::Reviewing)
+        matches!(self, Self::Reviewing | Self::SelectingFolder)
     }
 
     /// Check if the application is done (quitting).
@@ -116,6 +118,8 @@ pub enum Action {
     DeselectAll,
     /// Preview the selected file
     Preview,
+    /// Enter folder selection mode
+    SelectFolder,
     /// Delete selected files (to trash)
     Delete,
     /// Confirm current action
@@ -202,6 +206,10 @@ pub struct App {
     error_message: Option<String>,
     /// Preview content (for Previewing mode)
     preview_content: Option<String>,
+    /// Folder list for selection mode
+    folder_list: Vec<PathBuf>,
+    /// Currently selected folder index
+    folder_index: usize,
     /// Protected reference paths
     reference_paths: Vec<PathBuf>,
     /// Total reclaimable space in bytes
@@ -240,6 +248,8 @@ impl App {
             scan_progress: ScanProgress::new(),
             error_message: None,
             preview_content: None,
+            folder_list: Vec::new(),
+            folder_index: 0,
             reference_paths: Vec::new(),
             reclaimable_space: 0,
             visible_rows: 20, // Default, will be updated by UI
@@ -303,6 +313,8 @@ impl App {
             scan_progress: ScanProgress::new(),
             error_message: None,
             preview_content: None,
+            folder_list: Vec::new(),
+            folder_index: 0,
             reference_paths: Vec::new(),
             reclaimable_space: reclaimable,
             visible_rows: 20,
@@ -483,27 +495,50 @@ impl App {
             return;
         }
 
-        if let Some(group) = self.current_group() {
-            if self.file_index + 1 < group.files.len() {
-                self.file_index += 1;
-                self.update_file_scroll();
-                log::trace!("Navigate next: file_index = {}", self.file_index);
+        match self.mode {
+            AppMode::Reviewing => {
+                if let Some(group) = self.current_group() {
+                    if self.file_index + 1 < group.files.len() {
+                        self.file_index += 1;
+                        self.update_file_scroll();
+                        log::trace!("Navigate next: file_index = {}", self.file_index);
+                    }
+                }
             }
+            AppMode::SelectingFolder => {
+                if self.folder_index + 1 < self.folder_list.len() {
+                    self.folder_index += 1;
+                    log::trace!("Navigate next folder: folder_index = {}", self.folder_index);
+                }
+            }
+            _ => {}
         }
     }
 
-    /// Navigate to the previous file in the current group.
-    ///
-    /// If at the start of the group, stays at the first file.
+    /// Navigate to the previous file or folder.
     pub fn previous(&mut self) {
         if !self.mode.is_navigable() || self.groups.is_empty() {
             return;
         }
 
-        if self.file_index > 0 {
-            self.file_index -= 1;
-            self.update_file_scroll();
-            log::trace!("Navigate previous: file_index = {}", self.file_index);
+        match self.mode {
+            AppMode::Reviewing => {
+                if self.file_index > 0 {
+                    self.file_index -= 1;
+                    self.update_file_scroll();
+                    log::trace!("Navigate previous: file_index = {}", self.file_index);
+                }
+            }
+            AppMode::SelectingFolder => {
+                if self.folder_index > 0 {
+                    self.folder_index -= 1;
+                    log::trace!(
+                        "Navigate previous folder: folder_index = {}",
+                        self.folder_index
+                    );
+                }
+            }
+            _ => {}
         }
     }
 
@@ -844,6 +879,85 @@ impl App {
         self.preview_content = None;
     }
 
+    // ==================== Folder Selection ====================
+
+    /// Get the list of folders in the current group.
+    #[must_use]
+    pub fn folder_list(&self) -> &[PathBuf] {
+        &self.folder_list
+    }
+
+    /// Get the currently selected folder index.
+    #[must_use]
+    pub fn folder_index(&self) -> usize {
+        self.folder_index
+    }
+
+    /// Enter folder selection mode for the current group.
+    pub fn enter_folder_selection(&mut self) {
+        if let Some(group) = self.current_group() {
+            let mut folders: Vec<PathBuf> = group
+                .files
+                .iter()
+                .filter_map(|f| f.path.parent().map(|p| p.to_path_buf()))
+                .collect();
+            folders.sort();
+            folders.dedup();
+            self.folder_list = folders;
+            self.folder_index = 0;
+            self.set_mode(AppMode::SelectingFolder);
+        }
+    }
+
+    /// Select all files in the current group that are within the selected folder.
+    pub fn select_by_folder(&mut self) {
+        let folder = match self.folder_list.get(self.folder_index) {
+            Some(f) => f.clone(),
+            None => {
+                self.set_mode(AppMode::Reviewing);
+                return;
+            }
+        };
+
+        let files_to_select: Vec<PathBuf> = if let Some(group) = self.current_group() {
+            // Ensure we don't select ALL files in the group
+            let in_folder_count = group
+                .files
+                .iter()
+                .filter(|f| f.path.starts_with(&folder))
+                .count();
+
+            if in_folder_count >= group.files.len() {
+                self.set_error("Cannot select all files in group - at least one must be preserved");
+                self.set_mode(AppMode::Reviewing);
+                return;
+            }
+
+            group
+                .files
+                .iter()
+                .filter(|f| f.path.starts_with(&folder) && !self.is_in_reference_dir(&f.path))
+                .map(|f| f.path.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let count = files_to_select.len();
+        for path in files_to_select {
+            self.selected_files.insert(path);
+        }
+
+        if count > 0 {
+            log::info!(
+                "Selected {} files in folder {} (skipping references)",
+                count,
+                folder.display()
+            );
+        }
+        self.set_mode(AppMode::Reviewing);
+    }
+
     // ==================== Action Handling ====================
 
     /// Handle a user action and update state accordingly.
@@ -918,6 +1032,14 @@ impl App {
                     false
                 }
             }
+            Action::SelectFolder => {
+                if self.mode == AppMode::Reviewing && self.current_group().is_some() {
+                    self.enter_folder_selection();
+                    true
+                } else {
+                    false
+                }
+            }
             Action::Delete => {
                 if self.mode == AppMode::Reviewing && self.has_selections() {
                     self.set_mode(AppMode::Confirming);
@@ -927,8 +1049,13 @@ impl App {
                 }
             }
             Action::Confirm => {
-                // Confirmation handling is done by the TUI main loop
-                true
+                if self.mode == AppMode::SelectingFolder {
+                    self.select_by_folder();
+                    true
+                } else {
+                    // Confirmation handling is done by the TUI main loop
+                    true
+                }
             }
             Action::Cancel => {
                 match self.mode {
@@ -937,6 +1064,9 @@ impl App {
                         self.set_mode(AppMode::Reviewing);
                     }
                     AppMode::Confirming => {
+                        self.set_mode(AppMode::Reviewing);
+                    }
+                    AppMode::SelectingFolder => {
                         self.set_mode(AppMode::Reviewing);
                     }
                     _ => {}
@@ -1084,6 +1214,49 @@ mod tests {
 
         app.next();
         assert_eq!(app.file_index(), 0); // Should not move
+    }
+
+    #[test]
+    fn test_folder_selection() {
+        let groups = vec![make_group(
+            100,
+            vec!["/dir1/a.txt", "/dir1/b.txt", "/dir2/c.txt"],
+        )];
+        let mut app = App::with_groups(groups);
+
+        app.enter_folder_selection();
+        assert_eq!(app.mode(), AppMode::SelectingFolder);
+        assert_eq!(app.folder_list().len(), 2);
+        assert!(app.folder_list().contains(&PathBuf::from("/dir1")));
+        assert!(app.folder_list().contains(&PathBuf::from("/dir2")));
+
+        // Navigate to /dir1
+        if app.folder_list()[0] != PathBuf::from("/dir1") {
+            app.next();
+        }
+        assert_eq!(
+            app.folder_list()[app.folder_index()],
+            PathBuf::from("/dir1")
+        );
+
+        app.select_by_folder();
+        assert_eq!(app.mode(), AppMode::Reviewing);
+        assert!(app.is_file_selected(&PathBuf::from("/dir1/a.txt")));
+        assert!(app.is_file_selected(&PathBuf::from("/dir1/b.txt")));
+        assert!(!app.is_file_selected(&PathBuf::from("/dir2/c.txt")));
+    }
+
+    #[test]
+    fn test_folder_selection_prevents_selecting_all() {
+        let groups = vec![make_group(100, vec!["/dir1/a.txt", "/dir1/b.txt"])];
+        let mut app = App::with_groups(groups);
+
+        app.enter_folder_selection();
+        app.select_by_folder();
+
+        // Should have set an error and NOT selected anything (or at least not all)
+        assert!(app.error_message().is_some());
+        assert_eq!(app.selected_count(), 0);
     }
 
     #[test]
