@@ -34,6 +34,7 @@
 //! assert_eq!(groups.len(), 1);  // Only one size group with multiple files
 //! ```
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::scanner::FileEntry;
@@ -124,11 +125,8 @@ impl SizeGroup {
     }
 }
 
-/// A confirmed group of duplicate files (same content hash).
-///
-/// Represents the final output of duplicate detection - files that are
-/// verified to have identical content.
-#[derive(Debug, Clone)]
+/// Confirmed duplicate group of files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DuplicateGroup {
     /// BLAKE3 hash of the file content (32 bytes)
     pub hash: [u8; 32],

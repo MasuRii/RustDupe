@@ -6,4 +6,4 @@
 pub mod data;
 pub mod io;
 
-pub use data::Session;
+pub use data::{Session, SessionGroup, SessionSettings, SESSION_VERSION};

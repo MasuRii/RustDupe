@@ -40,6 +40,7 @@ pub mod hasher;
 pub mod path_utils;
 pub mod walker;
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -56,7 +57,7 @@ pub use walker::Walker;
 ///
 /// Contains all information needed for duplicate detection,
 /// including path, size, modification time, and link status.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
     /// Absolute path to the file
     pub path: PathBuf,
