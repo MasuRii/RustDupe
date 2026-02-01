@@ -246,4 +246,117 @@ mod tests {
             .to_string()
             .contains("Unsupported session version"));
     }
+
+    #[test]
+    fn test_session_to_results() {
+        let now = std::time::SystemTime::now();
+        let groups = vec![SessionGroup {
+            id: 1,
+            hash: [1u8; 32],
+            size: 100,
+            files: vec![
+                crate::scanner::FileEntry::new("/tmp/a.txt".into(), 100, now),
+                crate::scanner::FileEntry::new("/tmp/b.txt".into(), 100, now),
+            ],
+            reference_paths: Vec::new(),
+        }];
+        let session = Session::new(vec!["/tmp".into()], SessionSettings::default(), groups);
+
+        let (dup_groups, summary) = session.to_results();
+        assert_eq!(dup_groups.len(), 1);
+        assert_eq!(dup_groups[0].hash, [1u8; 32]);
+        assert_eq!(dup_groups[0].files.len(), 2);
+        assert_eq!(summary.duplicate_groups, 1);
+        assert_eq!(summary.duplicate_files, 1);
+        assert_eq!(summary.reclaimable_space, 100);
+        assert_eq!(summary.total_files, 2);
+        assert_eq!(summary.total_size, 200);
+    }
+
+    #[test]
+    fn test_large_session() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("large_session.json");
+        let now = std::time::SystemTime::now();
+
+        let mut groups = Vec::new();
+        for i in 0..1005 {
+            groups.push(SessionGroup {
+                id: i,
+                hash: [(i % 256) as u8; 32],
+                size: 100,
+                files: vec![
+                    crate::scanner::FileEntry::new(format!("/tmp/a_{}.txt", i).into(), 100, now),
+                    crate::scanner::FileEntry::new(format!("/tmp/b_{}.txt", i).into(), 100, now),
+                ],
+                reference_paths: Vec::new(),
+            });
+        }
+
+        let session = Session::new(vec!["/tmp".into()], SessionSettings::default(), groups);
+        session.save(&path).unwrap();
+
+        let loaded = Session::load(&path).unwrap();
+        assert_eq!(loaded.groups.len(), 1005);
+    }
+
+    #[test]
+    fn test_session_load_invalid_json() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("invalid.json");
+        std::fs::write(&path, "{ invalid json }").unwrap();
+
+        let result = Session::load(&path);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to parse session envelope"));
+    }
+
+    #[test]
+    fn test_session_load_missing_files_warning() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let now = std::time::SystemTime::now();
+
+        let groups = vec![SessionGroup {
+            id: 1,
+            hash: [1u8; 32],
+            size: 100,
+            files: vec![crate::scanner::FileEntry::new(
+                "/tmp/non_existent_file_xyz.txt".into(),
+                100,
+                now,
+            )],
+            reference_paths: Vec::new(),
+        }];
+        let session = Session::new(vec!["/tmp".into()], SessionSettings::default(), groups);
+        session.save(&path).unwrap();
+
+        // This should not fail, but it will log a warning
+        let loaded = Session::load(&path).unwrap();
+        assert_eq!(loaded.groups.len(), 1);
+    }
+
+    #[test]
+    fn test_session_settings_serialization() {
+        let mut settings = SessionSettings::default();
+        settings.follow_symlinks = true;
+        settings.skip_hidden = true;
+        settings.min_size = Some(1024);
+        settings.regex_include = vec!["\\.jpg$".to_string()];
+        settings.file_categories = vec![crate::scanner::FileCategory::Images];
+
+        let session = Session::new(vec!["/tmp".into()], settings, vec![]);
+        let json = session.to_json().unwrap();
+
+        assert!(json.contains("\"follow_symlinks\": true"));
+        assert!(json.contains("\"skip_hidden\": true"));
+        assert!(json.contains("\"min_size\": 1024"));
+        assert!(json.contains("\"regex_include\": ["));
+        assert!(json.contains("\\.jpg$"));
+        assert!(json.contains("\"file_categories\": ["));
+        assert!(json.contains("\"Images\""));
+    }
 }
