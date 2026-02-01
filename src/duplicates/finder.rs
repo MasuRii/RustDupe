@@ -36,6 +36,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
+use crate::cache::{CacheEntry, HashCache};
 use crate::scanner::{FileEntry, Hash, Hasher};
 
 /// Configuration for prehash phase.
@@ -44,6 +45,8 @@ pub struct PrehashConfig {
     /// Number of I/O threads for parallel hashing.
     /// Default is 4 to prevent disk thrashing.
     pub io_threads: usize,
+    /// Optional hash cache for faster rescans.
+    pub cache: Option<Arc<HashCache>>,
     /// Optional shutdown flag for graceful termination.
     pub shutdown_flag: Option<Arc<AtomicBool>>,
     /// Optional progress callback.
@@ -54,6 +57,7 @@ impl std::fmt::Debug for PrehashConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PrehashConfig")
             .field("io_threads", &self.io_threads)
+            .field("cache", &self.cache.as_ref().map(|_| "<cache>"))
             .field("shutdown_flag", &self.shutdown_flag)
             .field(
                 "progress_callback",
@@ -67,6 +71,7 @@ impl Default for PrehashConfig {
     fn default() -> Self {
         Self {
             io_threads: 4,
+            cache: None,
             shutdown_flag: None,
             progress_callback: None,
         }
@@ -78,6 +83,13 @@ impl PrehashConfig {
     #[must_use]
     pub fn with_io_threads(mut self, threads: usize) -> Self {
         self.io_threads = threads.max(1);
+        self
+    }
+
+    /// Set the hash cache.
+    #[must_use]
+    pub fn with_cache(mut self, cache: Arc<HashCache>) -> Self {
+        self.cache = Some(cache);
         self
     }
 
@@ -150,6 +162,10 @@ pub struct PrehashStats {
     pub hashed_files: usize,
     /// Number of files that failed to hash (I/O errors)
     pub failed_files: usize,
+    /// Number of cache hits for prehashes
+    pub cache_hits: usize,
+    /// Number of cache misses for prehashes
+    pub cache_misses: usize,
     /// Number of unique prehashes (eliminated)
     pub unique_prehashes: usize,
     /// Number of files that could still be duplicates
@@ -265,7 +281,7 @@ pub fn phase2_prehash(
         });
 
     // Compute prehashes in parallel with limited I/O parallelism
-    let prehash_results: Vec<(FileEntry, Option<Hash>)> = pool.install(|| {
+    let prehash_results: Vec<(FileEntry, Option<Hash>, bool)> = pool.install(|| {
         all_files
             .into_par_iter()
             .enumerate()
@@ -273,7 +289,7 @@ pub fn phase2_prehash(
                 // Check shutdown flag
                 if config.is_shutdown_requested() {
                     log::debug!("Phase 2: Shutdown requested, skipping remaining files");
-                    return (file, None);
+                    return (file, None, false);
                 }
 
                 // Report progress
@@ -281,15 +297,44 @@ pub fn phase2_prehash(
                     callback.on_progress(idx + 1, file.path.to_string_lossy().as_ref());
                 }
 
+                // Check cache first
+                if let Some(ref cache) = config.cache {
+                    match cache.get_prehash(&file.path, file.size, file.modified) {
+                        Ok(Some(hash)) => {
+                            log::trace!("Prehash cache hit: {}", file.path.display());
+                            return (file, Some(hash), true);
+                        }
+                        Ok(None) => {
+                            log::trace!("Prehash cache miss: {}", file.path.display());
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to query cache for {}: {}", file.path.display(), e);
+                        }
+                    }
+                }
+
                 // Compute prehash
                 match hasher.prehash(&file.path) {
                     Ok(hash) => {
                         log::trace!("Prehash computed: {}", file.path.display());
-                        (file, Some(hash))
+
+                        // Update cache
+                        if let Some(ref cache) = config.cache {
+                            let entry = CacheEntry::from(file.clone());
+                            if let Err(e) = cache.insert_prehash(&entry, hash) {
+                                log::warn!(
+                                    "Failed to update cache for {}: {}",
+                                    file.path.display(),
+                                    e
+                                );
+                            }
+                        }
+
+                        (file, Some(hash), false)
                     }
                     Err(e) => {
                         log::warn!("Failed to prehash {}: {}", file.path.display(), e);
-                        (file, None)
+                        (file, None, false)
                     }
                 }
             })
@@ -305,10 +350,15 @@ pub fn phase2_prehash(
     // Group by prehash
     let mut prehash_groups: HashMap<Hash, Vec<FileEntry>> = HashMap::new();
 
-    for (file, prehash_opt) in prehash_results {
+    for (file, prehash_opt, is_hit) in prehash_results {
         match prehash_opt {
             Some(prehash) => {
                 stats.hashed_files += 1;
+                if is_hit {
+                    stats.cache_hits += 1;
+                } else {
+                    stats.cache_misses += 1;
+                }
                 prehash_groups.entry(prehash).or_default().push(file);
             }
             None => {
@@ -399,8 +449,24 @@ pub fn compute_prehashes(
                     return None;
                 }
 
+                // Check cache first
+                if let Some(ref cache) = config.cache {
+                    if let Ok(Some(prehash)) =
+                        cache.get_prehash(&file.path, file.size, file.modified)
+                    {
+                        return Some(PrehashEntry { file, prehash });
+                    }
+                }
+
                 match hasher.prehash(&file.path) {
-                    Ok(prehash) => Some(PrehashEntry { file, prehash }),
+                    Ok(prehash) => {
+                        // Update cache
+                        if let Some(ref cache) = config.cache {
+                            let entry = CacheEntry::from(file.clone());
+                            let _ = cache.insert_prehash(&entry, prehash);
+                        }
+                        Some(PrehashEntry { file, prehash })
+                    }
                     Err(e) => {
                         log::warn!("Failed to prehash {}: {}", file.path.display(), e);
                         None
@@ -440,6 +506,8 @@ pub struct FullhashConfig {
     /// Number of I/O threads for parallel hashing.
     /// Default is 4 to prevent disk thrashing.
     pub io_threads: usize,
+    /// Optional hash cache for faster rescans.
+    pub cache: Option<Arc<HashCache>>,
     /// Optional shutdown flag for graceful termination.
     pub shutdown_flag: Option<Arc<AtomicBool>>,
     /// Optional progress callback.
@@ -450,6 +518,7 @@ impl std::fmt::Debug for FullhashConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FullhashConfig")
             .field("io_threads", &self.io_threads)
+            .field("cache", &self.cache.as_ref().map(|_| "<cache>"))
             .field("shutdown_flag", &self.shutdown_flag)
             .field(
                 "progress_callback",
@@ -463,6 +532,7 @@ impl Default for FullhashConfig {
     fn default() -> Self {
         Self {
             io_threads: 4,
+            cache: None,
             shutdown_flag: None,
             progress_callback: None,
         }
@@ -474,6 +544,13 @@ impl FullhashConfig {
     #[must_use]
     pub fn with_io_threads(mut self, threads: usize) -> Self {
         self.io_threads = threads.max(1);
+        self
+    }
+
+    /// Set the hash cache.
+    #[must_use]
+    pub fn with_cache(mut self, cache: Arc<HashCache>) -> Self {
+        self.cache = Some(cache);
         self
     }
 
@@ -508,6 +585,10 @@ pub struct FullhashStats {
     pub hashed_files: usize,
     /// Number of files that failed to hash (I/O errors)
     pub failed_files: usize,
+    /// Number of cache hits for full hashes
+    pub cache_hits: usize,
+    /// Number of cache misses for full hashes
+    pub cache_misses: usize,
     /// Total bytes hashed across all files
     pub bytes_hashed: u64,
     /// Number of confirmed duplicate groups
@@ -584,8 +665,11 @@ pub fn phase3_fullhash(
         ..Default::default()
     };
 
-    // Flatten all files from prehash groups
-    let all_files: Vec<FileEntry> = prehash_groups.into_values().flatten().collect();
+    // Flatten all files from prehash groups, preserving the prehash
+    let all_files: Vec<(FileEntry, Hash)> = prehash_groups
+        .into_iter()
+        .flat_map(|(hash, files)| files.into_iter().map(move |f| (f, hash)))
+        .collect();
 
     if all_files.is_empty() {
         log::debug!("Phase 3: No files to process");
@@ -615,15 +699,15 @@ pub fn phase3_fullhash(
         });
 
     // Compute full hashes in parallel with limited I/O parallelism
-    let hash_results: Vec<(FileEntry, Option<Hash>)> = pool.install(|| {
+    let hash_results: Vec<(FileEntry, Option<Hash>, bool)> = pool.install(|| {
         all_files
             .into_par_iter()
             .enumerate()
-            .map(|(idx, file)| {
+            .map(|(idx, (file, prehash))| {
                 // Check shutdown flag
                 if config.is_shutdown_requested() {
                     log::debug!("Phase 3: Shutdown requested, skipping remaining files");
-                    return (file, None);
+                    return (file, None, false);
                 }
 
                 // Log large files for visibility
@@ -640,6 +724,22 @@ pub fn phase3_fullhash(
                     callback.on_progress(idx + 1, file.path.to_string_lossy().as_ref());
                 }
 
+                // Check cache first
+                if let Some(ref cache) = config.cache {
+                    match cache.get_fullhash(&file.path, file.size, file.modified) {
+                        Ok(Some(hash)) => {
+                            log::trace!("Full hash cache hit: {}", file.path.display());
+                            return (file, Some(hash), true);
+                        }
+                        Ok(None) => {
+                            log::trace!("Full hash cache miss: {}", file.path.display());
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to query cache for {}: {}", file.path.display(), e);
+                        }
+                    }
+                }
+
                 // Compute full hash
                 match hasher.full_hash(&file.path) {
                     Ok(hash) => {
@@ -647,11 +747,25 @@ pub fn phase3_fullhash(
                         if let Some(ref callback) = config.progress_callback {
                             callback.on_item_completed(file.size);
                         }
-                        (file, Some(hash))
+
+                        // Update cache
+                        if let Some(ref cache) = config.cache {
+                            let mut entry = CacheEntry::from(file.clone());
+                            entry.prehash = prehash;
+                            if let Err(e) = cache.insert_fullhash(&entry, hash) {
+                                log::warn!(
+                                    "Failed to update cache for {}: {}",
+                                    file.path.display(),
+                                    e
+                                );
+                            }
+                        }
+
+                        (file, Some(hash), false)
                     }
                     Err(e) => {
                         log::warn!("Failed to hash {}: {}", file.path.display(), e);
-                        (file, None)
+                        (file, None, false)
                     }
                 }
             })
@@ -667,11 +781,16 @@ pub fn phase3_fullhash(
     // Group by full hash
     let mut fullhash_groups: HashMap<Hash, Vec<FileEntry>> = HashMap::new();
 
-    for (file, fullhash_opt) in hash_results {
+    for (file, fullhash_opt, is_hit) in hash_results {
         match fullhash_opt {
             Some(fullhash) => {
                 stats.hashed_files += 1;
                 stats.bytes_hashed += file.size;
+                if is_hit {
+                    stats.cache_hits += 1;
+                } else {
+                    stats.cache_misses += 1;
+                }
                 fullhash_groups.entry(fullhash).or_default().push(file);
             }
             None => {
@@ -727,6 +846,8 @@ pub struct FinderConfig {
     /// Number of I/O threads for parallel hashing.
     /// Default is 4 to prevent disk thrashing.
     pub io_threads: usize,
+    /// Optional hash cache for faster rescans.
+    pub cache: Option<Arc<HashCache>>,
     /// Enable byte-by-byte verification after hash matching (paranoid mode).
     pub paranoid: bool,
     /// Walker configuration for directory traversal.
@@ -741,6 +862,7 @@ impl std::fmt::Debug for FinderConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FinderConfig")
             .field("io_threads", &self.io_threads)
+            .field("cache", &self.cache.as_ref().map(|_| "<cache>"))
             .field("paranoid", &self.paranoid)
             .field("walker_config", &self.walker_config)
             .field("shutdown_flag", &self.shutdown_flag)
@@ -756,6 +878,7 @@ impl Default for FinderConfig {
     fn default() -> Self {
         Self {
             io_threads: 4,
+            cache: None,
             paranoid: false,
             walker_config: crate::scanner::WalkerConfig::default(),
             shutdown_flag: None,
@@ -769,6 +892,13 @@ impl FinderConfig {
     #[must_use]
     pub fn with_io_threads(mut self, threads: usize) -> Self {
         self.io_threads = threads.max(1);
+        self
+    }
+
+    /// Set the hash cache.
+    #[must_use]
+    pub fn with_cache(mut self, cache: Arc<HashCache>) -> Self {
+        self.cache = Some(cache);
         self
     }
 
@@ -822,6 +952,14 @@ pub struct ScanSummary {
     pub eliminated_by_size: usize,
     /// Number of files eliminated by prehash (different first 4KB)
     pub eliminated_by_prehash: usize,
+    /// Number of cache hits for prehashes
+    pub cache_prehash_hits: usize,
+    /// Number of cache misses for prehashes
+    pub cache_prehash_misses: usize,
+    /// Number of cache hits for full hashes
+    pub cache_fullhash_hits: usize,
+    /// Number of cache misses for full hashes
+    pub cache_fullhash_misses: usize,
     /// Number of confirmed duplicate groups
     pub duplicate_groups: usize,
     /// Total number of duplicate files (excluding originals)
@@ -1077,6 +1215,7 @@ impl DuplicateFinder {
         log::info!("Phase 2: Computing prehashes...");
         let prehash_config = PrehashConfig {
             io_threads: self.config.io_threads,
+            cache: self.config.cache.clone(),
             shutdown_flag: self.config.shutdown_flag.clone(),
             progress_callback: self.config.progress_callback.clone(),
         };
@@ -1085,29 +1224,22 @@ impl DuplicateFinder {
             phase2_prehash(size_groups, self.hasher.clone(), prehash_config);
 
         summary.eliminated_by_prehash = prehash_stats.unique_prehashes;
+        summary.cache_prehash_hits = prehash_stats.cache_hits;
+        summary.cache_prehash_misses = prehash_stats.cache_misses;
 
-        log::info!(
-            "Phase 2 complete: {} → {} files ({:.1}% eliminated)",
-            prehash_stats.input_files,
-            prehash_stats.potential_duplicates,
-            prehash_stats.elimination_rate()
-        );
-
-        // Check for shutdown after Phase 2
         if prehash_stats.interrupted || self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
         }
 
         if prehash_groups.is_empty() {
-            log::info!("No potential duplicates found after prehash comparison");
             summary.scan_duration = start_time.elapsed();
             return Ok((Vec::new(), summary));
         }
 
         // Phase 3: Full hash comparison
-        log::info!("Phase 3: Computing full hashes...");
         let fullhash_config = FullhashConfig {
             io_threads: self.config.io_threads,
+            cache: self.config.cache.clone(),
             shutdown_flag: self.config.shutdown_flag.clone(),
             progress_callback: self.config.progress_callback.clone(),
         };
@@ -1115,28 +1247,25 @@ impl DuplicateFinder {
         let (duplicate_groups, fullhash_stats) =
             phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config);
 
-        // Check for shutdown after Phase 3
         if fullhash_stats.interrupted || self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
         }
 
-        // Update summary with final results
+        // Update summary
         summary.duplicate_groups = fullhash_stats.duplicate_groups;
         summary.duplicate_files = fullhash_stats.duplicate_files;
         summary.reclaimable_space = fullhash_stats.wasted_space;
+        summary.cache_fullhash_hits = fullhash_stats.cache_hits;
+        summary.cache_fullhash_misses = fullhash_stats.cache_misses;
         summary.scan_duration = start_time.elapsed();
 
         log::info!(
-            "Scan complete: {} duplicate groups, {} duplicate files, {} reclaimable",
+            "Scan complete: {} duplicate groups, {} duplicate files, {} reclaimable, {} cache hits",
             summary.duplicate_groups,
             summary.duplicate_files,
-            summary.reclaimable_display()
+            summary.reclaimable_display(),
+            summary.cache_prehash_hits + summary.cache_fullhash_hits
         );
-
-        // TODO: Phase 4 - Paranoid mode (byte-by-byte verification)
-        if self.config.paranoid && !duplicate_groups.is_empty() {
-            log::warn!("Paranoid mode not yet implemented - skipping byte verification");
-        }
 
         Ok((duplicate_groups, summary))
     }
@@ -1201,6 +1330,7 @@ impl DuplicateFinder {
         // Phase 2: Prehash comparison
         let prehash_config = PrehashConfig {
             io_threads: self.config.io_threads,
+            cache: self.config.cache.clone(),
             shutdown_flag: self.config.shutdown_flag.clone(),
             progress_callback: self.config.progress_callback.clone(),
         };
@@ -1209,6 +1339,8 @@ impl DuplicateFinder {
             phase2_prehash(size_groups, self.hasher.clone(), prehash_config);
 
         summary.eliminated_by_prehash = prehash_stats.unique_prehashes;
+        summary.cache_prehash_hits = prehash_stats.cache_hits;
+        summary.cache_prehash_misses = prehash_stats.cache_misses;
 
         if prehash_stats.interrupted || self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
@@ -1222,6 +1354,7 @@ impl DuplicateFinder {
         // Phase 3: Full hash comparison
         let fullhash_config = FullhashConfig {
             io_threads: self.config.io_threads,
+            cache: self.config.cache.clone(),
             shutdown_flag: self.config.shutdown_flag.clone(),
             progress_callback: self.config.progress_callback.clone(),
         };
@@ -1237,6 +1370,8 @@ impl DuplicateFinder {
         summary.duplicate_groups = fullhash_stats.duplicate_groups;
         summary.duplicate_files = fullhash_stats.duplicate_files;
         summary.reclaimable_space = fullhash_stats.wasted_space;
+        summary.cache_fullhash_hits = fullhash_stats.cache_hits;
+        summary.cache_fullhash_misses = fullhash_stats.cache_misses;
         summary.scan_duration = start_time.elapsed();
 
         Ok((duplicate_groups, summary))
@@ -1295,6 +1430,8 @@ mod tests {
             input_files: 100,
             hashed_files: 100,
             failed_files: 0,
+            cache_hits: 0,
+            cache_misses: 100,
             unique_prehashes: 80,
             potential_duplicates: 20,
             duplicate_groups: 5,
