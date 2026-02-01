@@ -84,5 +84,14 @@ criterion/
 # Documentation generation (use 'cargo doc' instead)
 /doc/
 
+# RustDupe - User scan results and cache (prevent accidental commit of data)
+*.db
+*.db-journal
+*.db-wal
+session.json
+report.html
+delete.sh
+delete.ps1
+
 # Core dumps
 core
