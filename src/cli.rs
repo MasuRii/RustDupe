@@ -169,6 +169,10 @@ pub struct ScanArgs {
     #[arg(long)]
     pub clear_cache: bool,
 
+    /// Do not perform any deletions (read-only mode)
+    #[arg(long, alias = "analyze-only")]
+    pub dry_run: bool,
+
     /// Reference directories (files here are never selected for deletion)
     ///
     /// Can be specified multiple times. Files in these directories will be
@@ -195,6 +199,10 @@ pub struct LoadArgs {
     /// Type of deletion script to generate
     #[arg(long, value_enum, value_name = "TYPE")]
     pub script_type: Option<ScriptTypeArg>,
+
+    /// Do not perform any deletions (read-only mode)
+    #[arg(long, alias = "analyze-only")]
+    pub dry_run: bool,
 }
 
 /// Output format for scan results.
@@ -618,6 +626,7 @@ mod tests {
             "/ref1",
             "--reference",
             "/ref2",
+            "--dry-run",
         ])
         .unwrap();
 
@@ -629,6 +638,15 @@ mod tests {
                     args.reference_paths,
                     vec![PathBuf::from("/ref1"), PathBuf::from("/ref2")]
                 );
+                assert!(args.dry_run);
+            }
+            _ => panic!("Expected Scan command"),
+        }
+
+        let cli = Cli::try_parse_from(["rustdupe", "scan", "/path", "--analyze-only"]).unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert!(args.dry_run);
             }
             _ => panic!("Expected Scan command"),
         }

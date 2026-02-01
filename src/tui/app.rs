@@ -216,6 +216,8 @@ pub struct App {
     reclaimable_space: u64,
     /// Number of visible rows in the UI (for scroll calculation)
     visible_rows: usize,
+    /// Dry-run mode active (no deletions allowed)
+    dry_run: bool,
 }
 
 impl Default for App {
@@ -253,7 +255,20 @@ impl App {
             reference_paths: Vec::new(),
             reclaimable_space: 0,
             visible_rows: 20, // Default, will be updated by UI
+            dry_run: false,
         }
+    }
+
+    /// Set dry-run mode for the application.
+    pub fn with_dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
+    }
+
+    /// Check if dry-run mode is active.
+    #[must_use]
+    pub fn is_dry_run(&self) -> bool {
+        self.dry_run
     }
 
     /// Set reference paths for the application.
@@ -318,6 +333,7 @@ impl App {
             reference_paths: Vec::new(),
             reclaimable_space: reclaimable,
             visible_rows: 20,
+            dry_run: false,
         }
     }
 
@@ -1041,6 +1057,10 @@ impl App {
                 }
             }
             Action::Delete => {
+                if self.dry_run {
+                    self.set_error("Cannot delete files in dry-run mode");
+                    return true; // Action handled (but blocked)
+                }
                 if self.mode == AppMode::Reviewing && self.has_selections() {
                     self.set_mode(AppMode::Confirming);
                     true
@@ -1455,6 +1475,21 @@ mod tests {
 
         assert!(app.handle_action(Action::Quit));
         assert!(app.should_quit());
+    }
+
+    #[test]
+    fn test_dry_run_blocks_delete() {
+        let groups = vec![make_group(100, vec!["/a.txt", "/b.txt"])];
+        let mut app = App::with_groups(groups).with_dry_run(true);
+
+        app.toggle_select();
+        assert!(app.has_selections());
+
+        // Action::Delete should be blocked and return true (handled with error)
+        assert!(app.handle_action(Action::Delete));
+        assert_eq!(app.mode(), AppMode::Reviewing);
+        assert!(app.error_message().is_some());
+        assert!(app.error_message().unwrap().contains("dry-run"));
     }
 
     #[test]

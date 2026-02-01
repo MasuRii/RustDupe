@@ -234,6 +234,7 @@ fn handle_scan(
         shutdown_flag,
         initial_session: None,
         reference_paths,
+        dry_run: args.dry_run,
     })
 }
 
@@ -262,6 +263,7 @@ fn handle_load(
         shutdown_flag,
         initial_session: Some(session),
         reference_paths,
+        dry_run: args.dry_run,
     })
 }
 
@@ -277,6 +279,7 @@ struct ResultContext {
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
     initial_session: Option<Session>,
     reference_paths: Vec<std::path::PathBuf>,
+    dry_run: bool,
 }
 
 fn handle_results(ctx: ResultContext) -> Result<()> {
@@ -292,6 +295,7 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
         shutdown_flag,
         initial_session,
         reference_paths,
+        dry_run,
     } = ctx;
 
     // 1. Save session if requested (non-TUI only)
@@ -323,8 +327,9 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
     match output_format {
         OutputFormat::Tui => {
             // Initialize TUI with results
-            let mut app =
-                rustdupe::tui::App::with_groups(groups).with_reference_paths(reference_paths);
+            let mut app = rustdupe::tui::App::with_groups(groups)
+                .with_reference_paths(reference_paths)
+                .with_dry_run(dry_run);
             if let Some(session) = initial_session {
                 app.apply_session(
                     session.user_selections,

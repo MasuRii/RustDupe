@@ -77,13 +77,26 @@ pub fn render(frame: &mut Frame, app: &App) {
 
 /// Render the header with title and stats.
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
+    let dry_run_suffix = if app.is_dry_run() { " [DRY RUN]" } else { "" };
     let title = match app.mode() {
-        AppMode::Scanning => "rustdupe - Smart Duplicate Finder [Scanning...]",
-        AppMode::Reviewing => "rustdupe - Smart Duplicate Finder",
-        AppMode::Previewing => "rustdupe - Smart Duplicate Finder [Preview]",
-        AppMode::Confirming => "rustdupe - Smart Duplicate Finder [Confirm Delete]",
-        AppMode::SelectingFolder => "rustdupe - Smart Duplicate Finder [Select Folder]",
-        AppMode::Quitting => "rustdupe - Goodbye!",
+        AppMode::Scanning => format!(
+            "rustdupe - Smart Duplicate Finder{} [Scanning...]",
+            dry_run_suffix
+        ),
+        AppMode::Reviewing => format!("rustdupe - Smart Duplicate Finder{}", dry_run_suffix),
+        AppMode::Previewing => format!(
+            "rustdupe - Smart Duplicate Finder{} [Preview]",
+            dry_run_suffix
+        ),
+        AppMode::Confirming => format!(
+            "rustdupe - Smart Duplicate Finder{} [Confirm Delete]",
+            dry_run_suffix
+        ),
+        AppMode::SelectingFolder => format!(
+            "rustdupe - Smart Duplicate Finder{} [Select Folder]",
+            dry_run_suffix
+        ),
+        AppMode::Quitting => format!("rustdupe - Goodbye!{}", dry_run_suffix),
     };
 
     let stats = if app.has_groups() {
@@ -137,18 +150,23 @@ fn render_content(frame: &mut Frame, app: &App, area: Rect) {
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let commands = match app.mode() {
         AppMode::Scanning => vec![("q", "Quit"), ("", "Press Ctrl+C to cancel scan")],
-        AppMode::Reviewing => vec![
-            ("j/k", "Nav"),
-            ("J/K", "Grp"),
-            ("Space", "Sel"),
-            ("a/A", "All"),
-            ("o/n", "Age"),
-            ("f", "Dir"),
-            ("s/l", "Size"),
-            ("d", "Del"),
-            ("p", "Prv"),
-            ("q", "Quit"),
-        ],
+        AppMode::Reviewing => {
+            let mut cmds = vec![
+                ("j/k", "Nav"),
+                ("J/K", "Grp"),
+                ("Space", "Sel"),
+                ("a/A", "All"),
+                ("o/n", "Age"),
+                ("f", "Dir"),
+                ("s/l", "Size"),
+            ];
+            if !app.is_dry_run() {
+                cmds.push(("d", "Del"));
+            }
+            cmds.push(("p", "Prv"));
+            cmds.push(("q", "Quit"));
+            cmds
+        }
         AppMode::Previewing => vec![("Esc", "Close"), ("q", "Quit")],
         AppMode::Confirming => vec![("Enter", "Confirm"), ("Esc", "Cancel")],
         AppMode::SelectingFolder => vec![
