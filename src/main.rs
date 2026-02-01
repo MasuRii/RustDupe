@@ -10,6 +10,7 @@ use rustdupe::{
     duplicates::{DuplicateFinder, FinderConfig},
     logging, output,
     scanner::WalkerConfig,
+    session::{Session, SessionGroup, SessionSettings},
     signal,
 };
 use std::fs;
@@ -170,6 +171,47 @@ fn main() -> Result<()> {
                             let csv_output = output::CsvOutput::new(&groups);
                             let stdout = io::stdout().lock();
                             csv_output.write_to(stdout)?;
+                        }
+                        Err(e) => {
+                            anyhow::bail!("Scan failed: {}", e);
+                        }
+                    }
+                }
+                OutputFormat::Session => {
+                    log::info!("Starting session scan of {}", args.path.display());
+                    match finder.find_duplicates(&args.path) {
+                        Ok((groups, _summary)) => {
+                            let session_settings = SessionSettings {
+                                follow_symlinks: args.follow_symlinks,
+                                skip_hidden: args.skip_hidden,
+                                min_size: args.min_size,
+                                max_size: args.max_size,
+                                ignore_patterns: args.ignore_patterns.clone(),
+                                io_threads: args.io_threads,
+                                paranoid: args.paranoid,
+                            };
+
+                            let session_groups = groups
+                                .into_iter()
+                                .enumerate()
+                                .map(|(id, g)| SessionGroup {
+                                    id,
+                                    hash: g.hash,
+                                    size: g.size,
+                                    files: g.files,
+                                })
+                                .collect();
+
+                            let session = Session::new(
+                                vec![args.path.clone()],
+                                session_settings,
+                                session_groups,
+                            );
+
+                            let json = session.to_json()?;
+                            let mut stdout = io::stdout().lock();
+                            stdout.write_all(json.as_bytes())?;
+                            stdout.flush()?;
                         }
                         Err(e) => {
                             anyhow::bail!("Scan failed: {}", e);

@@ -63,7 +63,7 @@ pub struct ScanArgs {
     #[arg(value_name = "PATH")]
     pub path: PathBuf,
 
-    /// Output format (tui for interactive, json/csv for scripting)
+    /// Output format (tui for interactive, json/csv for scripting, session for persistence)
     #[arg(short, long, value_enum, default_value = "tui")]
     pub output: OutputFormat,
 
@@ -141,6 +141,8 @@ pub enum OutputFormat {
     Json,
     /// CSV output for spreadsheets
     Csv,
+    /// Session file format for persistence
+    Session,
 }
 
 impl std::fmt::Display for OutputFormat {
@@ -149,6 +151,7 @@ impl std::fmt::Display for OutputFormat {
             OutputFormat::Tui => write!(f, "tui"),
             OutputFormat::Json => write!(f, "json"),
             OutputFormat::Csv => write!(f, "csv"),
+            OutputFormat::Session => write!(f, "session"),
         }
     }
 }
