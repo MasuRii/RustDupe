@@ -209,3 +209,67 @@ fn test_scan_multiple_ignore_patterns() {
     assert_eq!(summary.total_files, 2);
     assert_eq!(groups.len(), 1);
 }
+
+#[test]
+fn test_scan_regex_filtering() {
+    use regex::Regex;
+    let dir = tempdir().unwrap();
+
+    File::create(dir.path().join("match_this.txt"))
+        .unwrap()
+        .write_all(b"dup")
+        .unwrap();
+    File::create(dir.path().join("ignore_this.txt"))
+        .unwrap()
+        .write_all(b"dup")
+        .unwrap();
+    File::create(dir.path().join("exclude_this.txt"))
+        .unwrap()
+        .write_all(b"dup")
+        .unwrap();
+
+    // Include only files starting with "match" or "ignore"
+    // But then exclude files containing "ignore"
+    let walker_config = WalkerConfig::default()
+        .with_regex_include(vec![Regex::new("^(match|ignore)").unwrap()])
+        .with_regex_exclude(vec![Regex::new("ignore").unwrap()]);
+    let finder_config = FinderConfig::default().with_walker_config(walker_config);
+    let finder = DuplicateFinder::new(finder_config);
+
+    let (groups, summary) = finder.find_duplicates(dir.path()).unwrap();
+
+    // Only match_this.txt should be seen
+    assert_eq!(summary.total_files, 1);
+    assert!(groups.is_empty()); // No duplicates found (only 1 file seen)
+}
+
+#[test]
+fn test_scan_file_type_filtering() {
+    use rustdupe::scanner::FileCategory;
+    let dir = tempdir().unwrap();
+
+    File::create(dir.path().join("image.jpg"))
+        .unwrap()
+        .write_all(b"image")
+        .unwrap();
+    File::create(dir.path().join("doc.pdf"))
+        .unwrap()
+        .write_all(b"doc")
+        .unwrap();
+    File::create(dir.path().join("audio.mp3"))
+        .unwrap()
+        .write_all(b"audio")
+        .unwrap();
+
+    // Filter for images and documents
+    let walker_config = WalkerConfig::default()
+        .with_file_categories(vec![FileCategory::Images, FileCategory::Documents]);
+    let finder_config = FinderConfig::default().with_walker_config(walker_config);
+    let finder = DuplicateFinder::new(finder_config);
+
+    let (groups, summary) = finder.find_duplicates(dir.path()).unwrap();
+
+    // Should see image.jpg and doc.pdf
+    assert_eq!(summary.total_files, 2);
+    assert!(groups.is_empty());
+}

@@ -701,6 +701,80 @@ mod tests {
     }
 
     #[test]
+    fn test_walker_combined_date_filters() {
+        use chrono::{TimeZone, Utc};
+        let dir = TempDir::new().unwrap();
+
+        // past: 2020-01-01
+        // mid: 2023-01-01
+        // recent: 2026-01-01
+
+        let past_file = dir.path().join("past.txt");
+        let mut f = File::create(&past_file).unwrap();
+        writeln!(f, "past content").unwrap();
+        let past_time = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
+        filetime::set_file_mtime(
+            &past_file,
+            filetime::FileTime::from_system_time(past_time.into()),
+        )
+        .unwrap();
+
+        let mid_file = dir.path().join("mid.txt");
+        let mut f = File::create(&mid_file).unwrap();
+        writeln!(f, "mid content").unwrap();
+        let mid_time = Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap();
+        filetime::set_file_mtime(
+            &mid_file,
+            filetime::FileTime::from_system_time(mid_time.into()),
+        )
+        .unwrap();
+
+        let recent_file = dir.path().join("recent.txt");
+        let mut f = File::create(&recent_file).unwrap();
+        writeln!(f, "recent content").unwrap();
+        let recent_time = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        filetime::set_file_mtime(
+            &recent_file,
+            filetime::FileTime::from_system_time(recent_time.into()),
+        )
+        .unwrap();
+
+        // Test range: 2021 to 2025 (should only include mid.txt)
+        let config = WalkerConfig::default()
+            .with_newer_than(Some(
+                Utc.with_ymd_and_hms(2021, 1, 1, 0, 0, 0).unwrap().into(),
+            ))
+            .with_older_than(Some(
+                Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap().into(),
+            ));
+
+        let walker = Walker::new(dir.path(), config);
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path.file_name().unwrap(), "mid.txt");
+    }
+
+    #[test]
+    fn test_walker_multiple_regex_include() {
+        use regex::Regex;
+        let dir = create_test_dir();
+
+        let config = WalkerConfig::default().with_regex_include(vec![
+            Regex::new("file1").unwrap(),
+            Regex::new("nested").unwrap(),
+        ]);
+        let walker = Walker::new(dir.path(), config);
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 2);
+        let names: Vec<_> = files
+            .iter()
+            .map(|f| f.path.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert!(names.contains(&"file1.txt"));
+        assert!(names.contains(&"nested.txt"));
+    }
+
+    #[test]
     fn test_walker_regex_filters() {
         use regex::Regex;
         let dir = create_test_dir();
