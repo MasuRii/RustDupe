@@ -6,5 +6,5 @@
 pub mod database;
 pub mod entry;
 
-pub use database::HashCache;
+pub use database::{CacheError, CacheResult, HashCache};
 pub use entry::CacheEntry;
