@@ -1,4 +1,4 @@
-use rustdupe::cache::{CacheEntry, CacheError, HashCache};
+use rustdupe::cache::{CacheEntry, HashCache};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;

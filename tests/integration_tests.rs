@@ -5,5 +5,6 @@ mod integration {
     mod path_edge_cases;
     mod reference_tests;
     mod scan_tests;
+    mod session_corruption_tests;
     mod session_tests;
 }
