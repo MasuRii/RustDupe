@@ -15,6 +15,7 @@ fn make_group(size: u64, paths: Vec<&str>) -> DuplicateGroup {
         [0u8; 32],
         size,
         paths.into_iter().map(PathBuf::from).collect(),
+        Vec::new(),
     )
 }
 

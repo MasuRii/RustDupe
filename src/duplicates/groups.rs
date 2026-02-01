@@ -134,6 +134,8 @@ pub struct DuplicateGroup {
     pub size: u64,
     /// Paths to the duplicate files
     pub files: Vec<std::path::PathBuf>,
+    /// Protected reference paths
+    pub reference_paths: Vec<std::path::PathBuf>,
 }
 
 impl DuplicateGroup {
@@ -144,9 +146,20 @@ impl DuplicateGroup {
     /// * `hash` - BLAKE3 content hash
     /// * `size` - File size in bytes
     /// * `files` - Paths to duplicate files
+    /// * `reference_paths` - Protected reference paths
     #[must_use]
-    pub fn new(hash: [u8; 32], size: u64, files: Vec<std::path::PathBuf>) -> Self {
-        Self { hash, size, files }
+    pub fn new(
+        hash: [u8; 32],
+        size: u64,
+        files: Vec<std::path::PathBuf>,
+        reference_paths: Vec<std::path::PathBuf>,
+    ) -> Self {
+        Self {
+            hash,
+            size,
+            files,
+            reference_paths,
+        }
     }
 
     /// Number of files in this group.
@@ -181,6 +194,26 @@ impl DuplicateGroup {
     #[must_use]
     pub fn hash_hex(&self) -> String {
         crate::scanner::hash_to_hex(&self.hash)
+    }
+
+    /// Check if a path is in a protected reference directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to check
+    #[must_use]
+    pub fn is_in_reference_dir(&self, path: &std::path::Path) -> bool {
+        self.reference_paths.iter().any(|ref_path| {
+            if cfg!(windows) {
+                // Windows is case-insensitive. Convert to lowercase PathBuf for reliable
+                // component-based comparison.
+                let p = std::path::PathBuf::from(path.to_string_lossy().to_lowercase());
+                let r = std::path::PathBuf::from(ref_path.to_string_lossy().to_lowercase());
+                p.starts_with(r)
+            } else {
+                path.starts_with(ref_path)
+            }
+        })
     }
 }
 
@@ -405,7 +438,7 @@ pub fn group_by_size_structured(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::SystemTime;
 
     fn make_file(path: &str, size: u64) -> FileEntry {
@@ -482,6 +515,7 @@ mod tests {
                 PathBuf::from("/b.txt"),
                 PathBuf::from("/c.txt"),
             ],
+            Vec::new(),
         );
 
         assert_eq!(group.wasted_space(), 2000); // 2 * 1000
@@ -490,7 +524,7 @@ mod tests {
 
     #[test]
     fn test_duplicate_group_single_file() {
-        let group = DuplicateGroup::new([0u8; 32], 1000, vec![PathBuf::from("/a.txt")]);
+        let group = DuplicateGroup::new([0u8; 32], 1000, vec![PathBuf::from("/a.txt")], Vec::new());
 
         assert_eq!(group.wasted_space(), 0);
         assert_eq!(group.duplicate_count(), 0);
@@ -656,12 +690,26 @@ mod tests {
         hash[1] = 0xCD;
         hash[31] = 0xEF;
 
-        let group = DuplicateGroup::new(hash, 100, vec![PathBuf::from("/a.txt")]);
+        let group = DuplicateGroup::new(hash, 100, vec![PathBuf::from("/a.txt")], Vec::new());
         let hex = group.hash_hex();
 
         assert!(hex.starts_with("abcd"));
         assert!(hex.ends_with("ef"));
         assert_eq!(hex.len(), 64);
+    }
+
+    #[test]
+    fn test_is_in_reference_dir() {
+        let ref_paths = vec![PathBuf::from("/ref/path"), PathBuf::from("/other/ref")];
+        let group = DuplicateGroup::new([0u8; 32], 100, Vec::new(), ref_paths);
+
+        assert!(group.is_in_reference_dir(Path::new("/ref/path/file.txt")));
+        assert!(group.is_in_reference_dir(Path::new("/other/ref/sub/file.txt")));
+        assert!(!group.is_in_reference_dir(Path::new("/normal/path/file.txt")));
+
+        if cfg!(windows) {
+            assert!(group.is_in_reference_dir(Path::new("/REF/PATH/file.txt")));
+        }
     }
 
     #[test]

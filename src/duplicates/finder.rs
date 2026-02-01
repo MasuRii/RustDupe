@@ -51,6 +51,8 @@ pub struct PrehashConfig {
     pub shutdown_flag: Option<Arc<AtomicBool>>,
     /// Optional progress callback.
     pub progress_callback: Option<Arc<dyn ProgressCallback>>,
+    /// Protected reference paths.
+    pub reference_paths: Vec<PathBuf>,
 }
 
 impl std::fmt::Debug for PrehashConfig {
@@ -63,6 +65,7 @@ impl std::fmt::Debug for PrehashConfig {
                 "progress_callback",
                 &self.progress_callback.as_ref().map(|_| "<callback>"),
             )
+            .field("reference_paths", &self.reference_paths)
             .finish()
     }
 }
@@ -74,6 +77,7 @@ impl Default for PrehashConfig {
             cache: None,
             shutdown_flag: None,
             progress_callback: None,
+            reference_paths: Vec::new(),
         }
     }
 }
@@ -104,6 +108,13 @@ impl PrehashConfig {
     #[must_use]
     pub fn with_progress_callback(mut self, callback: Arc<dyn ProgressCallback>) -> Self {
         self.progress_callback = Some(callback);
+        self
+    }
+
+    /// Set the reference paths for protecting directories.
+    #[must_use]
+    pub fn with_reference_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.reference_paths = paths;
         self
     }
 
@@ -512,6 +523,8 @@ pub struct FullhashConfig {
     pub shutdown_flag: Option<Arc<AtomicBool>>,
     /// Optional progress callback.
     pub progress_callback: Option<Arc<dyn ProgressCallback>>,
+    /// Protected reference paths.
+    pub reference_paths: Vec<PathBuf>,
 }
 
 impl std::fmt::Debug for FullhashConfig {
@@ -524,6 +537,7 @@ impl std::fmt::Debug for FullhashConfig {
                 "progress_callback",
                 &self.progress_callback.as_ref().map(|_| "<callback>"),
             )
+            .field("reference_paths", &self.reference_paths)
             .finish()
     }
 }
@@ -535,6 +549,7 @@ impl Default for FullhashConfig {
             cache: None,
             shutdown_flag: None,
             progress_callback: None,
+            reference_paths: Vec::new(),
         }
     }
 }
@@ -565,6 +580,13 @@ impl FullhashConfig {
     #[must_use]
     pub fn with_progress_callback(mut self, callback: Arc<dyn ProgressCallback>) -> Self {
         self.progress_callback = Some(callback);
+        self
+    }
+
+    /// Set the reference paths for protecting directories.
+    #[must_use]
+    pub fn with_reference_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.reference_paths = paths;
         self
     }
 
@@ -812,7 +834,7 @@ pub fn phase3_fullhash(
                 paths.len(),
                 size
             );
-            super::DuplicateGroup::new(hash, size, paths)
+            super::DuplicateGroup::new(hash, size, paths, config.reference_paths.clone())
         })
         .collect();
 
@@ -856,6 +878,8 @@ pub struct FinderConfig {
     pub shutdown_flag: Option<Arc<AtomicBool>>,
     /// Optional progress callback for reporting.
     pub progress_callback: Option<Arc<dyn ProgressCallback>>,
+    /// Protected reference paths.
+    pub reference_paths: Vec<PathBuf>,
 }
 
 impl std::fmt::Debug for FinderConfig {
@@ -870,6 +894,7 @@ impl std::fmt::Debug for FinderConfig {
                 "progress_callback",
                 &self.progress_callback.as_ref().map(|_| "<callback>"),
             )
+            .field("reference_paths", &self.reference_paths)
             .finish()
     }
 }
@@ -883,6 +908,7 @@ impl Default for FinderConfig {
             walker_config: crate::scanner::WalkerConfig::default(),
             shutdown_flag: None,
             progress_callback: None,
+            reference_paths: Vec::new(),
         }
     }
 }
@@ -927,6 +953,13 @@ impl FinderConfig {
     #[must_use]
     pub fn with_progress_callback(mut self, callback: Arc<dyn ProgressCallback>) -> Self {
         self.progress_callback = Some(callback);
+        self
+    }
+
+    /// Set the reference paths for protecting directories.
+    #[must_use]
+    pub fn with_reference_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.reference_paths = paths;
         self
     }
 
@@ -1218,6 +1251,7 @@ impl DuplicateFinder {
             cache: self.config.cache.clone(),
             shutdown_flag: self.config.shutdown_flag.clone(),
             progress_callback: self.config.progress_callback.clone(),
+            reference_paths: self.config.reference_paths.clone(),
         };
 
         let (prehash_groups, prehash_stats) =
@@ -1242,6 +1276,7 @@ impl DuplicateFinder {
             cache: self.config.cache.clone(),
             shutdown_flag: self.config.shutdown_flag.clone(),
             progress_callback: self.config.progress_callback.clone(),
+            reference_paths: self.config.reference_paths.clone(),
         };
 
         let (duplicate_groups, fullhash_stats) =
@@ -1333,6 +1368,7 @@ impl DuplicateFinder {
             cache: self.config.cache.clone(),
             shutdown_flag: self.config.shutdown_flag.clone(),
             progress_callback: self.config.progress_callback.clone(),
+            reference_paths: self.config.reference_paths.clone(),
         };
 
         let (prehash_groups, prehash_stats) =
@@ -1357,6 +1393,7 @@ impl DuplicateFinder {
             cache: self.config.cache.clone(),
             shutdown_flag: self.config.shutdown_flag.clone(),
             progress_callback: self.config.progress_callback.clone(),
+            reference_paths: self.config.reference_paths.clone(),
         };
 
         let (duplicate_groups, fullhash_stats) =

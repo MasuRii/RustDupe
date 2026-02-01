@@ -141,7 +141,7 @@ impl JsonOutput {
     ///     DuplicateGroup::new([0u8; 32], 1024, vec![
     ///         PathBuf::from("/file1.txt"),
     ///         PathBuf::from("/file2.txt"),
-    ///     ]),
+    ///     ], Vec::new()),
     /// ];
     /// let summary = ScanSummary::default();
     ///
@@ -277,6 +277,7 @@ mod tests {
                     PathBuf::from("/path/to/file1.txt"),
                     PathBuf::from("/path/to/file2.txt"),
                 ],
+                Vec::new(),
             ),
             DuplicateGroup::new(
                 [1u8; 32],
@@ -286,6 +287,7 @@ mod tests {
                     PathBuf::from("/path/to/fileB.txt"),
                     PathBuf::from("/path/to/fileC.txt"),
                 ],
+                Vec::new(),
             ),
         ]
     }
@@ -357,6 +359,7 @@ mod tests {
             [0xab; 32],
             1024,
             vec![PathBuf::from("/test.txt")],
+            Vec::new(),
         )];
         let output = JsonOutput::new(&groups, &ScanSummary::default());
 

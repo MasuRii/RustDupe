@@ -32,6 +32,7 @@
 //!         [0u8; 32],
 //!         1000,
 //!         vec![PathBuf::from("/a.txt"), PathBuf::from("/b.txt")],
+//!         vec![],
 //!     ),
 //! ];
 //! let mut app = App::with_groups(groups);

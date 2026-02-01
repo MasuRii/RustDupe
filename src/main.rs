@@ -131,7 +131,8 @@ fn handle_scan(
             .with_io_threads(args.io_threads)
             .with_paranoid(args.paranoid)
             .with_walker_config(walker_config)
-            .with_shutdown_flag(shutdown_flag.clone());
+            .with_shutdown_flag(shutdown_flag.clone())
+            .with_reference_paths(reference_paths);
 
         if let Some(cache) = hash_cache {
             finder_config = finder_config.with_cache(cache);

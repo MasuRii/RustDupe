@@ -106,6 +106,6 @@ pub struct SessionGroup {
 
 impl From<SessionGroup> for DuplicateGroup {
     fn from(sg: SessionGroup) -> Self {
-        Self::new(sg.hash, sg.size, sg.files)
+        DuplicateGroup::new(sg.hash, sg.size, sg.files, Vec::new())
     }
 }

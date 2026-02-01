@@ -157,6 +157,7 @@ mod tests {
             [0u8; 32],
             7,
             vec![file1.clone(), file2.clone()],
+            Vec::new(),
         )];
 
         let output = CsvOutput::new(&groups);
@@ -182,7 +183,12 @@ mod tests {
             .write_all(b"content")
             .unwrap();
 
-        let groups = vec![DuplicateGroup::new([0u8; 32], 7, vec![file_with_comma])];
+        let groups = vec![DuplicateGroup::new(
+            [0u8; 32],
+            7,
+            vec![file_with_comma],
+            Vec::new(),
+        )];
 
         let output = CsvOutput::new(&groups);
         let csv_str = output.to_string().unwrap();
