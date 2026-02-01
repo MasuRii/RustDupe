@@ -120,6 +120,19 @@ pub struct SessionGroup {
     pub reference_paths: Vec<PathBuf>,
 }
 
+impl SessionGroup {
+    /// Creates a session group from a duplicate group.
+    pub fn from_duplicate_group(group: &DuplicateGroup, id: usize) -> Self {
+        Self {
+            id,
+            hash: group.hash,
+            size: group.size,
+            files: group.files.clone(),
+            reference_paths: group.reference_paths.clone(),
+        }
+    }
+}
+
 impl From<SessionGroup> for DuplicateGroup {
     fn from(sg: SessionGroup) -> Self {
         DuplicateGroup::new(sg.hash, sg.size, sg.files, sg.reference_paths)
