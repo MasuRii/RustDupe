@@ -127,25 +127,34 @@ fn test_unicode_nfd_normalization_integration() {
         .unwrap();
 
     let path_nfd = dir.path().join(name_nfd);
-    let created_both =
-        if let Err(e) = File::create(&path_nfd).and_then(|mut f| f.write_all(b"content")) {
-            log::debug!(
-                "Could not create second file (likely filesystem normalization): {}",
-                e
-            );
-            false
-        } else {
-            true
-        };
+    let nfd_write_result = File::create(&path_nfd).and_then(|mut f| f.write_all(b"content"));
+
+    if let Err(e) = nfd_write_result {
+        log::debug!(
+            "Could not create second file (likely filesystem normalization): {}",
+            e
+        );
+    }
+
+    // Check how many files actually exist in the directory.
+    // On macOS (APFS/HFS+), NFC and NFD are treated as the same filename,
+    // so the second create may succeed but actually overwrite the first file.
+    let file_count = fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+        .count();
 
     let finder = DuplicateFinder::with_defaults();
     let (groups, _) = finder.find_duplicates(dir.path()).unwrap();
 
-    if created_both {
-        // If we could create both, they should be grouped together as duplicates.
+    if file_count == 2 {
+        // If we actually have two files, they should be grouped together as duplicates.
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].files.len(), 2);
     } else {
+        // Only one file exists (filesystem normalized the names).
+        // This is expected on macOS with APFS/HFS+.
         // If we couldn't create both, then we only have one file.
         // Create another one with a different name to test grouping.
         let path_other = dir.path().join("other_file.txt");
