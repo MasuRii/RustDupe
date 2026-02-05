@@ -30,13 +30,14 @@
 //! ```no_run
 //! use rustdupe::duplicates::{DuplicateFinder, DuplicateGroup, ScanSummary};
 //! use rustdupe::output::json::JsonOutput;
+//! use rustdupe::error::ExitCode;
 //! use std::path::Path;
 //!
 //! let finder = DuplicateFinder::with_defaults();
 //! let (groups, summary) = finder.find_duplicates(Path::new(".")).unwrap();
 //!
 //! // Compact JSON
-//! let output = JsonOutput::new(&groups, &summary);
+//! let output = JsonOutput::new(&groups, &summary, ExitCode::Success);
 //! println!("{}", output.to_json().unwrap());
 //!
 //! // Pretty-printed JSON
@@ -95,12 +96,16 @@ pub struct JsonSummary {
     pub scan_duration_ms: u64,
     /// Whether the scan was interrupted
     pub interrupted: bool,
+    /// The exit code number
+    pub exit_code: i32,
+    /// The machine-readable exit code name (e.g., "RD000")
+    pub exit_code_name: String,
 }
 
 impl JsonSummary {
-    /// Create a JSON summary from a ScanSummary.
+    /// Create a JSON summary from a ScanSummary and an exit code.
     #[must_use]
-    pub fn from_scan_summary(summary: &ScanSummary) -> Self {
+    pub fn from_scan_summary(summary: &ScanSummary, exit_code: crate::error::ExitCode) -> Self {
         Self {
             total_files: summary.total_files,
             total_size: summary.total_size,
@@ -109,6 +114,8 @@ impl JsonSummary {
             reclaimable_space: summary.reclaimable_space,
             scan_duration_ms: summary.scan_duration.as_millis() as u64,
             interrupted: summary.interrupted,
+            exit_code: exit_code.as_i32(),
+            exit_code_name: exit_code.code_prefix().to_string(),
         }
     }
 }
@@ -123,18 +130,20 @@ pub struct JsonOutput {
 }
 
 impl JsonOutput {
-    /// Create a new JSON output from duplicate groups and summary.
+    /// Create a new JSON output from duplicate groups, summary and exit code.
     ///
     /// # Arguments
     ///
     /// * `groups` - The duplicate groups found during scanning
     /// * `summary` - The scan summary statistics
+    /// * `exit_code` - The exit code for this run
     ///
     /// # Example
     ///
     /// ```
     /// use rustdupe::duplicates::{DuplicateGroup, ScanSummary};
     /// use rustdupe::output::json::JsonOutput;
+    /// use rustdupe::error::ExitCode;
     /// use std::path::PathBuf;
     ///
     /// let groups = vec![
@@ -145,17 +154,21 @@ impl JsonOutput {
     /// ];
     /// let summary = ScanSummary::default();
     ///
-    /// let output = JsonOutput::new(&groups, &summary);
+    /// let output = JsonOutput::new(&groups, &summary, ExitCode::Success);
     /// assert_eq!(output.duplicates.len(), 1);
     /// ```
     #[must_use]
-    pub fn new(groups: &[DuplicateGroup], summary: &ScanSummary) -> Self {
+    pub fn new(
+        groups: &[DuplicateGroup],
+        summary: &ScanSummary,
+        exit_code: crate::error::ExitCode,
+    ) -> Self {
         Self {
             duplicates: groups
                 .iter()
                 .map(JsonDuplicateGroup::from_duplicate_group)
                 .collect(),
-            summary: JsonSummary::from_scan_summary(summary),
+            summary: JsonSummary::from_scan_summary(summary, exit_code),
         }
     }
 
@@ -170,8 +183,9 @@ impl JsonOutput {
     /// ```
     /// use rustdupe::duplicates::{DuplicateGroup, ScanSummary};
     /// use rustdupe::output::json::JsonOutput;
+    /// use rustdupe::error::ExitCode;
     ///
-    /// let output = JsonOutput::new(&[], &ScanSummary::default());
+    /// let output = JsonOutput::new(&[], &ScanSummary::default(), ExitCode::Success);
     /// let json = output.to_json().unwrap();
     /// assert!(json.starts_with("{"));
     /// ```
@@ -190,8 +204,9 @@ impl JsonOutput {
     /// ```
     /// use rustdupe::duplicates::{DuplicateGroup, ScanSummary};
     /// use rustdupe::output::json::JsonOutput;
+    /// use rustdupe::error::ExitCode;
     ///
-    /// let output = JsonOutput::new(&[], &ScanSummary::default());
+    /// let output = JsonOutput::new(&[], &ScanSummary::default(), ExitCode::Success);
     /// let json = output.to_json_pretty().unwrap();
     /// assert!(json.contains('\n'));  // Pretty-printed has newlines
     /// ```
@@ -296,7 +311,11 @@ mod tests {
 
     #[test]
     fn test_json_output_empty() {
-        let output = JsonOutput::new(&[], &ScanSummary::default());
+        let output = JsonOutput::new(
+            &[],
+            &ScanSummary::default(),
+            crate::error::ExitCode::Success,
+        );
         assert!(output.duplicates.is_empty());
         assert_eq!(output.summary.total_files, 0);
     }
@@ -305,7 +324,7 @@ mod tests {
     fn test_json_output_with_groups() {
         let groups = create_test_groups();
         let summary = create_test_summary();
-        let output = JsonOutput::new(&groups, &summary);
+        let output = JsonOutput::new(&groups, &summary, crate::error::ExitCode::Success);
 
         assert_eq!(output.duplicates.len(), 2);
         assert_eq!(output.duplicates[0].files.len(), 2);
@@ -316,7 +335,11 @@ mod tests {
 
     #[test]
     fn test_to_json_compact() {
-        let output = JsonOutput::new(&[], &ScanSummary::default());
+        let output = JsonOutput::new(
+            &[],
+            &ScanSummary::default(),
+            crate::error::ExitCode::Success,
+        );
         let json = output.to_json().unwrap();
 
         // Compact JSON should be a single line
@@ -327,7 +350,11 @@ mod tests {
 
     #[test]
     fn test_to_json_pretty() {
-        let output = JsonOutput::new(&[], &ScanSummary::default());
+        let output = JsonOutput::new(
+            &[],
+            &ScanSummary::default(),
+            crate::error::ExitCode::Success,
+        );
         let json = output.to_json_pretty().unwrap();
 
         // Pretty JSON should have newlines
@@ -339,7 +366,7 @@ mod tests {
     fn test_json_is_valid() {
         let groups = create_test_groups();
         let summary = create_test_summary();
-        let output = JsonOutput::new(&groups, &summary);
+        let output = JsonOutput::new(&groups, &summary, crate::error::ExitCode::Success);
         let json = output.to_json().unwrap();
 
         // Parse it back to verify it's valid JSON
@@ -368,7 +395,11 @@ mod tests {
             )],
             Vec::new(),
         )];
-        let output = JsonOutput::new(&groups, &ScanSummary::default());
+        let output = JsonOutput::new(
+            &groups,
+            &ScanSummary::default(),
+            crate::error::ExitCode::Success,
+        );
 
         // Hash should be 64 hex characters
         assert_eq!(output.duplicates[0].hash.len(), 64);
@@ -380,7 +411,11 @@ mod tests {
 
     #[test]
     fn test_write_to() {
-        let output = JsonOutput::new(&[], &ScanSummary::default());
+        let output = JsonOutput::new(
+            &[],
+            &ScanSummary::default(),
+            crate::error::ExitCode::Success,
+        );
         let mut buffer = Vec::new();
 
         output.write_to(&mut buffer, false).unwrap();
@@ -396,7 +431,8 @@ mod tests {
             scan_duration: Duration::from_secs(5),
             ..Default::default()
         };
-        let json_summary = JsonSummary::from_scan_summary(&summary);
+        let json_summary =
+            JsonSummary::from_scan_summary(&summary, crate::error::ExitCode::Success);
         assert_eq!(json_summary.scan_duration_ms, 5000);
     }
 
@@ -406,7 +442,8 @@ mod tests {
             interrupted: true,
             ..Default::default()
         };
-        let output = JsonOutput::new(&[], &summary);
+        let output = JsonOutput::new(&[], &summary, crate::error::ExitCode::Interrupted);
         assert!(output.summary.interrupted);
+        assert_eq!(output.summary.exit_code, 130);
     }
 }

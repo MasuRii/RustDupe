@@ -9,13 +9,14 @@
 //! ```no_run
 //! use rustdupe::duplicates::{DuplicateFinder, DuplicateGroup, ScanSummary};
 //! use rustdupe::output::json::JsonOutput;
+//! use rustdupe::error::ExitCode;
 //! use std::path::Path;
 //!
 //! let finder = DuplicateFinder::with_defaults();
 //! let (groups, summary) = finder.find_duplicates(Path::new(".")).unwrap();
 //!
 //! // Output as JSON to stdout
-//! let output = JsonOutput::new(&groups, &summary);
+//! let output = JsonOutput::new(&groups, &summary, ExitCode::Success);
 //! println!("{}", output.to_json_pretty().unwrap());
 //! ```
 

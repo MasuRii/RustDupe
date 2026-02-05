@@ -45,6 +45,7 @@ pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod duplicates;
+pub mod error;
 pub mod logging;
 pub mod output;
 pub mod progress;

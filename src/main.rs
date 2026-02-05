@@ -12,6 +12,7 @@ use rustdupe::{
     },
     config::Config,
     duplicates::{DuplicateFinder, FinderConfig},
+    error::{ExitCode, StructuredError},
     logging, output,
     scanner::WalkerConfig,
     session::{Session, SessionGroup, SessionSettings},
@@ -22,10 +23,43 @@ use std::fs;
 use std::io::{self, Write};
 use std::sync::Arc;
 
-fn main() -> Result<()> {
+fn main() {
     // Parse command-line arguments
     let cli = Cli::parse();
+    let json_errors = cli.json_errors;
 
+    // Run the application logic
+    match run(cli) {
+        Ok(code) => std::process::exit(code.as_i32()),
+        Err(err) => {
+            // Determine appropriate exit code for errors
+            let exit_code = if err
+                .downcast_ref::<rustdupe::duplicates::FinderError>()
+                .is_some_and(|e| matches!(e, rustdupe::duplicates::FinderError::Interrupted))
+            {
+                ExitCode::Interrupted
+            } else {
+                ExitCode::GeneralError
+            };
+
+            // Report the error
+            if json_errors {
+                let structured = StructuredError::new(&err, exit_code);
+                if let Ok(json) = serde_json::to_string_pretty(&structured) {
+                    eprintln!("{}", json);
+                } else {
+                    eprintln!("[{}] Error: {}", exit_code.code_prefix(), err);
+                }
+            } else {
+                eprintln!("[{}] Error: {}", exit_code.code_prefix(), err);
+            }
+
+            std::process::exit(exit_code.as_i32());
+        }
+    }
+}
+
+fn run(cli: Cli) -> Result<ExitCode> {
     // Load configuration with optional profile
     let mut config = Config::load_with_profile(cli.profile.as_deref());
 
@@ -41,7 +75,7 @@ fn main() -> Result<()> {
                 println!("  - {}", profile);
             }
         }
-        return Ok(());
+        return Ok(ExitCode::Success);
     }
 
     // Merge global CLI flags into config
@@ -85,13 +119,13 @@ fn main() -> Result<()> {
     let shutdown_flag = shutdown_handler.get_flag();
 
     // Handle subcommands
-    match cli.command {
+    let result = match cli.command {
         Commands::Scan(args) => {
             config.merge_scan_args(&args);
             handle_scan(
                 *args,
                 config,
-                shutdown_flag,
+                shutdown_flag.clone(),
                 cli.quiet,
                 theme,
                 keybindings,
@@ -103,21 +137,26 @@ fn main() -> Result<()> {
             handle_load(
                 args,
                 config,
-                shutdown_flag,
+                shutdown_flag.clone(),
                 cli.quiet,
                 theme,
                 keybindings,
                 accessible,
             )
         }
-    }?;
+    };
 
-    // Check if shutdown was requested and exit with appropriate code
-    if shutdown_handler.is_shutdown_requested() {
-        std::process::exit(signal::EXIT_CODE_INTERRUPTED);
+    // If result is Ok, check if shutdown was requested during operation
+    match result {
+        Ok(code) => {
+            if shutdown_handler.is_shutdown_requested() {
+                Ok(ExitCode::Interrupted)
+            } else {
+                Ok(code)
+            }
+        }
+        Err(e) => Err(e),
     }
-
-    Ok(())
 }
 
 fn handle_scan(
@@ -128,7 +167,7 @@ fn handle_scan(
     theme: ThemeArg,
     keybindings: KeyBindings,
     accessible: bool,
-) -> Result<()> {
+) -> Result<ExitCode> {
     let (groups, summary, scan_paths, settings, reference_paths) = if let Some(ref session_path) =
         args.load_session
     {
@@ -357,14 +396,7 @@ fn handle_scan(
                 (groups, summary, canonical_paths, settings, reference_paths)
             }
             Err(e) => {
-                if config.output == OutputFormat::Json {
-                    let error_json = serde_json::json!({
-                        "error": e.to_string(),
-                        "interrupted": matches!(e, rustdupe::duplicates::FinderError::Interrupted)
-                    });
-                    eprintln!("{}", serde_json::to_string_pretty(&error_json)?);
-                }
-                anyhow::bail!("Scan failed: {}", e);
+                anyhow::bail!(e);
             }
         }
     };
@@ -396,7 +428,7 @@ fn handle_load(
     theme: ThemeArg,
     keybindings: KeyBindings,
     accessible: bool,
-) -> Result<()> {
+) -> Result<ExitCode> {
     log::info!("Loading session from {:?}", args.path);
     let session = Session::load(&args.path)?;
     let (groups, summary) = session.to_results();
@@ -442,7 +474,7 @@ struct ResultContext {
     accessible: bool,
 }
 
-fn handle_results(ctx: ResultContext) -> Result<()> {
+fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
     let ResultContext {
         groups,
         summary,
@@ -504,6 +536,15 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
         eprintln!();
     }
 
+    // Determine exit code based on results
+    let mut exit_code = if !summary.scan_errors.is_empty() {
+        ExitCode::PartialSuccess
+    } else if groups.is_empty() {
+        ExitCode::NoDuplicates
+    } else {
+        ExitCode::Success
+    };
+
     // 3. Output results based on format
     match output_format {
         OutputFormat::Tui => {
@@ -520,7 +561,11 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
                     session.file_index,
                 );
             }
-            rustdupe::tui::run_tui_with_bindings(&mut app, Some(shutdown_flag), Some(keybindings))?;
+            rustdupe::tui::run_tui_with_bindings(
+                &mut app,
+                Some(shutdown_flag.clone()),
+                Some(keybindings),
+            )?;
 
             // Save session after TUI exit if requested
             if let Some(ref path) = save_session {
@@ -547,7 +592,7 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
             }
         }
         OutputFormat::Json => {
-            let json_output = output::JsonOutput::new(&groups, &summary);
+            let json_output = output::JsonOutput::new(&groups, &summary, exit_code);
             if let Some(path) = output_file {
                 let mut file = fs::File::create(&path)
                     .with_context(|| format!("Failed to create output file: {}", path.display()))?;
@@ -666,5 +711,10 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
         }
     }
 
-    Ok(())
+    // Re-check shutdown flag in case it was set during TUI or output
+    if shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) {
+        exit_code = ExitCode::Interrupted;
+    }
+
+    Ok(exit_code)
 }

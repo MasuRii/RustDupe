@@ -194,6 +194,10 @@ pub struct Cli {
     #[arg(long = "no-accessible", overrides_with = "accessible", hide = true)]
     pub no_accessible: bool,
 
+    /// Output errors as JSON instead of plain text
+    #[arg(long = "json-errors", global = true)]
+    pub json_errors: bool,
+
     /// Subcommand to execute
     #[command(subcommand)]
     pub command: Commands,
