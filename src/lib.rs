@@ -381,7 +381,8 @@ fn handle_scan(
             .with_walker_config(walker_config)
             .with_shutdown_flag(shutdown_flag.clone())
             .with_reference_paths(reference_paths.clone())
-            .with_group_map(group_map);
+            .with_group_map(group_map)
+            .with_bloom_fp_rate(config.bloom_fp_rate);
 
         if let Some(cache) = hash_cache {
             finder_config = finder_config.with_cache(cache);

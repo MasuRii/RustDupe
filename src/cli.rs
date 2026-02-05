@@ -437,6 +437,10 @@ pub struct ScanArgs {
     /// Continue scan on errors (default)
     #[arg(long = "no-strict", overrides_with = "strict", hide = true)]
     pub no_strict: bool,
+
+    /// False positive rate for Bloom filters (default: 0.01)
+    #[arg(long, value_name = "RATE", help_heading = "Scanning Options")]
+    pub bloom_fp_rate: Option<f64>,
 }
 
 /// Arguments for the load subcommand.

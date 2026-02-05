@@ -34,6 +34,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use growable_bloom_filter::GrowableBloom;
 use rayon::prelude::*;
 
 use crate::cache::{CacheEntry, HashCache};
@@ -54,6 +55,8 @@ pub struct PrehashConfig {
     pub progress_callback: Option<Arc<dyn ProgressCallback>>,
     /// Protected reference paths.
     pub reference_paths: Vec<PathBuf>,
+    /// False positive rate for Bloom filters.
+    pub bloom_fp_rate: f64,
 }
 
 impl std::fmt::Debug for PrehashConfig {
@@ -67,6 +70,7 @@ impl std::fmt::Debug for PrehashConfig {
                 &self.progress_callback.as_ref().map(|_| "<callback>"),
             )
             .field("reference_paths", &self.reference_paths)
+            .field("bloom_fp_rate", &self.bloom_fp_rate)
             .finish()
     }
 }
@@ -79,6 +83,7 @@ impl Default for PrehashConfig {
             shutdown_flag: None,
             progress_callback: None,
             reference_paths: Vec::new(),
+            bloom_fp_rate: 0.01,
         }
     }
 }
@@ -116,6 +121,13 @@ impl PrehashConfig {
     #[must_use]
     pub fn with_reference_paths(mut self, paths: Vec<PathBuf>) -> Self {
         self.reference_paths = paths;
+        self
+    }
+
+    /// Set the Bloom filter false positive rate.
+    #[must_use]
+    pub fn with_bloom_fp_rate(mut self, rate: f64) -> Self {
+        self.bloom_fp_rate = rate;
         self
     }
 
@@ -341,6 +353,9 @@ pub fn phase2_prehash(
 
     // Group by prehash
     let mut prehash_groups: HashMap<Hash, Vec<FileEntry>> = HashMap::new();
+    let mut seen_prehashes = GrowableBloom::new(config.bloom_fp_rate, prehash_results.len());
+    let mut duplicate_prehashes = GrowableBloom::new(config.bloom_fp_rate, prehash_results.len());
+    let mut first_prehash_occurrences: HashMap<Hash, FileEntry> = HashMap::new();
 
     for (file, res, is_hit, is_interrupted) in prehash_results {
         if is_interrupted {
@@ -354,7 +369,19 @@ pub fn phase2_prehash(
                 } else {
                     stats.cache_misses += 1;
                 }
-                prehash_groups.entry(prehash).or_default().push(file);
+
+                if duplicate_prehashes.contains(prehash) {
+                    prehash_groups.entry(prehash).or_default().push(file);
+                } else if seen_prehashes.contains(prehash) {
+                    duplicate_prehashes.insert(prehash);
+                    if let Some(first) = first_prehash_occurrences.remove(&prehash) {
+                        prehash_groups.entry(prehash).or_default().push(first);
+                    }
+                    prehash_groups.entry(prehash).or_default().push(file);
+                } else {
+                    seen_prehashes.insert(prehash);
+                    first_prehash_occurrences.insert(prehash, file);
+                }
             }
             Err(e) => {
                 stats.failed_files += 1;
@@ -364,6 +391,12 @@ pub fn phase2_prehash(
     }
 
     // Filter to only groups with 2+ files (potential duplicates)
+    // Actually, with Bloom filter logic above, prehash_groups ALREADY only contains groups with 2+ files
+    // But there might be false positives from duplicate_prehashes Bloom filter.
+    // If duplicate_prehashes.contains(&prehash) was true but it was a false positive,
+    // we might have a group with only 1 file in prehash_groups.
+    // So we still need to filter.
+
     let filtered_groups: HashMap<Hash, Vec<FileEntry>> = prehash_groups
         .into_iter()
         .filter(|(hash, files)| {
@@ -387,6 +420,9 @@ pub fn phase2_prehash(
             }
         })
         .collect();
+
+    // Add unique prehashes from first_prehash_occurrences to stats
+    stats.unique_prehashes += first_prehash_occurrences.len();
 
     // Notify progress callback
     if let Some(ref callback) = config.progress_callback {
@@ -890,6 +926,8 @@ pub struct FinderConfig {
     pub reference_paths: Vec<PathBuf>,
     /// Named directory groups mapping canonical paths to group names.
     pub group_map: std::collections::HashMap<PathBuf, String>,
+    /// False positive rate for Bloom filters (default: 0.01).
+    pub bloom_fp_rate: f64,
 }
 
 impl std::fmt::Debug for FinderConfig {
@@ -906,6 +944,7 @@ impl std::fmt::Debug for FinderConfig {
             )
             .field("reference_paths", &self.reference_paths)
             .field("group_map", &self.group_map)
+            .field("bloom_fp_rate", &self.bloom_fp_rate)
             .finish()
     }
 }
@@ -922,6 +961,7 @@ impl Default for FinderConfig {
             progress_callback: None,
             reference_paths: Vec::new(),
             group_map: std::collections::HashMap::new(),
+            bloom_fp_rate: 0.01,
         }
     }
 }
@@ -987,6 +1027,13 @@ impl FinderConfig {
     #[must_use]
     pub fn with_group_map(mut self, map: std::collections::HashMap<PathBuf, String>) -> Self {
         self.group_map = map;
+        self
+    }
+
+    /// Set the Bloom filter false positive rate.
+    #[must_use]
+    pub fn with_bloom_fp_rate(mut self, rate: f64) -> Self {
+        self.bloom_fp_rate = rate.clamp(0.0001, 0.1);
         self
     }
 
@@ -1241,9 +1288,32 @@ impl DuplicateFinder {
         }
 
         let mut files = Vec::new();
+        let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
+        let mut duplicate_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
+        let mut first_occurrences: HashMap<u64, FileEntry> = HashMap::new();
+
         for result in walker.walk() {
             match result {
-                Ok(file) => files.push(file),
+                Ok(file) => {
+                    // Empty files are handled separately by group_by_size
+                    if file.size == 0 {
+                        files.push(file);
+                        continue;
+                    }
+
+                    if duplicate_sizes.contains(file.size) {
+                        files.push(file);
+                    } else if seen_sizes.contains(file.size) {
+                        duplicate_sizes.insert(file.size);
+                        if let Some(first) = first_occurrences.remove(&file.size) {
+                            files.push(first);
+                        }
+                        files.push(file);
+                    } else {
+                        seen_sizes.insert(file.size);
+                        first_occurrences.insert(file.size, file);
+                    }
+                }
                 Err(e) => {
                     if self.config.strict {
                         return Err(FinderError::ScanError(e));
@@ -1254,16 +1324,27 @@ impl DuplicateFinder {
             }
         }
 
+        // Add remaining first occurrences that were actually duplicates (false negatives from Bloom)
+        // Actually, Bloom filter has no false negatives, only false positives.
+        // So any size not in duplicate_sizes is either unique or a false positive from seen_sizes.
+        // If it's a false positive, it means we thought we saw it, but we didn't.
+        // Wait, Bloom filter 'contains' returning true means it MIGHT be there.
+        // If seen_sizes.contains(&file.size) returns true, but it's a false positive,
+        // we'll add it to duplicate_sizes and move it to 'files'.
+        // This is safe, it just means we might keep a few unique files.
+
         if let Some(ref callback) = self.config.progress_callback {
             callback.on_phase_end("walking");
         }
 
-        summary.total_files = files.len();
-        summary.total_size = files.iter().map(|f| f.size).sum();
+        // Summary counts should reflect what we actually found
+        summary.total_files = files.len() + first_occurrences.len();
+        summary.total_size = files.iter().map(|f| f.size).sum::<u64>()
+            + first_occurrences.values().map(|f| f.size).sum::<u64>();
 
         log::info!(
             "Found {} files ({} total)",
-            files.len(),
+            summary.total_files,
             format_size(summary.total_size)
         );
 
@@ -1273,16 +1354,18 @@ impl DuplicateFinder {
         }
 
         if files.is_empty() {
-            log::info!("No files found, scan complete");
+            log::info!("No potential duplicates found after size filtering, scan complete");
             summary.scan_duration = start_time.elapsed();
             return Ok((Vec::new(), summary));
         }
 
         // Phase 1: Group by size
         log::info!("Phase 1: Grouping by size...");
+        // group_by_size will still handle the files we kept
         let (size_groups, size_stats) = super::group_by_size(files);
 
-        summary.eliminated_by_size = size_stats.eliminated_unique;
+        // Update eliminated count to include files we discarded during walk
+        summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
 
         log::info!(
             "Phase 1 complete: {} → {} files ({:.1}% eliminated)",
@@ -1310,6 +1393,7 @@ impl DuplicateFinder {
             shutdown_flag: self.config.shutdown_flag.clone(),
             progress_callback: self.config.progress_callback.clone(),
             reference_paths: self.config.reference_paths.clone(),
+            bloom_fp_rate: self.config.bloom_fp_rate,
         };
 
         let (prehash_groups, prehash_stats) =
@@ -1438,8 +1522,33 @@ impl DuplicateFinder {
         }
 
         // Phase 1: Group by size
-        let (size_groups, size_stats) = super::group_by_size(files);
-        summary.eliminated_by_size = size_stats.eliminated_unique;
+        let mut potential_files = Vec::new();
+        let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, files.len());
+        let mut duplicate_sizes = GrowableBloom::new(self.config.bloom_fp_rate, files.len());
+        let mut first_occurrences: HashMap<u64, FileEntry> = HashMap::new();
+
+        for file in files {
+            if file.size == 0 {
+                potential_files.push(file);
+                continue;
+            }
+
+            if duplicate_sizes.contains(file.size) {
+                potential_files.push(file);
+            } else if seen_sizes.contains(file.size) {
+                duplicate_sizes.insert(file.size);
+                if let Some(first) = first_occurrences.remove(&file.size) {
+                    potential_files.push(first);
+                }
+                potential_files.push(file);
+            } else {
+                seen_sizes.insert(file.size);
+                first_occurrences.insert(file.size, file);
+            }
+        }
+
+        let (size_groups, size_stats) = super::group_by_size(potential_files);
+        summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
 
         if self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
@@ -1457,6 +1566,7 @@ impl DuplicateFinder {
             shutdown_flag: self.config.shutdown_flag.clone(),
             progress_callback: self.config.progress_callback.clone(),
             reference_paths: self.config.reference_paths.clone(),
+            bloom_fp_rate: self.config.bloom_fp_rate,
         };
 
         let (prehash_groups, prehash_stats) =
@@ -1636,9 +1746,32 @@ impl DuplicateFinder {
         }
 
         let mut files = Vec::new();
+        let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
+        let mut duplicate_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
+        let mut first_occurrences: HashMap<u64, FileEntry> = HashMap::new();
+
         for result in multi_walker.walk() {
             match result {
-                Ok(file) => files.push(file),
+                Ok(file) => {
+                    // Empty files are handled separately by group_by_size
+                    if file.size == 0 {
+                        files.push(file);
+                        continue;
+                    }
+
+                    if duplicate_sizes.contains(file.size) {
+                        files.push(file);
+                    } else if seen_sizes.contains(file.size) {
+                        duplicate_sizes.insert(file.size);
+                        if let Some(first) = first_occurrences.remove(&file.size) {
+                            files.push(first);
+                        }
+                        files.push(file);
+                    } else {
+                        seen_sizes.insert(file.size);
+                        first_occurrences.insert(file.size, file);
+                    }
+                }
                 Err(e) => {
                     if self.config.strict {
                         return Err(FinderError::ScanError(e));
@@ -1653,12 +1786,13 @@ impl DuplicateFinder {
             callback.on_phase_end("walking");
         }
 
-        summary.total_files = files.len();
-        summary.total_size = files.iter().map(|f| f.size).sum();
+        summary.total_files = files.len() + first_occurrences.len();
+        summary.total_size = files.iter().map(|f| f.size).sum::<u64>()
+            + first_occurrences.values().map(|f| f.size).sum::<u64>();
 
         log::info!(
             "Found {} files ({} total) across all directories",
-            files.len(),
+            summary.total_files,
             format_size(summary.total_size)
         );
 
@@ -1668,7 +1802,7 @@ impl DuplicateFinder {
         }
 
         if files.is_empty() {
-            log::info!("No files found, scan complete");
+            log::info!("No potential duplicates found across all directories, scan complete");
             summary.scan_duration = start_time.elapsed();
             return Ok((Vec::new(), summary));
         }
@@ -1678,7 +1812,8 @@ impl DuplicateFinder {
         log::info!("Phase 1: Grouping by size...");
         let (size_groups, size_stats) = super::group_by_size(files);
 
-        summary.eliminated_by_size = size_stats.eliminated_unique;
+        // Update eliminated count to include files we discarded during walk
+        summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
 
         log::info!(
             "Phase 1 complete: {} → {} files ({:.1}% eliminated)",
@@ -1706,6 +1841,7 @@ impl DuplicateFinder {
             shutdown_flag: self.config.shutdown_flag.clone(),
             progress_callback: self.config.progress_callback.clone(),
             reference_paths: self.config.reference_paths.clone(),
+            bloom_fp_rate: self.config.bloom_fp_rate,
         };
 
         let (prehash_groups, prehash_stats) =

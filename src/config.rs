@@ -223,6 +223,10 @@ pub struct Config {
     #[serde(default)]
     pub output: OutputFormat,
 
+    /// False positive rate for Bloom filters.
+    #[serde(default = "default_bloom_fp_rate")]
+    pub bloom_fp_rate: f64,
+
     // Named Profiles
     /// Named configuration profiles.
     ///
@@ -233,6 +237,10 @@ pub struct Config {
 
 fn default_io_threads() -> usize {
     4
+}
+
+fn default_bloom_fp_rate() -> f64 {
+    0.01
 }
 
 impl Default for Config {
@@ -260,6 +268,7 @@ impl Default for Config {
             permanent: false,
             dry_run: false,
             output: OutputFormat::Tui,
+            bloom_fp_rate: 0.01,
             profile: HashMap::new(),
         }
     }
@@ -470,6 +479,9 @@ impl Config {
         if let Some(output) = args.output {
             self.output = output;
         }
+        if let Some(rate) = args.bloom_fp_rate {
+            self.bloom_fp_rate = rate;
+        }
     }
 
     /// Merge load arguments into the configuration.
@@ -511,6 +523,7 @@ fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str)
         "permanent",
         "dry_run",
         "output",
+        "bloom_fp_rate",
         "profile",
     ];
 
@@ -606,6 +619,7 @@ fn validate_profile_keys(table: &toml_edit::Table, path: &str, content: &str) {
         "permanent",
         "dry_run",
         "output",
+        "bloom_fp_rate",
     ];
 
     for (key, _) in table.iter() {
