@@ -57,6 +57,80 @@ use crate::tui::keybindings::KeybindingProfile;
 /// (e.g., ["j", "Ctrl+n"]).
 pub type CustomKeybindings = HashMap<String, Vec<String>>;
 
+/// Accessibility settings for screen reader compatibility.
+///
+/// # Example
+///
+/// ```json
+/// {
+///     "accessibility": {
+///         "enabled": true,
+///         "use_ascii_borders": true,
+///         "disable_animations": true,
+///         "simplified_progress": true,
+///         "reduce_refresh_rate": true
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccessibilityConfig {
+    /// Enable accessible mode (overridden by --accessible CLI flag).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Use simple ASCII borders instead of Unicode box-drawing characters.
+    #[serde(default = "default_true")]
+    pub use_ascii_borders: bool,
+
+    /// Disable animations and spinners for screen reader compatibility.
+    #[serde(default = "default_true")]
+    pub disable_animations: bool,
+
+    /// Use simplified progress output without cursor movement.
+    #[serde(default = "default_true")]
+    pub simplified_progress: bool,
+
+    /// Reduce screen refresh rate for better screen reader performance.
+    #[serde(default = "default_true")]
+    pub reduce_refresh_rate: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for AccessibilityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            use_ascii_borders: true,
+            disable_animations: true,
+            simplified_progress: true,
+            reduce_refresh_rate: true,
+        }
+    }
+}
+
+impl AccessibilityConfig {
+    /// Check if accessible mode is active.
+    ///
+    /// Also returns true if NO_COLOR environment variable is set,
+    /// as this often indicates a screen reader environment.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.enabled || std::env::var("NO_COLOR").is_ok()
+    }
+
+    /// Create an accessibility config with accessible mode enabled.
+    #[must_use]
+    pub fn enabled() -> Self {
+        Self {
+            enabled: true,
+            ..Default::default()
+        }
+    }
+}
+
 /// Application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -74,6 +148,10 @@ pub struct Config {
     /// Custom bindings add to (not replace) the profile bindings.
     #[serde(default)]
     pub custom_keybindings: CustomKeybindings,
+
+    /// Accessibility settings for screen reader compatibility.
+    #[serde(default)]
+    pub accessibility: AccessibilityConfig,
 }
 
 impl Default for Config {
@@ -82,6 +160,7 @@ impl Default for Config {
             theme: ThemeArg::Auto,
             keybinding_profile: KeybindingProfile::Universal,
             custom_keybindings: CustomKeybindings::new(),
+            accessibility: AccessibilityConfig::default(),
         }
     }
 }
@@ -132,5 +211,20 @@ impl Config {
     #[must_use]
     pub fn has_custom_keybindings(&self) -> bool {
         !self.custom_keybindings.is_empty()
+    }
+
+    /// Check if accessible mode is active.
+    ///
+    /// Returns true if:
+    /// - Accessibility is enabled in config
+    /// - NO_COLOR environment variable is set
+    #[must_use]
+    pub fn is_accessible(&self) -> bool {
+        self.accessibility.is_active()
+    }
+
+    /// Enable accessible mode.
+    pub fn enable_accessibility(&mut self) {
+        self.accessibility.enabled = true;
     }
 }

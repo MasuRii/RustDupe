@@ -381,6 +381,8 @@ pub struct App {
     theme: Theme,
     /// Active keybindings for display in help
     keybindings: Option<crate::tui::keybindings::KeyBindings>,
+    /// Accessible mode for screen reader compatibility
+    accessible: bool,
 }
 
 impl Default for App {
@@ -422,6 +424,7 @@ impl App {
             theme_arg: ThemeArg::Auto,
             theme: Theme::dark(),
             keybindings: None,
+            accessible: false,
         }
     }
 
@@ -481,6 +484,28 @@ impl App {
     #[must_use]
     pub fn keybindings(&self) -> Option<&crate::tui::keybindings::KeyBindings> {
         self.keybindings.as_ref()
+    }
+
+    /// Set accessible mode for screen reader compatibility.
+    ///
+    /// When enabled:
+    /// - Uses simple ASCII borders instead of Unicode box-drawing characters
+    /// - Disables animations and spinners
+    /// - Simplifies progress output
+    pub fn with_accessible(mut self, accessible: bool) -> Self {
+        self.accessible = accessible;
+        self
+    }
+
+    /// Enable accessible mode.
+    pub fn set_accessible(&mut self, accessible: bool) {
+        self.accessible = accessible;
+    }
+
+    /// Check if accessible mode is enabled.
+    #[must_use]
+    pub fn is_accessible(&self) -> bool {
+        self.accessible
     }
 
     /// Set dry-run mode for the application.
@@ -561,6 +586,7 @@ impl App {
             theme_arg: ThemeArg::Auto,
             theme: Theme::dark(),
             keybindings: None,
+            accessible: false,
         }
     }
 

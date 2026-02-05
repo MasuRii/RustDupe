@@ -68,6 +68,16 @@ pub struct Cli {
     )]
     pub keybinding_profile: Option<KeybindingProfile>,
 
+    /// Enable accessible mode for screen reader compatibility
+    ///
+    /// When enabled:
+    /// - Uses simple ASCII borders instead of Unicode box-drawing characters
+    /// - Disables animations and spinners
+    /// - Simplifies progress output (no cursor movement)
+    /// - Reduces screen refresh rate for better screen reader performance
+    #[arg(long, global = true, env = "RUSTDUPE_ACCESSIBLE")]
+    pub accessible: bool,
+
     /// Subcommand to execute
     #[command(subcommand)]
     pub command: Commands,
@@ -878,5 +888,40 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(cli.keybinding_profile, Some(KeybindingProfile::Vim));
+    }
+
+    #[test]
+    fn test_cli_accessible_flag_not_set() {
+        let cli = Cli::try_parse_from(["rustdupe", "scan", "/path"]).unwrap();
+        assert!(!cli.accessible);
+    }
+
+    #[test]
+    fn test_cli_accessible_flag_set() {
+        let cli = Cli::try_parse_from(["rustdupe", "--accessible", "scan", "/path"]).unwrap();
+        assert!(cli.accessible);
+    }
+
+    #[test]
+    fn test_cli_accessible_flag_with_load() {
+        let cli =
+            Cli::try_parse_from(["rustdupe", "--accessible", "load", "session.json"]).unwrap();
+        assert!(cli.accessible);
+    }
+
+    #[test]
+    fn test_cli_accessible_combined_with_other_flags() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "--accessible",
+            "--no-color",
+            "-v",
+            "scan",
+            "/path",
+        ])
+        .unwrap();
+        assert!(cli.accessible);
+        assert!(cli.no_color);
+        assert_eq!(cli.verbose, 1);
     }
 }

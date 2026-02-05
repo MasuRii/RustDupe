@@ -25,6 +25,7 @@ use bytesize::ByteSize;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
+    symbols::border,
     text::{Line, Span, Text},
     widgets::{
         Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
@@ -34,6 +35,50 @@ use ratatui::{
 };
 
 use super::app::{App, AppMode};
+
+// ==================== Accessible Mode Helpers ====================
+
+/// Custom ASCII border set for accessible mode.
+///
+/// Uses simple ASCII characters (+, -, |) instead of Unicode box-drawing
+/// characters for better screen reader compatibility.
+const ASCII_BORDER_SET: border::Set = border::Set {
+    top_left: "+",
+    top_right: "+",
+    bottom_left: "+",
+    bottom_right: "+",
+    vertical_left: "|",
+    vertical_right: "|",
+    horizontal_top: "-",
+    horizontal_bottom: "-",
+};
+
+/// Get the border set to use based on accessible mode.
+///
+/// In accessible mode, uses ASCII characters (+, -, |) instead of
+/// Unicode box-drawing characters for better screen reader compatibility.
+fn get_border_set(accessible: bool) -> border::Set {
+    if accessible {
+        ASCII_BORDER_SET
+    } else {
+        border::ROUNDED
+    }
+}
+
+/// Create a block with the appropriate border style for the current mode.
+fn create_block(accessible: bool) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_set(get_border_set(accessible))
+}
+
+/// Create a block with title and the appropriate border style.
+fn create_block_with_title<'a>(accessible: bool, title: impl Into<Line<'a>>) -> Block<'a> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_set(get_border_set(accessible))
+        .title(title)
+}
 
 /// Render the TUI based on current application state.
 ///
@@ -130,8 +175,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         )
         .alignment(Alignment::Center)
         .block(
-            Block::default()
-                .borders(Borders::ALL)
+            create_block(app.is_accessible())
                 .border_style(Style::default().fg(app.theme().primary)),
         );
 
@@ -156,7 +200,7 @@ fn render_quitting_content(frame: &mut Frame, app: &App, area: Rect) {
     let message = Paragraph::new("Goodbye! Thanks for using rustdupe.")
         .style(Style::default().fg(app.theme().success))
         .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL));
+        .block(create_block(app.is_accessible()));
     frame.render_widget(message, area);
 }
 
@@ -196,9 +240,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let footer = Paragraph::new(Line::from(spans))
         .alignment(Alignment::Center)
         .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(app.theme().dim)),
+            create_block(app.is_accessible()).border_style(Style::default().fg(app.theme().dim)),
         );
 
     frame.render_widget(footer, area);
@@ -260,7 +302,7 @@ fn render_reviewing_content(frame: &mut Frame, app: &App, area: Rect) {
         let message = Paragraph::new("No duplicate files found.")
             .style(Style::default().fg(app.theme().success))
             .alignment(Alignment::Center)
-            .block(Block::default().borders(Borders::ALL).title("Results"));
+            .block(create_block_with_title(app.is_accessible(), "Results"));
         frame.render_widget(message, area);
         return;
     }
@@ -336,14 +378,11 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
 
     let list = List::new(items)
         .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!(
-                    "Duplicate Groups ({}/{})",
-                    selected_group + 1,
-                    groups.len()
-                ))
-                .border_style(Style::default().fg(app.theme().primary)),
+            create_block_with_title(
+                app.is_accessible(),
+                format!("Duplicate Groups ({}/{})", selected_group + 1, groups.len()),
+            )
+            .border_style(Style::default().fg(app.theme().primary)),
         )
         .highlight_style(
             Style::default()
@@ -362,10 +401,16 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
 
     // Render scrollbar if needed
     if groups.len() > visible_height {
+        // Use ASCII symbols in accessible mode
+        let (begin_sym, end_sym) = if app.is_accessible() {
+            ("^", "v")
+        } else {
+            ("▲", "▼")
+        };
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(Some("▲"))
-                .end_symbol(Some("▼")),
+                .begin_symbol(Some(begin_sym))
+                .end_symbol(Some(end_sym)),
             inner_chunks[1],
             &mut scrollbar_state,
         );
@@ -463,9 +508,7 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
 
     let list = List::new(items)
         .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
+            create_block_with_title(app.is_accessible(), title)
                 .border_style(Style::default().fg(app.theme().secondary)),
         )
         .highlight_style(
@@ -483,10 +526,16 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(list, inner_chunks[0]);
 
     if group.files.len() > visible_height {
+        // Use ASCII symbols in accessible mode
+        let (begin_sym, end_sym) = if app.is_accessible() {
+            ("^", "v")
+        } else {
+            ("▲", "▼")
+        };
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(Some("▲"))
-                .end_symbol(Some("▼")),
+                .begin_symbol(Some(begin_sym))
+                .end_symbol(Some(end_sym)),
             inner_chunks[1],
             &mut scrollbar_state,
         );
@@ -512,10 +561,11 @@ fn render_preview_dialog(frame: &mut Frame, app: &App, area: Rect) {
         .style(Style::default().fg(app.theme().normal))
         .wrap(Wrap { trim: false })
         .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!("Preview: {}", truncate_path(&path, 50)))
-                .border_style(Style::default().fg(app.theme().secondary)),
+            create_block_with_title(
+                app.is_accessible(),
+                format!("Preview: {}", truncate_path(&path, 50)),
+            )
+            .border_style(Style::default().fg(app.theme().secondary)),
         );
 
     frame.render_widget(preview, dialog_area);
@@ -585,9 +635,7 @@ fn render_confirm_dialog(frame: &mut Frame, app: &App, area: Rect) {
     let confirm = Paragraph::new(Text::from(lines))
         .alignment(Alignment::Center)
         .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Confirm")
+            create_block_with_title(app.is_accessible(), "Confirm")
                 .border_style(Style::default().fg(app.theme().danger)),
         );
 
@@ -620,9 +668,7 @@ fn render_folder_selection_dialog(frame: &mut Frame, app: &App, area: Rect) {
 
     let list = List::new(items)
         .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Select Folder to Mark All Duplicates")
+            create_block_with_title(app.is_accessible(), "Select Folder to Mark All Duplicates")
                 .border_style(Style::default().fg(app.theme().primary)),
         )
         .highlight_style(
@@ -658,11 +704,7 @@ fn render_error_dialog(frame: &mut Frame, app: &App, area: Rect) {
         )),
     ])
     .alignment(Alignment::Center)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(app.theme().danger)),
-    );
+    .block(create_block(app.is_accessible()).border_style(Style::default().fg(app.theme().danger)));
 
     frame.render_widget(error, dialog_area);
 }
@@ -941,9 +983,7 @@ fn render_help_dialog(frame: &mut Frame, app: &App, area: Rect) {
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: false })
         .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Help")
+            create_block_with_title(app.is_accessible(), "Help")
                 .border_style(Style::default().fg(app.theme().primary)),
         );
 

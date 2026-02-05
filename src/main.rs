@@ -42,6 +42,10 @@ fn main() -> Result<()> {
         config.theme
     };
 
+    // Determine if accessible mode should be enabled
+    // CLI flag (--accessible) OR config setting OR NO_COLOR env var
+    let accessible = cli.accessible || config.is_accessible();
+
     // Use keybinding profile from CLI if provided, otherwise from config
     // CLI flag (including env var) overrides config file
     let keybinding_profile = cli.keybinding_profile.unwrap_or(config.keybinding_profile);
@@ -73,8 +77,22 @@ fn main() -> Result<()> {
 
     // Handle subcommands
     match cli.command {
-        Commands::Scan(args) => handle_scan(*args, shutdown_flag, cli.quiet, theme, keybindings),
-        Commands::Load(args) => handle_load(args, shutdown_flag, cli.quiet, theme, keybindings),
+        Commands::Scan(args) => handle_scan(
+            *args,
+            shutdown_flag,
+            cli.quiet,
+            theme,
+            keybindings,
+            accessible,
+        ),
+        Commands::Load(args) => handle_load(
+            args,
+            shutdown_flag,
+            cli.quiet,
+            theme,
+            keybindings,
+            accessible,
+        ),
     }?;
 
     // Check if shutdown was requested and exit with appropriate code
@@ -91,6 +109,7 @@ fn handle_scan(
     quiet: bool,
     theme: ThemeArg,
     keybindings: KeyBindings,
+    accessible: bool,
 ) -> Result<()> {
     let (groups, summary, scan_paths, settings, reference_paths) = if let Some(ref session_path) =
         args.load_session
@@ -237,7 +256,9 @@ fn handle_scan(
 
         // Configure progress reporting for non-TUI modes
         let progress = if args.output != OutputFormat::Tui {
-            Some(Arc::new(rustdupe::progress::Progress::new(quiet)))
+            Some(Arc::new(rustdupe::progress::Progress::with_accessible(
+                quiet, accessible,
+            )))
         } else {
             None
         };
@@ -316,6 +337,7 @@ fn handle_scan(
         dry_run: args.dry_run,
         theme,
         keybindings,
+        accessible,
     })
 }
 
@@ -325,6 +347,7 @@ fn handle_load(
     _quiet: bool,
     theme: ThemeArg,
     keybindings: KeyBindings,
+    accessible: bool,
 ) -> Result<()> {
     log::info!("Loading session from {:?}", args.path);
     let session = Session::load(&args.path)?;
@@ -349,6 +372,7 @@ fn handle_load(
         dry_run: args.dry_run,
         theme,
         keybindings,
+        accessible,
     })
 }
 
@@ -367,6 +391,7 @@ struct ResultContext {
     dry_run: bool,
     theme: ThemeArg,
     keybindings: KeyBindings,
+    accessible: bool,
 }
 
 fn handle_results(ctx: ResultContext) -> Result<()> {
@@ -385,6 +410,7 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
         dry_run,
         theme,
         keybindings,
+        accessible,
     } = ctx;
 
     // 1. Save session if requested (non-TUI only)
@@ -419,7 +445,8 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
             let mut app = rustdupe::tui::App::with_groups(groups)
                 .with_reference_paths(reference_paths)
                 .with_dry_run(dry_run)
-                .with_theme(theme);
+                .with_theme(theme)
+                .with_accessible(accessible);
             if let Some(session) = initial_session {
                 app.apply_session(
                     session.user_selections,
