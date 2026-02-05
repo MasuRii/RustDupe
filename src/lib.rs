@@ -594,6 +594,11 @@ fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
                 Some(keybindings),
             )?;
 
+            // Print summary after TUI exit if not quiet
+            if !quiet {
+                summary.print();
+            }
+
             // Save session after TUI exit if requested
             if let Some(ref path) = save_session {
                 let (group_index, file_index) = app.navigation_position();

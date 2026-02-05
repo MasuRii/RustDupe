@@ -37,6 +37,7 @@ use std::sync::Arc;
 use growable_bloom_filter::GrowableBloom;
 use indicatif::HumanDuration;
 use rayon::prelude::*;
+use yansi::Paint;
 
 use crate::cache::{CacheEntry, HashCache};
 use crate::progress::ProgressCallback;
@@ -651,6 +652,8 @@ pub struct FullhashStats {
     pub duplicate_groups: usize,
     /// Number of confirmed duplicate files (excluding originals)
     pub duplicate_files: usize,
+    /// Total size of all files in duplicate groups
+    pub total_duplicate_size: u64,
     /// Total space wasted by duplicates
     pub wasted_space: u64,
     /// Whether phase was interrupted by shutdown
@@ -662,6 +665,7 @@ impl FullhashStats {
     pub fn calculate_wasted_space(&mut self, groups: &[super::DuplicateGroup]) {
         self.duplicate_groups = groups.len();
         self.duplicate_files = groups.iter().map(|g| g.duplicate_count()).sum();
+        self.total_duplicate_size = groups.iter().map(|g| g.total_size()).sum();
         self.wasted_space = groups.iter().map(|g| g.wasted_space()).sum();
     }
 }
@@ -1127,6 +1131,8 @@ pub struct ScanSummary {
     pub duplicate_groups: usize,
     /// Total number of duplicate files (excluding originals)
     pub duplicate_files: usize,
+    /// Total size of all files in duplicate groups
+    pub total_duplicate_size: u64,
     /// Total space that can be reclaimed by removing duplicates
     pub reclaimable_space: u64,
     /// Duration of the entire scan
@@ -1184,6 +1190,12 @@ impl ScanSummary {
         format_size(self.total_size)
     }
 
+    /// Format total size of duplicates as human-readable string.
+    #[must_use]
+    pub fn total_duplicate_size_display(&self) -> String {
+        format_size(self.total_duplicate_size)
+    }
+
     /// Calculate the observed false positive rate for the size Bloom filter.
     #[must_use]
     pub fn bloom_size_fp_rate(&self) -> f64 {
@@ -1208,49 +1220,84 @@ impl ScanSummary {
 
     /// Print a human-readable summary of the scan results.
     pub fn print(&self) {
-        eprintln!("\nScan Summary:");
-        eprintln!("  Total files:      {}", self.total_files);
-        eprintln!("  Total size:       {}", self.total_size_display());
-        eprintln!(
-            "  Duplicates found: {} (in {} groups)",
-            self.duplicate_files, self.duplicate_groups
-        );
-        eprintln!("  Reclaimable:      {}", self.reclaimable_display());
-        eprintln!("  Scan duration:    {}", HumanDuration(self.scan_duration));
+        if self.interrupted {
+            eprintln!("{}", "Scan Interrupted".yellow().bold());
+        } else {
+            eprintln!("{}", "\nScan Summary".cyan().bold());
+        }
 
-        eprintln!("\nPhase Breakdown:");
         eprintln!(
-            "  Walking:          {:>10}",
+            "  {: <18} {}",
+            "Total files:",
+            self.total_files.white().bold()
+        );
+        eprintln!(
+            "  {: <18} {}",
+            "Total size:",
+            self.total_size_display().white().bold()
+        );
+        eprintln!(
+            "  {: <18} {} (in {} groups)",
+            "Duplicates found:",
+            self.duplicate_files.red().bold(),
+            self.duplicate_groups
+        );
+        eprintln!(
+            "  {: <18} {}",
+            "Duplicate size:",
+            self.total_duplicate_size_display().white().bold()
+        );
+        eprintln!(
+            "  {: <18} {}",
+            "Reclaimable:",
+            self.reclaimable_display().green().bold()
+        );
+        eprintln!(
+            "  {: <18} {}",
+            "Scan duration:",
+            HumanDuration(self.scan_duration).magenta().bold()
+        );
+
+        eprintln!("{}", "\nPhase Breakdown".cyan().bold());
+        eprintln!(
+            "  {: <18} {:>10}",
+            "Walking:",
             HumanDuration(self.walk_duration)
         );
         eprintln!(
-            "  Size Grouping:    {:>10}",
+            "  {: <18} {:>10}",
+            "Size Grouping:",
             HumanDuration(self.size_duration)
         );
         eprintln!(
-            "  Prehashing:       {:>10}",
+            "  {: <18} {:>10}",
+            "Prehashing:",
             HumanDuration(self.prehash_duration)
         );
         eprintln!(
-            "  Full Hashing:     {:>10}",
+            "  {: <18} {:>10}",
+            "Full Hashing:",
             HumanDuration(self.fullhash_duration)
         );
         if self.images_perceptual_hashed > 0 {
             eprintln!(
-                "  Perceptual Hash:  {:>10}",
+                "  {: <18} {:>10}",
+                "Perceptual Hash:",
                 HumanDuration(self.perceptual_duration)
             );
             eprintln!(
-                "  Clustering:       {:>10}",
+                "  {: <18} {:>10}",
+                "Clustering:",
                 HumanDuration(self.clustering_duration)
             );
         }
 
         if self.bloom_size_unique > 0 || self.bloom_prehash_unique > 0 {
-            eprintln!("\nBloom Filter Efficiency:");
+            eprintln!("{}", "\nBloom Filter Efficiency".cyan().bold());
             if self.bloom_size_unique > 0 {
                 eprintln!(
-                    "  Size Filter:      {} unique, {} FPs ({:.4}% FPR)",
+                    "  {: <18} {} unique, {} FPs ({:.4}% FPR)",
+                    "Size Filter:",
                     self.bloom_size_unique,
                     self.bloom_size_fp,
                     self.bloom_size_fp_rate()
@@ -1258,7 +1305,8 @@ impl ScanSummary {
             }
             if self.bloom_prehash_unique > 0 {
                 eprintln!(
-                    "  Prehash Filter:   {} unique, {} FPs ({:.4}% FPR)",
+                    "  {: <18} {} unique, {} FPs ({:.4}% FPR)",
+                    "Prehash Filter:",
                     self.bloom_prehash_unique,
                     self.bloom_prehash_fp,
                     self.bloom_prehash_fp_rate()
@@ -1270,17 +1318,17 @@ impl ScanSummary {
             || self.cache_fullhash_hits > 0
             || self.images_perceptual_hash_cache_hits > 0
         {
-            eprintln!("\nCache Effectiveness:");
+            eprintln!("{}", "\nCache Effectiveness".cyan().bold());
             if self.cache_prehash_hits > 0 {
-                eprintln!("  Prehash hits:     {}", self.cache_prehash_hits);
+                eprintln!("  {: <18} {}", "Prehash hits:", self.cache_prehash_hits);
             }
             if self.cache_fullhash_hits > 0 {
-                eprintln!("  Full hash hits:   {}", self.cache_fullhash_hits);
+                eprintln!("  {: <18} {}", "Full hash hits:", self.cache_fullhash_hits);
             }
             if self.images_perceptual_hash_cache_hits > 0 {
                 eprintln!(
-                    "  Perceptual hits:  {}",
-                    self.images_perceptual_hash_cache_hits
+                    "  {: <18} {}",
+                    "Perceptual hits:", self.images_perceptual_hash_cache_hits
                 );
             }
         }
@@ -1846,6 +1894,7 @@ impl DuplicateFinder {
         summary.duplicate_groups = fullhash_stats.duplicate_groups;
         summary.duplicate_files = fullhash_stats.duplicate_files;
         summary.reclaimable_space = fullhash_stats.wasted_space;
+        summary.total_duplicate_size = fullhash_stats.total_duplicate_size;
         summary.cache_fullhash_hits = fullhash_stats.cache_hits;
         summary.cache_fullhash_misses = fullhash_stats.cache_misses;
         summary.fullhash_duration = fullhash_start.elapsed();
@@ -2080,6 +2129,7 @@ impl DuplicateFinder {
         summary.duplicate_groups = fullhash_stats.duplicate_groups;
         summary.duplicate_files = fullhash_stats.duplicate_files;
         summary.reclaimable_space = fullhash_stats.wasted_space;
+        summary.total_duplicate_size = fullhash_stats.total_duplicate_size;
         summary.cache_fullhash_hits = fullhash_stats.cache_hits;
         summary.cache_fullhash_misses = fullhash_stats.cache_misses;
         summary.fullhash_duration = fullhash_start.elapsed();
@@ -2413,6 +2463,7 @@ impl DuplicateFinder {
         summary.duplicate_groups = fullhash_stats.duplicate_groups;
         summary.duplicate_files = fullhash_stats.duplicate_files;
         summary.reclaimable_space = fullhash_stats.wasted_space;
+        summary.total_duplicate_size = fullhash_stats.total_duplicate_size;
         summary.cache_fullhash_hits = fullhash_stats.cache_hits;
         summary.cache_fullhash_misses = fullhash_stats.cache_misses;
         summary.fullhash_duration = fullhash_start.elapsed();

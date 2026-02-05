@@ -41,6 +41,8 @@ pub struct HtmlOutput {
     pub summary: ScanSummary,
     /// Human-readable total size
     pub total_size: String,
+    /// Human-readable total size of duplicates
+    pub total_duplicate_size: String,
     /// Human-readable reclaimable space
     pub reclaimable_space: String,
     /// Human-readable total duration
@@ -143,6 +145,7 @@ impl HtmlOutput {
             version,
             summary: summary.clone(),
             total_size: ByteSize::b(summary.total_size).to_string(),
+            total_duplicate_size: ByteSize::b(summary.total_duplicate_size).to_string(),
             reclaimable_space: ByteSize::b(summary.reclaimable_space).to_string(),
             total_duration: format_duration(summary.scan_duration),
             phases,

@@ -196,11 +196,17 @@ impl DuplicateGroup {
         self.files.is_empty()
     }
 
+    /// Total size of all files in this group.
+    #[must_use]
+    pub fn total_size(&self) -> u64 {
+        self.files.iter().map(|f| f.size).sum()
+    }
+
     /// Total wasted space (all copies minus one).
     #[must_use]
     pub fn wasted_space(&self) -> u64 {
         if self.files.len() > 1 {
-            self.size * (self.files.len() as u64 - 1)
+            self.total_size().saturating_sub(self.files[0].size)
         } else {
             0
         }

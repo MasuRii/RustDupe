@@ -280,11 +280,41 @@
                 <span class="stat-label">Duplicate Groups</span>
                 <span class="stat-value">{{ summary.duplicate_groups }}</span>
             </div>
+            <div class="stat-box">
+                <span class="stat-label">Duplicate Size</span>
+                <span class="stat-value">{{ total_duplicate_size }}</span>
+            </div>
             <div class="stat-box highlight">
                 <span class="stat-label">Reclaimable</span>
                 <span class="stat-value">{{ reclaimable_space }}</span>
             </div>
         </section>
+
+        {% if summary.bloom_size_unique > 0 || summary.bloom_prehash_unique > 0 %}
+        <section class="bloom" style="margin-bottom: 40px;">
+            <h2 style="margin-bottom: 20px;">Bloom Filter Efficiency</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 15px;">
+                {% if summary.bloom_size_unique > 0 %}
+                <div style="background: var(--card-bg); padding: 15px; border-radius: 10px; border: 1px solid var(--border-color);">
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--secondary-color); display: block; margin-bottom: 5px;">Size Filter</span>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                        <span style="font-weight: 700; color: var(--primary-color);">{{ summary.bloom_size_unique }} unique</span>
+                        <span style="font-size: 0.8rem; color: var(--danger-color);">{{ summary.bloom_size_fp }} FPs</span>
+                    </div>
+                </div>
+                {% endif %}
+                {% if summary.bloom_prehash_unique > 0 %}
+                <div style="background: var(--card-bg); padding: 15px; border-radius: 10px; border: 1px solid var(--border-color);">
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--secondary-color); display: block; margin-bottom: 5px;">Prehash Filter</span>
+                    <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                        <span style="font-weight: 700; color: var(--primary-color);">{{ summary.bloom_prehash_unique }} unique</span>
+                        <span style="font-size: 0.8rem; color: var(--danger-color);">{{ summary.bloom_prehash_fp }} FPs</span>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </section>
+        {% endif %}
 
         <section class="phases" style="margin-bottom: 40px;">
             <h2 style="margin-bottom: 20px;">Phase Breakdown</h2>

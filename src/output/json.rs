@@ -90,6 +90,8 @@ pub struct JsonSummary {
     pub duplicate_groups: usize,
     /// Total number of duplicate files (excluding originals)
     pub duplicate_files: usize,
+    /// Total size of all files in duplicate groups (bytes)
+    pub total_duplicate_size: u64,
     /// Total space that can be reclaimed by removing duplicates (bytes)
     pub reclaimable_space: u64,
     /// Duration of the scan in milliseconds
@@ -139,6 +141,7 @@ impl JsonSummary {
             total_size: summary.total_size,
             duplicate_groups: summary.duplicate_groups,
             duplicate_files: summary.duplicate_files,
+            total_duplicate_size: summary.total_duplicate_size,
             reclaimable_space: summary.reclaimable_space,
             scan_duration_ms: summary.scan_duration.as_millis() as u64,
             walk_duration_ms: summary.walk_duration.as_millis() as u64,
@@ -319,6 +322,7 @@ mod tests {
             cache_fullhash_misses: 0,
             duplicate_groups: 5,
             duplicate_files: 10,
+            total_duplicate_size: 1024 * 1024,
             reclaimable_space: 51200,
             scan_duration: Duration::from_millis(1234),
             walk_duration: Duration::from_millis(100),

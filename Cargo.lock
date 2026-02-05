@@ -2285,6 +2285,7 @@ dependencies = [
  "trash",
  "unicode-normalization",
  "walkdir",
+ "yansi",
 ]
 
 [[package]]

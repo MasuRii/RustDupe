@@ -88,6 +88,9 @@ figment = { version = "0.10", features = ["toml", "env"] }
 # Unicode Path Normalization - Critical for macOS NFD vs NFC issues
 unicode-normalization = "0.1"
 
+# Terminal coloring
+yansi = "1.0"
+
 # Fuzzy string matching for config suggestions
 strsim = "0.11"
 
