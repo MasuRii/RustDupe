@@ -326,6 +326,10 @@ pub fn phase2_prehash(
                     Ok(hash) => {
                         log::trace!("Prehash computed: {}", file.path.display());
 
+                        if let Some(ref callback) = config.progress_callback {
+                            callback.on_item_completed(file.size.min(4096));
+                        }
+
                         // Update cache
                         if let Some(ref cache) = config.cache {
                             let entry = CacheEntry::from(file.clone());

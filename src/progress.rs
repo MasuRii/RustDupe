@@ -14,53 +14,73 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use indicatif::{HumanDuration, MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressStyle};
 
-/// State for exponential moving average ETA calculation.
+/// State for exponential moving average metrics (ETA and throughput).
 #[derive(Debug)]
-struct EtaState {
-    ema_rate: f64,
+struct ProgressMetrics {
+    ema_rate: f64,      // items/sec
+    ema_byte_rate: f64, // bytes/sec
     last_pos: u64,
+    last_bytes: u64,
     last_update: Instant,
     initialized: bool,
     alpha: f64,
 }
 
-impl EtaState {
+impl ProgressMetrics {
     fn new() -> Self {
         Self {
             ema_rate: 0.0,
+            ema_byte_rate: 0.0,
             last_pos: 0,
+            last_bytes: 0,
             last_update: Instant::now(),
             initialized: false,
             alpha: 0.1, // Smoothing factor (0.1 = more stable, 0.2 = more responsive)
         }
     }
 
-    fn update(&mut self, pos: u64) {
+    fn update(&mut self, pos: u64, bytes: u64) {
         let now = Instant::now();
         let delta_t = now.duration_since(self.last_update).as_secs_f64();
         let delta_pos = pos.saturating_sub(self.last_pos);
+        let delta_bytes = bytes.saturating_sub(self.last_bytes);
 
-        // Update at most every 100ms and only if there's progress
-        if delta_pos == 0 || delta_t < 0.1 {
+        // Update at most every 100ms
+        if delta_t < 0.1 {
             return;
         }
 
-        let instant_rate = delta_pos as f64 / delta_t;
+        if delta_pos > 0 {
+            let instant_rate = delta_pos as f64 / delta_t;
+            if !self.initialized {
+                self.ema_rate = instant_rate;
+            } else {
+                self.ema_rate = self.alpha * instant_rate + (1.0 - self.alpha) * self.ema_rate;
+            }
+        }
 
-        if !self.initialized {
-            self.ema_rate = instant_rate;
+        if delta_bytes > 0 {
+            let instant_byte_rate = delta_bytes as f64 / delta_t;
+            if !self.initialized {
+                self.ema_byte_rate = instant_byte_rate;
+            } else {
+                self.ema_byte_rate =
+                    self.alpha * instant_byte_rate + (1.0 - self.alpha) * self.ema_byte_rate;
+            }
+        }
+
+        if !self.initialized && (delta_pos > 0 || delta_bytes > 0) {
             self.initialized = true;
-        } else {
-            self.ema_rate = self.alpha * instant_rate + (1.0 - self.alpha) * self.ema_rate;
         }
 
         self.last_pos = pos;
+        self.last_bytes = bytes;
         self.last_update = now;
     }
 
-    fn estimate(&self, remaining: u64) -> Option<Duration> {
+    fn estimate_eta(&self, remaining: u64) -> Option<Duration> {
         if !self.initialized || self.ema_rate <= 0.0 {
             return None;
         }
@@ -72,6 +92,14 @@ impl EtaState {
         }
 
         Some(Duration::from_secs_f64(secs))
+    }
+
+    fn rate_items(&self) -> f64 {
+        self.ema_rate
+    }
+
+    fn rate_bytes(&self) -> f64 {
+        self.ema_byte_rate
     }
 }
 
@@ -131,7 +159,8 @@ pub struct Progress {
     fullhash: Mutex<Option<ProgressBar>>,
     prefix: Mutex<String>,
     active_phase: Mutex<Option<String>>,
-    etas: Mutex<HashMap<String, EtaState>>,
+    metrics: Mutex<HashMap<String, ProgressMetrics>>,
+    total_bytes: Mutex<HashMap<String, u64>>,
     quiet: bool,
     accessible: bool,
 }
@@ -158,7 +187,8 @@ impl Progress {
             fullhash: Mutex::new(None),
             prefix: Mutex::new(String::new()),
             active_phase: Mutex::new(None),
-            etas: Mutex::new(HashMap::new()),
+            metrics: Mutex::new(HashMap::new()),
+            total_bytes: Mutex::new(HashMap::new()),
             quiet,
             accessible: false,
         }
@@ -187,7 +217,8 @@ impl Progress {
             fullhash: Mutex::new(None),
             prefix: Mutex::new(String::new()),
             active_phase: Mutex::new(None),
-            etas: Mutex::new(HashMap::new()),
+            metrics: Mutex::new(HashMap::new()),
+            total_bytes: Mutex::new(HashMap::new()),
             quiet,
             accessible,
         }
@@ -256,10 +287,14 @@ impl ProgressCallback for Progress {
         }
 
         *self.active_phase.lock().unwrap() = Some(phase.to_string());
-        self.etas
+        self.metrics
             .lock()
             .unwrap()
-            .insert(phase.to_string(), EtaState::new());
+            .insert(phase.to_string(), ProgressMetrics::new());
+        self.total_bytes
+            .lock()
+            .unwrap()
+            .insert(phase.to_string(), 0);
 
         match phase {
             "walking" => {
@@ -308,42 +343,63 @@ impl ProgressCallback for Progress {
             format!("{}: {}", *prefix, truncate_path(path, 30))
         };
 
-        // Update ETA
-        let mut eta_display = String::new();
+        // Update metrics and generate status
+        let mut metrics_display = String::new();
         let active_phase = self.active_phase.lock().unwrap();
         if let Some(ref phase) = *active_phase {
-            let mut etas = self.etas.lock().unwrap();
-            if let Some(eta) = etas.get_mut(phase) {
-                eta.update(current as u64);
-
-                // Only show ETA if we have a total length
-                let total = match phase.as_str() {
-                    "fullhash" => self
-                        .fullhash
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .and_then(|pb| pb.length()),
-                    "prehash" => self
-                        .prehash
-                        .lock()
-                        .unwrap()
-                        .as_ref()
-                        .and_then(|pb| pb.length()),
-                    _ => None,
-                }
+            let bytes = self
+                .total_bytes
+                .lock()
+                .unwrap()
+                .get(phase)
+                .copied()
                 .unwrap_or(0);
 
-                if total > 0 {
-                    let remaining = total.saturating_sub(current as u64);
-                    if let Some(est) = eta.estimate(remaining) {
-                        eta_display = format!(" (ETA: {})", HumanDuration(est));
+            let mut metrics_map = self.metrics.lock().unwrap();
+            if let Some(m) = metrics_map.get_mut(phase) {
+                m.update(current as u64, bytes);
+
+                // Throughput
+                let items_rate = m.rate_items();
+                let bytes_rate = m.rate_bytes();
+
+                if items_rate > 0.0 {
+                    metrics_display = format!(" ({:.1} files/s", items_rate);
+                    if bytes_rate > 0.0 {
+                        metrics_display.push_str(&format!(", {}/s", HumanBytes(bytes_rate as u64)));
                     }
+
+                    // ETA
+                    // Only show ETA if we have a total length
+                    let total = match phase.as_str() {
+                        "fullhash" => self
+                            .fullhash
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .and_then(|pb| pb.length()),
+                        "prehash" => self
+                            .prehash
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .and_then(|pb| pb.length()),
+                        _ => None,
+                    }
+                    .unwrap_or(0);
+
+                    if total > 0 {
+                        let remaining = total.saturating_sub(current as u64);
+                        if let Some(est) = m.estimate_eta(remaining) {
+                            metrics_display.push_str(&format!(" | ETA: {}", HumanDuration(est)));
+                        }
+                    }
+                    metrics_display.push(')');
                 }
             }
         }
 
-        let final_msg = format!("{}{}", display_msg, eta_display);
+        let final_msg = format!("{}{}", display_msg, metrics_display);
 
         // Update the active progress bar
         if let Some(ref pb) = *self.fullhash.lock().unwrap() {
@@ -358,9 +414,18 @@ impl ProgressCallback for Progress {
         }
     }
 
-    fn on_item_completed(&self, _bytes: u64) {
-        // We could use this to track throughput in MB/s
-        // but it would require byte-based ProgressBar
+    fn on_item_completed(&self, bytes: u64) {
+        if self.quiet {
+            return;
+        }
+
+        let active_phase = self.active_phase.lock().unwrap();
+        if let Some(ref phase) = *active_phase {
+            let mut total_bytes = self.total_bytes.lock().unwrap();
+            if let Some(entry) = total_bytes.get_mut(phase) {
+                *entry += bytes;
+            }
+        }
     }
 
     fn on_phase_end(&self, phase: &str) {
