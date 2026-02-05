@@ -61,7 +61,7 @@ use thiserror::Error;
 
 use super::app::{Action, App, AppMode};
 use super::events::EventHandler;
-use super::keybindings::KeybindingProfile;
+use super::keybindings::{KeyBindings, KeybindingProfile};
 use super::ui::render;
 use crate::actions::delete::{delete_batch, validate_preserves_copy, DeleteConfig};
 use crate::actions::preview::preview_file_simple;
@@ -139,6 +139,52 @@ pub fn run_tui(
     shutdown_flag: Option<Arc<AtomicBool>>,
     keybinding_profile: Option<KeybindingProfile>,
 ) -> TuiResult<()> {
+    let bindings = keybinding_profile.map(KeyBindings::from_profile);
+    run_tui_with_bindings(app, shutdown_flag, bindings)
+}
+
+/// Run the interactive TUI with custom keybindings.
+///
+/// This function takes over the terminal and runs the interactive interface
+/// until the user quits or an error occurs. Unlike [`run_tui`], this variant
+/// accepts a fully configured [`KeyBindings`] instance, allowing custom
+/// keybinding overrides.
+///
+/// # Arguments
+///
+/// * `app` - The application state, typically pre-loaded with duplicate groups
+/// * `shutdown_flag` - Optional flag for external shutdown signaling (e.g., Ctrl+C handler)
+/// * `bindings` - Optional keybindings to use (defaults to Universal profile)
+///
+/// # Returns
+///
+/// Returns `Ok(())` on normal exit, or `Err` on error.
+///
+/// # Example
+///
+/// ```no_run
+/// use rustdupe::tui::{run_tui_with_bindings, App, KeyBindings, KeybindingProfile};
+/// use std::collections::HashMap;
+///
+/// // Create custom bindings
+/// let mut custom = HashMap::new();
+/// custom.insert("navigate_down".to_string(), vec!["n".to_string()]);
+///
+/// let bindings = KeyBindings::from_profile_with_custom(
+///     KeybindingProfile::Vim,
+///     &custom
+/// ).unwrap();
+///
+/// let mut app = App::new();
+/// if let Err(e) = run_tui_with_bindings(&mut app, None, Some(bindings)) {
+///     eprintln!("TUI error: {}", e);
+/// }
+/// ```
+pub fn run_tui_with_bindings(
+    app: &mut App,
+    shutdown_flag: Option<Arc<AtomicBool>>,
+    bindings: Option<KeyBindings>,
+) -> TuiResult<()> {
     // Set up panic hook to restore terminal on panic
     let original_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
@@ -148,7 +194,7 @@ pub fn run_tui(
     }));
 
     // Run the TUI with proper cleanup
-    let result = run_tui_inner(app, shutdown_flag, keybinding_profile);
+    let result = run_tui_inner(app, shutdown_flag, bindings);
 
     // Restore the original panic hook
     let _ = panic::take_hook();
@@ -162,14 +208,14 @@ pub fn run_tui(
 fn run_tui_inner(
     app: &mut App,
     shutdown_flag: Option<Arc<AtomicBool>>,
-    keybinding_profile: Option<KeybindingProfile>,
+    bindings: Option<KeyBindings>,
 ) -> TuiResult<()> {
     // Set up the terminal
     let mut terminal = setup_terminal()?;
 
-    // Create event handler with the specified profile (or default to Universal)
-    let event_handler = match keybinding_profile {
-        Some(profile) => EventHandler::with_profile(profile),
+    // Create event handler with the specified bindings (or default to Universal)
+    let event_handler = match bindings {
+        Some(b) => EventHandler::with_bindings(b),
         None => EventHandler::new(),
     };
 

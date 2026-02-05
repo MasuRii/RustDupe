@@ -130,8 +130,12 @@ pub enum KeybindingError {
     InvalidProfile(String),
 
     /// Invalid key specification.
-    #[error("Invalid key specification: '{0}'")]
+    #[error("Invalid key specification: '{0}'. Examples: 'j', 'Ctrl+c', 'Down', 'Space', 'F1'")]
     InvalidKeySpec(String),
+
+    /// Invalid action name.
+    #[error("Unknown action: '{0}'. Valid actions: {}", Action::all_names().join(", "))]
+    InvalidAction(String),
 }
 
 /// Keybinding configuration mapping actions to key events.
@@ -303,6 +307,232 @@ impl KeyBindings {
             parts.push(&key_name);
             parts.join("+")
         }
+    }
+
+    /// Parse a key specification string into a KeyEvent.
+    ///
+    /// Supports formats like:
+    /// - Simple keys: "j", "k", "Space", "Enter", "Esc"
+    /// - Arrow keys: "Up", "Down", "Left", "Right"
+    /// - Special keys: "PageUp", "PageDown", "PgUp", "PgDn", "Home", "End"
+    /// - Function keys: "F1", "F2", ..., "F12"
+    /// - With modifiers: "Ctrl+c", "Alt+j", "Shift+Enter"
+    /// - Multiple modifiers: "Ctrl+Shift+a"
+    ///
+    /// # Errors
+    ///
+    /// Returns `KeybindingError::InvalidKeySpec` if the key specification
+    /// cannot be parsed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::keybindings::KeyBindings;
+    /// use crossterm::event::{KeyCode, KeyModifiers};
+    ///
+    /// let key = KeyBindings::parse_key("Ctrl+j").unwrap();
+    /// assert_eq!(key.code, KeyCode::Char('j'));
+    /// assert_eq!(key.modifiers, KeyModifiers::CONTROL);
+    ///
+    /// let key = KeyBindings::parse_key("Down").unwrap();
+    /// assert_eq!(key.code, KeyCode::Down);
+    /// ```
+    pub fn parse_key(spec: &str) -> Result<KeyEvent, KeybindingError> {
+        let spec = spec.trim();
+        if spec.is_empty() {
+            return Err(KeybindingError::InvalidKeySpec(spec.to_string()));
+        }
+
+        // Split on '+' but handle edge case of '+' key itself
+        let parts: Vec<&str> = if spec == "+" {
+            vec!["+"]
+        } else {
+            spec.split('+').map(str::trim).collect()
+        };
+
+        if parts.is_empty() {
+            return Err(KeybindingError::InvalidKeySpec(spec.to_string()));
+        }
+
+        let mut modifiers = KeyModifiers::NONE;
+        let mut key_part = None;
+
+        for (i, part) in parts.iter().enumerate() {
+            let lower = part.to_lowercase();
+            match lower.as_str() {
+                "ctrl" | "control" => modifiers |= KeyModifiers::CONTROL,
+                "alt" | "meta" | "option" => modifiers |= KeyModifiers::ALT,
+                "shift" => modifiers |= KeyModifiers::SHIFT,
+                _ => {
+                    // This should be the actual key (last part)
+                    if i != parts.len() - 1 {
+                        // Modifier in wrong position - treat as invalid
+                        return Err(KeybindingError::InvalidKeySpec(format!(
+                            "'{spec}' - unexpected modifier position for '{part}'"
+                        )));
+                    }
+                    key_part = Some(*part);
+                }
+            }
+        }
+
+        let key_str = key_part.ok_or_else(|| {
+            KeybindingError::InvalidKeySpec(format!("'{spec}' - missing key after modifiers"))
+        })?;
+
+        let code = Self::parse_key_code(key_str)
+            .ok_or_else(|| KeybindingError::InvalidKeySpec(spec.to_string()))?;
+
+        Ok(KeyEvent::new(code, modifiers))
+    }
+
+    /// Parse a key code from a string.
+    fn parse_key_code(s: &str) -> Option<KeyCode> {
+        let lower = s.to_lowercase();
+
+        // Check for function keys first (F1-F12)
+        if let Some(rest) = lower.strip_prefix('f') {
+            if let Ok(n) = rest.parse::<u8>() {
+                if (1..=12).contains(&n) {
+                    return Some(KeyCode::F(n));
+                }
+            }
+        }
+
+        // Named keys
+        match lower.as_str() {
+            // Letters (single char)
+            _ if s.len() == 1 && s.chars().next().map(|c| c.is_ascii()).unwrap_or(false) => {
+                Some(KeyCode::Char(s.chars().next().unwrap()))
+            }
+
+            // Special named keys
+            "space" | "spc" => Some(KeyCode::Char(' ')),
+            "enter" | "return" | "ret" | "cr" => Some(KeyCode::Enter),
+            "esc" | "escape" => Some(KeyCode::Esc),
+            "tab" => Some(KeyCode::Tab),
+            "backtab" | "shifttab" => Some(KeyCode::BackTab),
+            "backspace" | "bs" => Some(KeyCode::Backspace),
+            "delete" | "del" => Some(KeyCode::Delete),
+            "insert" | "ins" => Some(KeyCode::Insert),
+
+            // Arrow keys
+            "up" | "uparrow" => Some(KeyCode::Up),
+            "down" | "downarrow" => Some(KeyCode::Down),
+            "left" | "leftarrow" => Some(KeyCode::Left),
+            "right" | "rightarrow" => Some(KeyCode::Right),
+
+            // Navigation keys
+            "pageup" | "pgup" | "page_up" => Some(KeyCode::PageUp),
+            "pagedown" | "pgdn" | "pgdown" | "page_down" => Some(KeyCode::PageDown),
+            "home" => Some(KeyCode::Home),
+            "end" => Some(KeyCode::End),
+
+            _ => None,
+        }
+    }
+
+    /// Parse an action name from a string.
+    ///
+    /// # Errors
+    ///
+    /// Returns `KeybindingError::InvalidAction` if the action name is not recognized.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::keybindings::KeyBindings;
+    /// use rustdupe::tui::Action;
+    ///
+    /// let action = KeyBindings::parse_action("navigate_down").unwrap();
+    /// assert_eq!(action, Action::NavigateDown);
+    ///
+    /// let action = KeyBindings::parse_action("quit").unwrap();
+    /// assert_eq!(action, Action::Quit);
+    /// ```
+    pub fn parse_action(name: &str) -> Result<Action, KeybindingError> {
+        name.parse::<Action>()
+            .map_err(|_| KeybindingError::InvalidAction(name.to_string()))
+    }
+
+    /// Merge custom keybindings with profile defaults.
+    ///
+    /// Custom bindings are added to the existing bindings for each action,
+    /// rather than replacing them entirely. This allows users to add
+    /// additional key combinations while keeping the profile defaults.
+    ///
+    /// # Arguments
+    ///
+    /// * `custom` - A map of action names to lists of key specifications
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any action name or key specification is invalid.
+    /// The error message includes details about what went wrong.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::keybindings::{KeyBindings, KeybindingProfile};
+    /// use std::collections::HashMap;
+    ///
+    /// let mut bindings = KeyBindings::from_profile(KeybindingProfile::Standard);
+    ///
+    /// // Add custom bindings
+    /// let mut custom = HashMap::new();
+    /// custom.insert("navigate_down".to_string(), vec!["j".to_string()]);
+    /// custom.insert("quit".to_string(), vec!["x".to_string()]);
+    ///
+    /// let bindings = bindings.with_custom_overrides(&custom).unwrap();
+    ///
+    /// // Now 'j' also triggers NavigateDown (in addition to Down arrow)
+    /// ```
+    pub fn with_custom_overrides(
+        mut self,
+        custom: &HashMap<String, Vec<String>>,
+    ) -> Result<Self, KeybindingError> {
+        for (action_name, key_specs) in custom {
+            let action = Self::parse_action(action_name)?;
+
+            for key_spec in key_specs {
+                let key_event = Self::parse_key(key_spec)?;
+
+                // Add to existing bindings (merge, not replace)
+                self.action_keys.entry(action).or_default().push(key_event);
+            }
+        }
+
+        Ok(self)
+    }
+
+    /// Create keybindings from a profile with custom overrides.
+    ///
+    /// This is a convenience method that combines `from_profile` and
+    /// `with_custom_overrides`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any custom binding is invalid.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::keybindings::{KeyBindings, KeybindingProfile};
+    /// use std::collections::HashMap;
+    ///
+    /// let mut custom = HashMap::new();
+    /// custom.insert("navigate_down".to_string(), vec!["n".to_string()]);
+    ///
+    /// let bindings = KeyBindings::from_profile_with_custom(
+    ///     KeybindingProfile::Vim,
+    ///     &custom
+    /// ).unwrap();
+    /// ```
+    pub fn from_profile_with_custom(
+        profile: KeybindingProfile,
+        custom: &HashMap<String, Vec<String>>,
+    ) -> Result<Self, KeybindingError> {
+        Self::from_profile(profile).with_custom_overrides(custom)
     }
 
     // =========================================================================
@@ -1383,5 +1613,285 @@ mod tests {
 
         let key = KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE);
         assert_eq!(KeyBindings::format_key(&key), "F12");
+    }
+
+    // =========================================================================
+    // Key Parsing Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_key_simple_letter() {
+        let key = KeyBindings::parse_key("j").unwrap();
+        assert_eq!(key.code, KeyCode::Char('j'));
+        assert_eq!(key.modifiers, KeyModifiers::NONE);
+    }
+
+    #[test]
+    fn test_parse_key_uppercase_letter() {
+        let key = KeyBindings::parse_key("J").unwrap();
+        assert_eq!(key.code, KeyCode::Char('J'));
+        assert_eq!(key.modifiers, KeyModifiers::NONE);
+    }
+
+    #[test]
+    fn test_parse_key_space() {
+        let key = KeyBindings::parse_key("Space").unwrap();
+        assert_eq!(key.code, KeyCode::Char(' '));
+        assert_eq!(key.modifiers, KeyModifiers::NONE);
+    }
+
+    #[test]
+    fn test_parse_key_enter() {
+        let key = KeyBindings::parse_key("Enter").unwrap();
+        assert_eq!(key.code, KeyCode::Enter);
+
+        let key = KeyBindings::parse_key("Return").unwrap();
+        assert_eq!(key.code, KeyCode::Enter);
+    }
+
+    #[test]
+    fn test_parse_key_escape() {
+        let key = KeyBindings::parse_key("Esc").unwrap();
+        assert_eq!(key.code, KeyCode::Esc);
+
+        let key = KeyBindings::parse_key("Escape").unwrap();
+        assert_eq!(key.code, KeyCode::Esc);
+    }
+
+    #[test]
+    fn test_parse_key_arrows() {
+        let key = KeyBindings::parse_key("Up").unwrap();
+        assert_eq!(key.code, KeyCode::Up);
+
+        let key = KeyBindings::parse_key("Down").unwrap();
+        assert_eq!(key.code, KeyCode::Down);
+
+        let key = KeyBindings::parse_key("Left").unwrap();
+        assert_eq!(key.code, KeyCode::Left);
+
+        let key = KeyBindings::parse_key("Right").unwrap();
+        assert_eq!(key.code, KeyCode::Right);
+    }
+
+    #[test]
+    fn test_parse_key_navigation() {
+        let key = KeyBindings::parse_key("PageUp").unwrap();
+        assert_eq!(key.code, KeyCode::PageUp);
+
+        let key = KeyBindings::parse_key("PgDn").unwrap();
+        assert_eq!(key.code, KeyCode::PageDown);
+
+        let key = KeyBindings::parse_key("Home").unwrap();
+        assert_eq!(key.code, KeyCode::Home);
+
+        let key = KeyBindings::parse_key("End").unwrap();
+        assert_eq!(key.code, KeyCode::End);
+    }
+
+    #[test]
+    fn test_parse_key_function_keys() {
+        let key = KeyBindings::parse_key("F1").unwrap();
+        assert_eq!(key.code, KeyCode::F(1));
+
+        let key = KeyBindings::parse_key("F12").unwrap();
+        assert_eq!(key.code, KeyCode::F(12));
+    }
+
+    #[test]
+    fn test_parse_key_with_ctrl() {
+        let key = KeyBindings::parse_key("Ctrl+c").unwrap();
+        assert_eq!(key.code, KeyCode::Char('c'));
+        assert_eq!(key.modifiers, KeyModifiers::CONTROL);
+
+        let key = KeyBindings::parse_key("Control+j").unwrap();
+        assert_eq!(key.code, KeyCode::Char('j'));
+        assert_eq!(key.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn test_parse_key_with_alt() {
+        let key = KeyBindings::parse_key("Alt+x").unwrap();
+        assert_eq!(key.code, KeyCode::Char('x'));
+        assert_eq!(key.modifiers, KeyModifiers::ALT);
+
+        let key = KeyBindings::parse_key("Meta+<").unwrap();
+        assert_eq!(key.code, KeyCode::Char('<'));
+        assert_eq!(key.modifiers, KeyModifiers::ALT);
+    }
+
+    #[test]
+    fn test_parse_key_with_shift() {
+        let key = KeyBindings::parse_key("Shift+Enter").unwrap();
+        assert_eq!(key.code, KeyCode::Enter);
+        assert_eq!(key.modifiers, KeyModifiers::SHIFT);
+    }
+
+    #[test]
+    fn test_parse_key_multiple_modifiers() {
+        let key = KeyBindings::parse_key("Ctrl+Shift+a").unwrap();
+        assert_eq!(key.code, KeyCode::Char('a'));
+        assert!(key.modifiers.contains(KeyModifiers::CONTROL));
+        assert!(key.modifiers.contains(KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn test_parse_key_case_insensitive_modifiers() {
+        let key = KeyBindings::parse_key("CTRL+j").unwrap();
+        assert_eq!(key.code, KeyCode::Char('j'));
+        assert_eq!(key.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn test_parse_key_invalid_empty() {
+        let result = KeyBindings::parse_key("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_key_invalid_unknown() {
+        let result = KeyBindings::parse_key("unknown_key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_key_whitespace_trimmed() {
+        let key = KeyBindings::parse_key("  j  ").unwrap();
+        assert_eq!(key.code, KeyCode::Char('j'));
+    }
+
+    // =========================================================================
+    // Action Parsing Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_action_navigate_down() {
+        let action = KeyBindings::parse_action("navigate_down").unwrap();
+        assert_eq!(action, Action::NavigateDown);
+
+        let action = KeyBindings::parse_action("down").unwrap();
+        assert_eq!(action, Action::NavigateDown);
+    }
+
+    #[test]
+    fn test_parse_action_quit() {
+        let action = KeyBindings::parse_action("quit").unwrap();
+        assert_eq!(action, Action::Quit);
+
+        let action = KeyBindings::parse_action("exit").unwrap();
+        assert_eq!(action, Action::Quit);
+    }
+
+    #[test]
+    fn test_parse_action_case_insensitive() {
+        let action = KeyBindings::parse_action("NAVIGATE_UP").unwrap();
+        assert_eq!(action, Action::NavigateUp);
+    }
+
+    #[test]
+    fn test_parse_action_hyphen_underscore_equivalent() {
+        let action = KeyBindings::parse_action("navigate-down").unwrap();
+        assert_eq!(action, Action::NavigateDown);
+    }
+
+    #[test]
+    fn test_parse_action_invalid() {
+        let result = KeyBindings::parse_action("unknown_action");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, KeybindingError::InvalidAction(_)));
+    }
+
+    // =========================================================================
+    // Custom Keybindings Tests
+    // =========================================================================
+
+    #[test]
+    fn test_custom_bindings_merge_with_profile() {
+        let mut custom = std::collections::HashMap::new();
+        // Use 'r' which is not bound in Standard profile
+        custom.insert("navigate_down".to_string(), vec!["r".to_string()]);
+
+        let bindings =
+            KeyBindings::from_profile_with_custom(KeybindingProfile::Standard, &custom).unwrap();
+
+        // Original Down arrow should still work
+        let down_key = key_press(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(bindings.resolve(&down_key), Some(Action::NavigateDown));
+
+        // Custom 'r' should also work now
+        let r_key = key_press(KeyCode::Char('r'), KeyModifiers::NONE);
+        assert_eq!(bindings.resolve(&r_key), Some(Action::NavigateDown));
+    }
+
+    #[test]
+    fn test_custom_bindings_multiple_keys() {
+        let mut custom = std::collections::HashMap::new();
+        custom.insert(
+            "quit".to_string(),
+            vec!["x".to_string(), "Ctrl+w".to_string()],
+        );
+
+        let bindings =
+            KeyBindings::from_profile_with_custom(KeybindingProfile::Universal, &custom).unwrap();
+
+        // Custom 'x' should work
+        let x_key = key_press(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert_eq!(bindings.resolve(&x_key), Some(Action::Quit));
+
+        // Custom Ctrl+w should work
+        let ctrl_w = key_press(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(bindings.resolve(&ctrl_w), Some(Action::Quit));
+
+        // Original 'q' should still work
+        let q_key = key_press(KeyCode::Char('q'), KeyModifiers::NONE);
+        assert_eq!(bindings.resolve(&q_key), Some(Action::Quit));
+    }
+
+    #[test]
+    fn test_custom_bindings_invalid_action() {
+        let mut custom = std::collections::HashMap::new();
+        custom.insert("invalid_action".to_string(), vec!["x".to_string()]);
+
+        let result = KeyBindings::from_profile_with_custom(KeybindingProfile::Universal, &custom);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_custom_bindings_invalid_key() {
+        let mut custom = std::collections::HashMap::new();
+        custom.insert("quit".to_string(), vec!["invalid_key".to_string()]);
+
+        let result = KeyBindings::from_profile_with_custom(KeybindingProfile::Universal, &custom);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_custom_bindings_empty_is_noop() {
+        let custom = std::collections::HashMap::new();
+
+        let bindings =
+            KeyBindings::from_profile_with_custom(KeybindingProfile::Universal, &custom).unwrap();
+
+        // Should be same as just from_profile
+        let j_key = key_press(KeyCode::Char('j'), KeyModifiers::NONE);
+        assert_eq!(bindings.resolve(&j_key), Some(Action::NavigateDown));
+    }
+
+    #[test]
+    fn test_with_custom_overrides_method() {
+        let mut custom = std::collections::HashMap::new();
+        custom.insert("toggle_select".to_string(), vec!["Tab".to_string()]);
+
+        let bindings = KeyBindings::from_profile(KeybindingProfile::Vim)
+            .with_custom_overrides(&custom)
+            .unwrap();
+
+        // Tab should now trigger toggle_select
+        let tab_key = key_press(KeyCode::Tab, KeyModifiers::NONE);
+        assert_eq!(bindings.resolve(&tab_key), Some(Action::ToggleSelect));
+
+        // Original Space should still work
+        let space_key = key_press(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert_eq!(bindings.resolve(&space_key), Some(Action::ToggleSelect));
     }
 }

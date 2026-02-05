@@ -14,7 +14,7 @@ use rustdupe::{
     scanner::WalkerConfig,
     session::{Session, SessionGroup, SessionSettings},
     signal,
-    tui::keybindings::KeybindingProfile,
+    tui::keybindings::KeyBindings,
 };
 use std::fs;
 use std::io::{self, Write};
@@ -46,6 +46,24 @@ fn main() -> Result<()> {
     // CLI flag (including env var) overrides config file
     let keybinding_profile = cli.keybinding_profile.unwrap_or(config.keybinding_profile);
 
+    // Build KeyBindings with profile and custom overrides from config
+    let keybindings = if config.has_custom_keybindings() {
+        match KeyBindings::from_profile_with_custom(keybinding_profile, &config.custom_keybindings)
+        {
+            Ok(bindings) => bindings,
+            Err(e) => {
+                // Log warning but continue with profile defaults
+                log::warn!(
+                    "Invalid custom keybindings in config: {}. Using profile defaults.",
+                    e
+                );
+                KeyBindings::from_profile(keybinding_profile)
+            }
+        }
+    } else {
+        KeyBindings::from_profile(keybinding_profile)
+    };
+
     // Initialize logging based on verbosity flags (MUST be before any log calls)
     logging::init_logging(cli.verbose, cli.quiet);
 
@@ -55,12 +73,8 @@ fn main() -> Result<()> {
 
     // Handle subcommands
     match cli.command {
-        Commands::Scan(args) => {
-            handle_scan(*args, shutdown_flag, cli.quiet, theme, keybinding_profile)
-        }
-        Commands::Load(args) => {
-            handle_load(args, shutdown_flag, cli.quiet, theme, keybinding_profile)
-        }
+        Commands::Scan(args) => handle_scan(*args, shutdown_flag, cli.quiet, theme, keybindings),
+        Commands::Load(args) => handle_load(args, shutdown_flag, cli.quiet, theme, keybindings),
     }?;
 
     // Check if shutdown was requested and exit with appropriate code
@@ -76,7 +90,7 @@ fn handle_scan(
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
     quiet: bool,
     theme: ThemeArg,
-    keybinding_profile: KeybindingProfile,
+    keybindings: KeyBindings,
 ) -> Result<()> {
     let (groups, summary, scan_paths, settings, reference_paths) = if let Some(ref session_path) =
         args.load_session
@@ -301,7 +315,7 @@ fn handle_scan(
         reference_paths,
         dry_run: args.dry_run,
         theme,
-        keybinding_profile,
+        keybindings,
     })
 }
 
@@ -310,7 +324,7 @@ fn handle_load(
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
     _quiet: bool,
     theme: ThemeArg,
-    keybinding_profile: KeybindingProfile,
+    keybindings: KeyBindings,
 ) -> Result<()> {
     log::info!("Loading session from {:?}", args.path);
     let session = Session::load(&args.path)?;
@@ -334,7 +348,7 @@ fn handle_load(
         reference_paths,
         dry_run: args.dry_run,
         theme,
-        keybinding_profile,
+        keybindings,
     })
 }
 
@@ -352,7 +366,7 @@ struct ResultContext {
     reference_paths: Vec<std::path::PathBuf>,
     dry_run: bool,
     theme: ThemeArg,
-    keybinding_profile: KeybindingProfile,
+    keybindings: KeyBindings,
 }
 
 fn handle_results(ctx: ResultContext) -> Result<()> {
@@ -370,7 +384,7 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
         reference_paths,
         dry_run,
         theme,
-        keybinding_profile,
+        keybindings,
     } = ctx;
 
     // 1. Save session if requested (non-TUI only)
@@ -413,7 +427,7 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
                     session.file_index,
                 );
             }
-            rustdupe::tui::run_tui(&mut app, Some(shutdown_flag), Some(keybinding_profile))?;
+            rustdupe::tui::run_tui_with_bindings(&mut app, Some(shutdown_flag), Some(keybindings))?;
 
             // Save session after TUI exit if requested
             if let Some(ref path) = save_session {

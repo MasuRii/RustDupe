@@ -138,6 +138,138 @@ pub enum Action {
     Quit,
 }
 
+impl Action {
+    /// Returns the snake_case name of the action (for config files).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::Action;
+    ///
+    /// assert_eq!(Action::NavigateDown.name(), "navigate_down");
+    /// assert_eq!(Action::GoToTop.name(), "go_to_top");
+    /// ```
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::NavigateUp => "navigate_up",
+            Self::NavigateDown => "navigate_down",
+            Self::NextGroup => "next_group",
+            Self::PreviousGroup => "previous_group",
+            Self::GoToTop => "go_to_top",
+            Self::GoToBottom => "go_to_bottom",
+            Self::ToggleSelect => "toggle_select",
+            Self::SelectAllInGroup => "select_all_in_group",
+            Self::SelectAllDuplicates => "select_all_duplicates",
+            Self::SelectOldest => "select_oldest",
+            Self::SelectNewest => "select_newest",
+            Self::SelectSmallest => "select_smallest",
+            Self::SelectLargest => "select_largest",
+            Self::DeselectAll => "deselect_all",
+            Self::Preview => "preview",
+            Self::SelectFolder => "select_folder",
+            Self::Delete => "delete",
+            Self::ToggleTheme => "toggle_theme",
+            Self::Confirm => "confirm",
+            Self::Cancel => "cancel",
+            Self::Quit => "quit",
+        }
+    }
+
+    /// Returns a list of all valid action names.
+    #[must_use]
+    pub fn all_names() -> Vec<&'static str> {
+        vec![
+            "navigate_up",
+            "navigate_down",
+            "next_group",
+            "previous_group",
+            "go_to_top",
+            "go_to_bottom",
+            "toggle_select",
+            "select_all_in_group",
+            "select_all_duplicates",
+            "select_oldest",
+            "select_newest",
+            "select_smallest",
+            "select_largest",
+            "deselect_all",
+            "preview",
+            "select_folder",
+            "delete",
+            "toggle_theme",
+            "confirm",
+            "cancel",
+            "quit",
+        ]
+    }
+
+    /// Returns all action variants.
+    #[must_use]
+    pub const fn all() -> [Action; 21] {
+        [
+            Self::NavigateUp,
+            Self::NavigateDown,
+            Self::NextGroup,
+            Self::PreviousGroup,
+            Self::GoToTop,
+            Self::GoToBottom,
+            Self::ToggleSelect,
+            Self::SelectAllInGroup,
+            Self::SelectAllDuplicates,
+            Self::SelectOldest,
+            Self::SelectNewest,
+            Self::SelectSmallest,
+            Self::SelectLargest,
+            Self::DeselectAll,
+            Self::Preview,
+            Self::SelectFolder,
+            Self::Delete,
+            Self::ToggleTheme,
+            Self::Confirm,
+            Self::Cancel,
+            Self::Quit,
+        ]
+    }
+}
+
+impl std::str::FromStr for Action {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('-', "_").as_str() {
+            "navigate_up" | "up" => Ok(Self::NavigateUp),
+            "navigate_down" | "down" => Ok(Self::NavigateDown),
+            "next_group" => Ok(Self::NextGroup),
+            "previous_group" | "prev_group" => Ok(Self::PreviousGroup),
+            "go_to_top" | "top" => Ok(Self::GoToTop),
+            "go_to_bottom" | "bottom" => Ok(Self::GoToBottom),
+            "toggle_select" | "select" => Ok(Self::ToggleSelect),
+            "select_all_in_group" | "select_all_group" => Ok(Self::SelectAllInGroup),
+            "select_all_duplicates" | "select_all" => Ok(Self::SelectAllDuplicates),
+            "select_oldest" | "oldest" => Ok(Self::SelectOldest),
+            "select_newest" | "newest" => Ok(Self::SelectNewest),
+            "select_smallest" | "smallest" => Ok(Self::SelectSmallest),
+            "select_largest" | "largest" => Ok(Self::SelectLargest),
+            "deselect_all" | "deselect" => Ok(Self::DeselectAll),
+            "preview" => Ok(Self::Preview),
+            "select_folder" | "folder" => Ok(Self::SelectFolder),
+            "delete" => Ok(Self::Delete),
+            "toggle_theme" | "theme" => Ok(Self::ToggleTheme),
+            "confirm" | "enter" => Ok(Self::Confirm),
+            "cancel" | "escape" | "esc" => Ok(Self::Cancel),
+            "quit" | "exit" => Ok(Self::Quit),
+            _ => Err(format!("Unknown action: '{s}'")),
+        }
+    }
+}
+
+impl std::fmt::Display for Action {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
 /// Scan summary for display in TUI.
 ///
 /// Contains statistics about the completed scan to display to the user.
@@ -1792,5 +1924,88 @@ mod tests {
         // Go to top
         app.go_to_top();
         assert_eq!(app.folder_index(), 0);
+    }
+
+    // =========================================================================
+    // Action Parsing and Display Tests
+    // =========================================================================
+
+    #[test]
+    fn test_action_name() {
+        assert_eq!(Action::NavigateDown.name(), "navigate_down");
+        assert_eq!(Action::GoToTop.name(), "go_to_top");
+        assert_eq!(Action::Quit.name(), "quit");
+        assert_eq!(Action::ToggleSelect.name(), "toggle_select");
+    }
+
+    #[test]
+    fn test_action_display() {
+        assert_eq!(Action::NavigateDown.to_string(), "navigate_down");
+        assert_eq!(Action::GoToTop.to_string(), "go_to_top");
+    }
+
+    #[test]
+    fn test_action_from_str_standard() {
+        assert_eq!(
+            "navigate_down".parse::<Action>().unwrap(),
+            Action::NavigateDown
+        );
+        assert_eq!("navigate_up".parse::<Action>().unwrap(), Action::NavigateUp);
+        assert_eq!("quit".parse::<Action>().unwrap(), Action::Quit);
+        assert_eq!(
+            "toggle_select".parse::<Action>().unwrap(),
+            Action::ToggleSelect
+        );
+    }
+
+    #[test]
+    fn test_action_from_str_aliases() {
+        // Short aliases
+        assert_eq!("down".parse::<Action>().unwrap(), Action::NavigateDown);
+        assert_eq!("up".parse::<Action>().unwrap(), Action::NavigateUp);
+        assert_eq!("exit".parse::<Action>().unwrap(), Action::Quit);
+        assert_eq!("select".parse::<Action>().unwrap(), Action::ToggleSelect);
+        assert_eq!("esc".parse::<Action>().unwrap(), Action::Cancel);
+        assert_eq!("enter".parse::<Action>().unwrap(), Action::Confirm);
+    }
+
+    #[test]
+    fn test_action_from_str_case_insensitive() {
+        assert_eq!(
+            "NAVIGATE_DOWN".parse::<Action>().unwrap(),
+            Action::NavigateDown
+        );
+        assert_eq!("Quit".parse::<Action>().unwrap(), Action::Quit);
+    }
+
+    #[test]
+    fn test_action_from_str_hyphen_underscore() {
+        assert_eq!(
+            "navigate-down".parse::<Action>().unwrap(),
+            Action::NavigateDown
+        );
+        assert_eq!("go-to-top".parse::<Action>().unwrap(), Action::GoToTop);
+    }
+
+    #[test]
+    fn test_action_from_str_invalid() {
+        let result = "invalid_action".parse::<Action>();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_action_all_names() {
+        let names = Action::all_names();
+        assert_eq!(names.len(), 21);
+        assert!(names.contains(&"navigate_down"));
+        assert!(names.contains(&"quit"));
+    }
+
+    #[test]
+    fn test_action_all() {
+        let actions = Action::all();
+        assert_eq!(actions.len(), 21);
+        assert!(actions.contains(&Action::NavigateDown));
+        assert!(actions.contains(&Action::Quit));
     }
 }

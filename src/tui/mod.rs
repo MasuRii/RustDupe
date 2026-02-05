@@ -55,5 +55,5 @@ pub mod ui;
 pub use app::{Action, App, AppMode, ScanProgress};
 pub use events::{EventError, EventHandler};
 pub use keybindings::{KeyBindings, KeybindingError, KeybindingProfile};
-pub use run::{run_tui, TuiError};
+pub use run::{run_tui, run_tui_with_bindings, TuiError};
 pub use ui::{format_size, render, truncate_path, truncate_string};
