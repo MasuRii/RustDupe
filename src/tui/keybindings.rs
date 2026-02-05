@@ -695,6 +695,14 @@ impl KeyBindings {
         );
 
         bindings.insert(
+            Action::SelectGroup,
+            vec![
+                Self::key(KeyCode::Char('b'), KeyModifiers::NONE),
+                Self::key(KeyCode::Char('B'), KeyModifiers::SHIFT),
+            ],
+        );
+
+        bindings.insert(
             Action::Delete,
             vec![Self::key(KeyCode::Char('d'), KeyModifiers::NONE)],
         );
@@ -853,6 +861,14 @@ impl KeyBindings {
         );
 
         bindings.insert(
+            Action::SelectGroup,
+            vec![
+                Self::key(KeyCode::Char('b'), KeyModifiers::NONE),
+                Self::key(KeyCode::Char('B'), KeyModifiers::SHIFT),
+            ],
+        );
+
+        bindings.insert(
             Action::Delete,
             vec![Self::key(KeyCode::Char('d'), KeyModifiers::NONE)],
         );
@@ -987,6 +1003,11 @@ impl KeyBindings {
         bindings.insert(
             Action::SelectFolder,
             vec![Self::key(KeyCode::Char('f'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::SelectGroup,
+            vec![Self::key(KeyCode::Char('b'), KeyModifiers::NONE)],
         );
 
         bindings.insert(
@@ -1140,6 +1161,11 @@ impl KeyBindings {
         bindings.insert(
             Action::SelectFolder,
             vec![Self::key(KeyCode::Char('f'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::SelectGroup,
+            vec![Self::key(KeyCode::Char('b'), KeyModifiers::NONE)],
         );
 
         bindings.insert(

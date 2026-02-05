@@ -879,6 +879,8 @@ pub struct FinderConfig {
     pub progress_callback: Option<Arc<dyn ProgressCallback>>,
     /// Protected reference paths.
     pub reference_paths: Vec<PathBuf>,
+    /// Named directory groups mapping canonical paths to group names.
+    pub group_map: std::collections::HashMap<PathBuf, String>,
 }
 
 impl std::fmt::Debug for FinderConfig {
@@ -894,6 +896,7 @@ impl std::fmt::Debug for FinderConfig {
                 &self.progress_callback.as_ref().map(|_| "<callback>"),
             )
             .field("reference_paths", &self.reference_paths)
+            .field("group_map", &self.group_map)
             .finish()
     }
 }
@@ -908,6 +911,7 @@ impl Default for FinderConfig {
             shutdown_flag: None,
             progress_callback: None,
             reference_paths: Vec::new(),
+            group_map: std::collections::HashMap::new(),
         }
     }
 }
@@ -959,6 +963,13 @@ impl FinderConfig {
     #[must_use]
     pub fn with_reference_paths(mut self, paths: Vec<PathBuf>) -> Self {
         self.reference_paths = paths;
+        self
+    }
+
+    /// Set the group map for named directory groups.
+    #[must_use]
+    pub fn with_group_map(mut self, map: std::collections::HashMap<PathBuf, String>) -> Self {
+        self.group_map = map;
         self
     }
 
@@ -1504,6 +1515,13 @@ impl DuplicateFinder {
         // Set shutdown flag on walker if available
         let multi_walker = if let Some(ref flag) = self.config.shutdown_flag {
             multi_walker.with_shutdown_flag(flag.clone())
+        } else {
+            multi_walker
+        };
+
+        // Set group map for named directory groups
+        let multi_walker = if !self.config.group_map.is_empty() {
+            multi_walker.with_group_map(self.config.group_map.clone())
         } else {
             multi_walker
         };

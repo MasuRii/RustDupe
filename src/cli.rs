@@ -24,9 +24,106 @@
 //! ```
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::tui::keybindings::KeybindingProfile;
+
+/// A named directory group mapping a name to a path.
+///
+/// Used with the `--group` flag: `--group photos=/path/to/photos`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectoryGroup {
+    /// The group name (e.g., "photos")
+    pub name: String,
+    /// The path to scan
+    pub path: PathBuf,
+}
+
+impl DirectoryGroup {
+    /// Create a new directory group.
+    #[must_use]
+    pub fn new(name: String, path: PathBuf) -> Self {
+        Self { name, path }
+    }
+}
+
+/// Parse a group specification in the format `NAME=PATH`.
+///
+/// # Examples
+///
+/// ```
+/// use rustdupe::cli::parse_group;
+///
+/// let group = parse_group("photos=/home/user/photos").unwrap();
+/// assert_eq!(group.name, "photos");
+/// assert_eq!(group.path.to_string_lossy(), "/home/user/photos");
+///
+/// // Invalid format (no =)
+/// assert!(parse_group("invalid").is_err());
+///
+/// // Empty name
+/// assert!(parse_group("=/path").is_err());
+///
+/// // Empty path
+/// assert!(parse_group("name=").is_err());
+/// ```
+pub fn parse_group(s: &str) -> Result<DirectoryGroup, String> {
+    let s = s.trim();
+    let eq_pos = s.find('=').ok_or_else(|| {
+        format!("Invalid group format: '{s}'. Expected NAME=PATH (e.g., photos=/path/to/photos)")
+    })?;
+
+    let name = s[..eq_pos].trim();
+    let path = s[eq_pos + 1..].trim();
+
+    if name.is_empty() {
+        return Err("Group name cannot be empty".to_string());
+    }
+
+    if path.is_empty() {
+        return Err("Group path cannot be empty".to_string());
+    }
+
+    // Validate name contains only alphanumeric characters and underscores
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(format!(
+            "Invalid group name '{name}': only alphanumeric characters, underscores, and hyphens are allowed"
+        ));
+    }
+
+    Ok(DirectoryGroup {
+        name: name.to_string(),
+        path: PathBuf::from(path),
+    })
+}
+
+/// Build a mapping from canonical paths to group names.
+///
+/// Returns a HashMap where keys are canonical directory paths and values are group names.
+/// This is used during scanning to assign group names to discovered files.
+///
+/// # Errors
+///
+/// Returns an error if any group path fails to canonicalize (doesn't exist, permission denied, etc.)
+pub fn build_group_map(groups: &[DirectoryGroup]) -> Result<HashMap<PathBuf, String>, String> {
+    let mut map = HashMap::new();
+    for group in groups {
+        let canonical = group.path.canonicalize().map_err(|e| {
+            format!(
+                "Failed to resolve group path '{}' for group '{}': {}",
+                group.path.display(),
+                group.name,
+                e
+            )
+        })?;
+        map.insert(canonical, group.name.clone());
+    }
+    Ok(map)
+}
 
 /// Smart duplicate file finder with interactive TUI.
 ///
@@ -267,6 +364,23 @@ pub struct ScanArgs {
         help_heading = "Safety & Deletion Options"
     )]
     pub reference_paths: Vec<PathBuf>,
+
+    /// Named directory groups for organizing and batch-selecting duplicates
+    ///
+    /// Format: NAME=PATH (e.g., --group photos=/path/to/photos)
+    ///
+    /// Can be specified multiple times. Group names will be displayed in the TUI
+    /// and can be used for batch selection operations.
+    ///
+    /// Example:
+    ///   rustdupe scan --group photos=/Photos --group docs=/Documents
+    #[arg(
+        long = "group",
+        value_name = "NAME=PATH",
+        value_parser = parse_group,
+        help_heading = "Scanning Options"
+    )]
+    pub groups: Vec<DirectoryGroup>,
 }
 
 /// Arguments for the load subcommand.
@@ -1007,5 +1121,134 @@ mod tests {
             }
             _ => panic!("Expected Scan command"),
         }
+    }
+
+    // ========================================================================
+    // Directory Group Tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_group_valid() {
+        let group = parse_group("photos=/home/user/photos").unwrap();
+        assert_eq!(group.name, "photos");
+        assert_eq!(group.path, PathBuf::from("/home/user/photos"));
+    }
+
+    #[test]
+    fn test_parse_group_with_spaces() {
+        let group = parse_group("  photos = /home/user/photos  ").unwrap();
+        assert_eq!(group.name, "photos");
+        assert_eq!(group.path, PathBuf::from("/home/user/photos"));
+    }
+
+    #[test]
+    fn test_parse_group_with_underscores() {
+        let group = parse_group("my_photos=/path").unwrap();
+        assert_eq!(group.name, "my_photos");
+    }
+
+    #[test]
+    fn test_parse_group_with_hyphens() {
+        let group = parse_group("my-photos=/path").unwrap();
+        assert_eq!(group.name, "my-photos");
+    }
+
+    #[test]
+    fn test_parse_group_with_numbers() {
+        let group = parse_group("photos2024=/path").unwrap();
+        assert_eq!(group.name, "photos2024");
+    }
+
+    #[test]
+    fn test_parse_group_missing_equals() {
+        let result = parse_group("invalid");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Expected NAME=PATH"));
+    }
+
+    #[test]
+    fn test_parse_group_empty_name() {
+        let result = parse_group("=/path");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_parse_group_empty_path() {
+        let result = parse_group("name=");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_parse_group_invalid_name_chars() {
+        let result = parse_group("my photos=/path");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid group name"));
+    }
+
+    #[test]
+    fn test_cli_parse_scan_single_group() {
+        let cli = Cli::try_parse_from(["rustdupe", "scan", "--group", "photos=/Photos", "/path"])
+            .unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.groups.len(), 1);
+                assert_eq!(args.groups[0].name, "photos");
+                assert_eq!(args.groups[0].path, PathBuf::from("/Photos"));
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_scan_multiple_groups() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "scan",
+            "--group",
+            "photos=/Photos",
+            "--group",
+            "docs=/Documents",
+            "/path",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.groups.len(), 2);
+                assert_eq!(args.groups[0].name, "photos");
+                assert_eq!(args.groups[1].name, "docs");
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_scan_groups_with_multiple_paths() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "scan",
+            "--group",
+            "photos=/Photos",
+            "--group",
+            "downloads=/Downloads",
+            "/Photos",
+            "/Downloads",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.groups.len(), 2);
+                assert_eq!(args.paths.len(), 2);
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+
+    #[test]
+    fn test_build_group_map_empty() {
+        let groups: Vec<DirectoryGroup> = vec![];
+        let map = build_group_map(&groups).unwrap();
+        assert!(map.is_empty());
     }
 }

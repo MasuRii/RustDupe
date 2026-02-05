@@ -7,7 +7,9 @@ use clap::Parser;
 use directories::ProjectDirs;
 use rustdupe::{
     cache::HashCache,
-    cli::{Cli, Commands, LoadArgs, OutputFormat, ScanArgs, ScriptTypeArg, ThemeArg},
+    cli::{
+        build_group_map, Cli, Commands, LoadArgs, OutputFormat, ScanArgs, ScriptTypeArg, ThemeArg,
+    },
     config::Config,
     duplicates::{DuplicateFinder, FinderConfig},
     logging, output,
@@ -267,6 +269,13 @@ fn handle_scan(
             .with_regex_exclude(regex_exclude)
             .with_file_categories(args.file_types.iter().map(|&t| t.into()).collect());
 
+        // Build group map from CLI arguments
+        let group_map = if !args.groups.is_empty() {
+            build_group_map(&args.groups).map_err(|e| anyhow::anyhow!("{}", e))?
+        } else {
+            std::collections::HashMap::new()
+        };
+
         // Configure progress reporting for non-TUI modes
         let progress = if args.output != OutputFormat::Tui {
             Some(Arc::new(rustdupe::progress::Progress::with_accessible(
@@ -282,7 +291,8 @@ fn handle_scan(
             .with_paranoid(args.paranoid)
             .with_walker_config(walker_config)
             .with_shutdown_flag(shutdown_flag.clone())
-            .with_reference_paths(reference_paths.clone());
+            .with_reference_paths(reference_paths.clone())
+            .with_group_map(group_map);
 
         if let Some(cache) = hash_cache {
             finder_config = finder_config.with_cache(cache);

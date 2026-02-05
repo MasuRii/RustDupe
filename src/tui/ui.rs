@@ -116,6 +116,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         AppMode::Previewing => render_preview_dialog(frame, app, area),
         AppMode::Confirming => render_confirm_dialog(frame, app, area),
         AppMode::SelectingFolder => render_folder_selection_dialog(frame, app, area),
+        AppMode::SelectingGroup => render_group_selection_dialog(frame, app, area),
         AppMode::ShowingHelp => render_help_dialog(frame, app, area),
         _ => {}
     }
@@ -140,6 +141,10 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         ),
         AppMode::SelectingFolder => format!(
             "rustdupe - Smart Duplicate Finder{} [Select Folder]",
+            dry_run_suffix
+        ),
+        AppMode::SelectingGroup => format!(
+            "rustdupe - Smart Duplicate Finder{} [Select Group]",
             dry_run_suffix
         ),
         AppMode::ShowingHelp => {
@@ -190,6 +195,7 @@ fn render_content(frame: &mut Frame, app: &App, area: Rect) {
         | AppMode::Previewing
         | AppMode::Confirming
         | AppMode::SelectingFolder
+        | AppMode::SelectingGroup
         | AppMode::ShowingHelp => render_reviewing_content(frame, app, area),
         AppMode::Quitting => render_quitting_content(frame, app, area),
     }
@@ -436,8 +442,20 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
             let is_ref = app.is_in_reference_dir(&entry.path);
             let is_first = i == 0;
 
+            // Build group label if present
+            let group_label = entry
+                .group_name
+                .as_ref()
+                .map(|g| format!("[{}] ", g))
+                .unwrap_or_default();
+
+            // Adjust max path length to account for prefix and group label
+            let prefix_len = 4; // "[X] " or similar
+            let group_label_len = group_label.len();
+            let available_path_len = max_path_len.saturating_sub(prefix_len + group_label_len);
+
             let path_str = entry.path.to_string_lossy();
-            let path_display = truncate_path(&path_str, max_path_len);
+            let path_display = truncate_path(&path_str, available_path_len);
 
             let prefix = if is_selected {
                 "[X]"
@@ -449,7 +467,7 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
                 "[ ]"
             };
 
-            let text = format!("{} {}", prefix, path_display);
+            let text = format!("{} {}{}", prefix, group_label, path_display);
 
             let style = if i == selected_file {
                 if is_selected {
@@ -681,6 +699,45 @@ fn render_folder_selection_dialog(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(list, dialog_area);
 }
 
+/// Render group name selection dialog.
+fn render_group_selection_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let dialog_area = centered_rect(70, 60, area);
+    frame.render_widget(Clear, dialog_area);
+
+    let group_names = app.group_name_list();
+    let selected_idx = app.group_name_index();
+
+    let items: Vec<ListItem> = group_names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let style = if i == selected_idx {
+                Style::default()
+                    .fg(app.theme().inverted_fg)
+                    .bg(app.theme().primary)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(app.theme().normal)
+            };
+            ListItem::new(format!("[{}]", name)).style(style)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            create_block_with_title(app.is_accessible(), "Select Named Group to Mark Duplicates")
+                .border_style(Style::default().fg(app.theme().primary)),
+        )
+        .highlight_style(
+            Style::default()
+                .fg(app.theme().inverted_fg)
+                .bg(app.theme().primary)
+                .add_modifier(Modifier::BOLD),
+        );
+
+    frame.render_widget(list, dialog_area);
+}
+
 /// Render error dialog.
 fn render_error_dialog(frame: &mut Frame, app: &App, area: Rect) {
     let dialog_area = centered_rect(60, 20, area);
@@ -841,6 +898,7 @@ fn get_footer_commands(app: &App) -> Vec<(&'static str, &'static str)> {
         AppMode::Previewing => vec![("Esc", "Close"), ("q", "Quit")],
         AppMode::Confirming => vec![("Enter", "Confirm"), ("Esc", "Cancel")],
         AppMode::SelectingFolder => get_folder_selection_commands(profile),
+        AppMode::SelectingGroup => get_group_selection_commands(profile),
         AppMode::ShowingHelp => vec![("Esc", "Close"), ("?/F1", "Help")],
         AppMode::Quitting => vec![],
     }
@@ -906,6 +964,18 @@ fn get_reviewing_commands(
 
 /// Get folder selection commands based on profile.
 fn get_folder_selection_commands(
+    profile: crate::tui::keybindings::KeybindingProfile,
+) -> Vec<(&'static str, &'static str)> {
+    vec![
+        (get_nav_hint(profile), "Nav"),
+        ("Enter", "Select"),
+        ("Esc", "Cancel"),
+        ("q", "Quit"),
+    ]
+}
+
+/// Get group name selection commands based on profile.
+fn get_group_selection_commands(
     profile: crate::tui::keybindings::KeybindingProfile,
 ) -> Vec<(&'static str, &'static str)> {
     vec![

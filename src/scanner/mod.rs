@@ -101,6 +101,9 @@ pub struct FileEntry {
     pub is_symlink: bool,
     /// Whether this file is a hardlink to a previously seen file
     pub is_hardlink: bool,
+    /// Optional group name (set when using --group flag)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_name: Option<String>,
 }
 
 impl FileEntry {
@@ -119,7 +122,26 @@ impl FileEntry {
             modified,
             is_symlink: false,
             is_hardlink: false,
+            group_name: None,
         }
+    }
+
+    /// Create a new FileEntry with a group name.
+    #[must_use]
+    pub fn with_group(path: PathBuf, size: u64, modified: SystemTime, group_name: String) -> Self {
+        Self {
+            path,
+            size,
+            modified,
+            is_symlink: false,
+            is_hardlink: false,
+            group_name: Some(group_name),
+        }
+    }
+
+    /// Set the group name for this entry.
+    pub fn set_group_name(&mut self, name: String) {
+        self.group_name = Some(name);
     }
 }
 

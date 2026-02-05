@@ -70,6 +70,8 @@ pub enum AppMode {
     Confirming,
     /// Selecting a folder for batch selection
     SelectingFolder,
+    /// Selecting a named group for batch selection
+    SelectingGroup,
     /// Showing help overlay with keybinding reference
     ShowingHelp,
     /// Application is quitting
@@ -80,7 +82,10 @@ impl AppMode {
     /// Check if the application is in a navigable state.
     #[must_use]
     pub fn is_navigable(&self) -> bool {
-        matches!(self, Self::Reviewing | Self::SelectingFolder)
+        matches!(
+            self,
+            Self::Reviewing | Self::SelectingFolder | Self::SelectingGroup
+        )
     }
 
     /// Check if the application is done (quitting).
@@ -94,7 +99,11 @@ impl AppMode {
     pub fn is_modal(&self) -> bool {
         matches!(
             self,
-            Self::Previewing | Self::Confirming | Self::SelectingFolder | Self::ShowingHelp
+            Self::Previewing
+                | Self::Confirming
+                | Self::SelectingFolder
+                | Self::SelectingGroup
+                | Self::ShowingHelp
         )
     }
 }
@@ -137,6 +146,8 @@ pub enum Action {
     Preview,
     /// Enter folder selection mode
     SelectFolder,
+    /// Enter named group selection mode
+    SelectGroup,
     /// Delete selected files (to trash)
     Delete,
     /// Toggle theme
@@ -181,6 +192,7 @@ impl Action {
             Self::DeselectAll => "deselect_all",
             Self::Preview => "preview",
             Self::SelectFolder => "select_folder",
+            Self::SelectGroup => "select_group",
             Self::Delete => "delete",
             Self::ToggleTheme => "toggle_theme",
             Self::ShowHelp => "show_help",
@@ -210,6 +222,7 @@ impl Action {
             "deselect_all",
             "preview",
             "select_folder",
+            "select_group",
             "delete",
             "toggle_theme",
             "show_help",
@@ -221,7 +234,7 @@ impl Action {
 
     /// Returns all action variants.
     #[must_use]
-    pub const fn all() -> [Action; 22] {
+    pub const fn all() -> [Action; 23] {
         [
             Self::NavigateUp,
             Self::NavigateDown,
@@ -239,6 +252,7 @@ impl Action {
             Self::DeselectAll,
             Self::Preview,
             Self::SelectFolder,
+            Self::SelectGroup,
             Self::Delete,
             Self::ToggleTheme,
             Self::ShowHelp,
@@ -270,6 +284,7 @@ impl std::str::FromStr for Action {
             "deselect_all" | "deselect" => Ok(Self::DeselectAll),
             "preview" => Ok(Self::Preview),
             "select_folder" | "folder" => Ok(Self::SelectFolder),
+            "select_group" | "group" => Ok(Self::SelectGroup),
             "delete" => Ok(Self::Delete),
             "toggle_theme" | "theme" => Ok(Self::ToggleTheme),
             "show_help" | "help" => Ok(Self::ShowHelp),
@@ -367,6 +382,10 @@ pub struct App {
     folder_list: Vec<PathBuf>,
     /// Currently selected folder index
     folder_index: usize,
+    /// Named group list for selection mode (unique group names from all files)
+    group_name_list: Vec<String>,
+    /// Currently selected group name index
+    group_name_index: usize,
     /// Protected reference paths
     reference_paths: Vec<PathBuf>,
     /// Total reclaimable space in bytes
@@ -417,6 +436,8 @@ impl App {
             preview_content: None,
             folder_list: Vec::new(),
             folder_index: 0,
+            group_name_list: Vec::new(),
+            group_name_index: 0,
             reference_paths: Vec::new(),
             reclaimable_space: 0,
             visible_rows: 20, // Default, will be updated by UI
@@ -579,6 +600,8 @@ impl App {
             preview_content: None,
             folder_list: Vec::new(),
             folder_index: 0,
+            group_name_list: Vec::new(),
+            group_name_index: 0,
             reference_paths: Vec::new(),
             reclaimable_space: reclaimable,
             visible_rows: 20,
@@ -780,6 +803,15 @@ impl App {
                     log::trace!("Navigate next folder: folder_index = {}", self.folder_index);
                 }
             }
+            AppMode::SelectingGroup => {
+                if self.group_name_index + 1 < self.group_name_list.len() {
+                    self.group_name_index += 1;
+                    log::trace!(
+                        "Navigate next group name: group_name_index = {}",
+                        self.group_name_index
+                    );
+                }
+            }
             _ => {}
         }
     }
@@ -804,6 +836,15 @@ impl App {
                     log::trace!(
                         "Navigate previous folder: folder_index = {}",
                         self.folder_index
+                    );
+                }
+            }
+            AppMode::SelectingGroup => {
+                if self.group_name_index > 0 {
+                    self.group_name_index -= 1;
+                    log::trace!(
+                        "Navigate previous group name: group_name_index = {}",
+                        self.group_name_index
                     );
                 }
             }
@@ -1227,6 +1268,135 @@ impl App {
         self.set_mode(AppMode::Reviewing);
     }
 
+    // ==================== Named Group Selection ====================
+
+    /// Get the list of unique group names across all files.
+    #[must_use]
+    pub fn group_name_list(&self) -> &[String] {
+        &self.group_name_list
+    }
+
+    /// Get the currently selected group name index.
+    #[must_use]
+    pub fn group_name_index(&self) -> usize {
+        self.group_name_index
+    }
+
+    /// Enter group name selection mode.
+    ///
+    /// Collects all unique group names from files across all duplicate groups.
+    pub fn enter_group_selection(&mut self) {
+        let mut names: Vec<String> = self
+            .groups
+            .iter()
+            .flat_map(|g| g.files.iter())
+            .filter_map(|f| f.group_name.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+
+        if names.is_empty() {
+            self.set_error("No named groups found - use --group NAME=PATH when scanning");
+            return;
+        }
+
+        self.group_name_list = names;
+        self.group_name_index = 0;
+        self.set_mode(AppMode::SelectingGroup);
+    }
+
+    /// Select all files in the current duplicate group that belong to the selected named group.
+    ///
+    /// This selects files based on their `group_name` field within the currently viewed
+    /// duplicate group only, to avoid selecting all copies of a file across different groups.
+    pub fn select_by_group_name(&mut self) {
+        let group_name = match self.group_name_list.get(self.group_name_index) {
+            Some(n) => n.clone(),
+            None => {
+                self.set_mode(AppMode::Reviewing);
+                return;
+            }
+        };
+
+        let files_to_select: Vec<PathBuf> = if let Some(group) = self.current_group() {
+            // Ensure we don't select ALL files in the group
+            let in_group_count = group
+                .files
+                .iter()
+                .filter(|f| f.group_name.as_ref() == Some(&group_name))
+                .count();
+
+            if in_group_count >= group.files.len() {
+                self.set_error("Cannot select all files in group - at least one must be preserved");
+                self.set_mode(AppMode::Reviewing);
+                return;
+            }
+
+            group
+                .files
+                .iter()
+                .filter(|f| {
+                    f.group_name.as_ref() == Some(&group_name) && !self.is_in_reference_dir(&f.path)
+                })
+                .map(|f| f.path.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let count = files_to_select.len();
+        for path in files_to_select {
+            self.selected_files.insert(path);
+        }
+
+        if count > 0 {
+            log::info!(
+                "Selected {} files in named group '{}' (skipping references)",
+                count,
+                group_name
+            );
+        }
+        self.set_mode(AppMode::Reviewing);
+    }
+
+    /// Select all files across ALL duplicate groups that belong to the given named group.
+    ///
+    /// This is useful for batch operations like "delete all duplicates from the 'downloads' group".
+    /// Files in reference directories are skipped.
+    pub fn select_all_by_group_name(&mut self, group_name: &str) {
+        let mut count = 0;
+        for group in &self.groups {
+            // Ensure we don't select ALL files in any group
+            let in_group_count = group
+                .files
+                .iter()
+                .filter(|f| f.group_name.as_ref().is_some_and(|n| n == group_name))
+                .count();
+
+            // If all files in this duplicate group are from the named group, skip one
+            let skip_first = in_group_count >= group.files.len();
+
+            for (i, file) in group.files.iter().enumerate() {
+                if file.group_name.as_ref().is_some_and(|n| n == group_name) {
+                    if skip_first && i == 0 {
+                        continue; // Skip first to preserve at least one
+                    }
+                    if !self.is_in_reference_dir(&file.path)
+                        && self.selected_files.insert(file.path.clone())
+                    {
+                        count += 1;
+                    }
+                }
+            }
+        }
+
+        log::info!(
+            "Selected {} files across all groups in named group '{}'",
+            count,
+            group_name
+        );
+    }
+
     // ==================== Action Handling ====================
 
     /// Navigate to the first item (top of list).
@@ -1244,6 +1414,10 @@ impl App {
             AppMode::SelectingFolder => {
                 self.folder_index = 0;
                 log::trace!("Navigate to top folder: folder_index = 0");
+            }
+            AppMode::SelectingGroup => {
+                self.group_name_index = 0;
+                log::trace!("Navigate to top group name: group_name_index = 0");
             }
             _ => {}
         }
@@ -1270,6 +1444,14 @@ impl App {
                 log::trace!(
                     "Navigate to bottom folder: folder_index = {}",
                     self.folder_index
+                );
+            }
+            AppMode::SelectingGroup => {
+                let last_index = self.group_name_list.len().saturating_sub(1);
+                self.group_name_index = last_index;
+                log::trace!(
+                    "Navigate to bottom group name: group_name_index = {}",
+                    self.group_name_index
                 );
             }
             _ => {}
@@ -1364,6 +1546,14 @@ impl App {
                     false
                 }
             }
+            Action::SelectGroup => {
+                if self.mode == AppMode::Reviewing && self.current_group().is_some() {
+                    self.enter_group_selection();
+                    true
+                } else {
+                    false
+                }
+            }
             Action::Delete => {
                 if self.dry_run {
                     self.set_error("Cannot delete files in dry-run mode");
@@ -1393,6 +1583,9 @@ impl App {
                 if self.mode == AppMode::SelectingFolder {
                     self.select_by_folder();
                     true
+                } else if self.mode == AppMode::SelectingGroup {
+                    self.select_by_group_name();
+                    true
                 } else {
                     // Confirmation handling is done by the TUI main loop
                     true
@@ -1408,6 +1601,9 @@ impl App {
                         self.set_mode(AppMode::Reviewing);
                     }
                     AppMode::SelectingFolder => {
+                        self.set_mode(AppMode::Reviewing);
+                    }
+                    AppMode::SelectingGroup => {
                         self.set_mode(AppMode::Reviewing);
                     }
                     AppMode::ShowingHelp => {
@@ -1601,6 +1797,123 @@ mod tests {
         // Should have set an error and NOT selected anything (or at least not all)
         assert!(app.error_message().is_some());
         assert_eq!(app.selected_count(), 0);
+    }
+
+    fn make_group_with_names(
+        size: u64,
+        paths_and_names: Vec<(&str, Option<&str>)>,
+    ) -> DuplicateGroup {
+        DuplicateGroup::new(
+            [0u8; 32],
+            size,
+            paths_and_names
+                .into_iter()
+                .map(|(path, group_name)| {
+                    let mut entry = crate::scanner::FileEntry::new(
+                        PathBuf::from(path),
+                        size,
+                        std::time::SystemTime::now(),
+                    );
+                    if let Some(name) = group_name {
+                        entry.group_name = Some(name.to_string());
+                    }
+                    entry
+                })
+                .collect(),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn test_group_name_selection() {
+        let groups = vec![make_group_with_names(
+            100,
+            vec![
+                ("/photos/a.jpg", Some("photos")),
+                ("/docs/a.jpg", Some("docs")),
+                ("/backup/a.jpg", Some("backup")),
+            ],
+        )];
+        let mut app = App::with_groups(groups);
+
+        app.enter_group_selection();
+        assert_eq!(app.mode(), AppMode::SelectingGroup);
+        assert_eq!(app.group_name_list().len(), 3);
+        assert!(app.group_name_list().contains(&"photos".to_string()));
+        assert!(app.group_name_list().contains(&"docs".to_string()));
+        assert!(app.group_name_list().contains(&"backup".to_string()));
+
+        // Navigate to 'docs' (groups are sorted, so: backup, docs, photos)
+        assert_eq!(app.group_name_list()[1], "docs");
+        app.next(); // Move from index 0 to 1
+        assert_eq!(app.group_name_index(), 1);
+
+        app.select_by_group_name();
+        assert_eq!(app.mode(), AppMode::Reviewing);
+        // Only the file with group_name "docs" should be selected
+        assert!(!app.is_file_selected(&PathBuf::from("/photos/a.jpg")));
+        assert!(app.is_file_selected(&PathBuf::from("/docs/a.jpg")));
+        assert!(!app.is_file_selected(&PathBuf::from("/backup/a.jpg")));
+    }
+
+    #[test]
+    fn test_group_selection_no_groups_shows_error() {
+        // Files without group_name
+        let groups = vec![make_group(100, vec!["/a.txt", "/b.txt"])];
+        let mut app = App::with_groups(groups);
+
+        app.enter_group_selection();
+        // Should show error and stay in Reviewing mode
+        assert!(app.error_message().is_some());
+        assert_eq!(app.mode(), AppMode::Reviewing);
+    }
+
+    #[test]
+    fn test_group_selection_prevents_selecting_all() {
+        // All files in the group have the same group_name
+        let groups = vec![make_group_with_names(
+            100,
+            vec![("/a.txt", Some("backup")), ("/b.txt", Some("backup"))],
+        )];
+        let mut app = App::with_groups(groups);
+
+        app.enter_group_selection();
+        app.select_by_group_name();
+
+        // Should have set an error and NOT selected anything
+        assert!(app.error_message().is_some());
+        assert_eq!(app.selected_count(), 0);
+    }
+
+    #[test]
+    fn test_select_all_by_group_name() {
+        let groups = vec![
+            make_group_with_names(
+                100,
+                vec![
+                    ("/photos/a.jpg", Some("photos")),
+                    ("/docs/a.jpg", Some("docs")),
+                ],
+            ),
+            make_group_with_names(
+                200,
+                vec![
+                    ("/photos/b.jpg", Some("photos")),
+                    ("/backup/b.jpg", Some("backup")),
+                ],
+            ),
+        ];
+        let mut app = App::with_groups(groups);
+
+        app.select_all_by_group_name("photos");
+
+        // Should select all files with group_name "photos" across all groups
+        assert!(app.is_file_selected(&PathBuf::from("/photos/a.jpg")));
+        assert!(app.is_file_selected(&PathBuf::from("/photos/b.jpg")));
+        // Other groups shouldn't be selected
+        assert!(!app.is_file_selected(&PathBuf::from("/docs/a.jpg")));
+        assert!(!app.is_file_selected(&PathBuf::from("/backup/b.jpg")));
+        assert_eq!(app.selected_count(), 2);
     }
 
     #[test]
@@ -2072,18 +2385,20 @@ mod tests {
     #[test]
     fn test_action_all_names() {
         let names = Action::all_names();
-        assert_eq!(names.len(), 22);
+        assert_eq!(names.len(), 23);
         assert!(names.contains(&"navigate_down"));
         assert!(names.contains(&"show_help"));
+        assert!(names.contains(&"select_group"));
         assert!(names.contains(&"quit"));
     }
 
     #[test]
     fn test_action_all() {
         let actions = Action::all();
-        assert_eq!(actions.len(), 22);
+        assert_eq!(actions.len(), 23);
         assert!(actions.contains(&Action::NavigateDown));
         assert!(actions.contains(&Action::ShowHelp));
+        assert!(actions.contains(&Action::SelectGroup));
         assert!(actions.contains(&Action::Quit));
     }
 }

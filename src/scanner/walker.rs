@@ -58,6 +58,7 @@
 //! println!("Found {} files across all directories", files.len());
 //! ```
 
+use std::collections::HashMap;
 use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -82,6 +83,8 @@ pub struct Walker {
     config: WalkerConfig,
     /// Optional shutdown flag for graceful termination
     shutdown_flag: Option<Arc<AtomicBool>>,
+    /// Optional group name for files discovered by this walker
+    group_name: Option<String>,
 }
 
 impl Walker {
@@ -106,6 +109,7 @@ impl Walker {
             root: path.to_path_buf(),
             config,
             shutdown_flag: None,
+            group_name: None,
         }
     }
 
@@ -120,6 +124,16 @@ impl Walker {
     #[must_use]
     pub fn with_shutdown_flag(mut self, flag: Arc<AtomicBool>) -> Self {
         self.shutdown_flag = Some(flag);
+        self
+    }
+
+    /// Set the group name for files discovered by this walker.
+    ///
+    /// When set, all files discovered by this walker will have
+    /// their `group_name` field set to this value.
+    #[must_use]
+    pub fn with_group_name(mut self, name: String) -> Self {
+        self.group_name = Some(name);
         self
     }
 
@@ -453,6 +467,7 @@ impl Walker {
             modified,
             is_symlink,
             is_hardlink: false,
+            group_name: self.group_name.clone(),
         }))
     }
 
@@ -506,6 +521,7 @@ impl Walker {
 /// - Parallel traversal using rayon
 /// - Canonical path normalization for consistent comparison
 /// - Aggregated results from all directories
+/// - Optional named directory groups for batch selection
 ///
 /// # Path Overlap Detection
 ///
@@ -513,6 +529,12 @@ impl Walker {
 /// For example, scanning both `/home/user` and `/home/user/Documents` would
 /// result in `Documents` being scanned twice. `MultiWalker` automatically
 /// detects these overlaps and removes redundant paths.
+///
+/// # Named Groups
+///
+/// Use [`with_group_map`](MultiWalker::with_group_map) to associate group names
+/// with directories. Files discovered in those directories will have their
+/// `group_name` field set accordingly.
 ///
 /// # Example
 ///
@@ -543,6 +565,8 @@ pub struct MultiWalker {
     config: WalkerConfig,
     /// Optional shutdown flag for graceful termination
     shutdown_flag: Option<Arc<AtomicBool>>,
+    /// Mapping from canonical root paths to group names
+    group_map: HashMap<PathBuf, String>,
 }
 
 impl MultiWalker {
@@ -579,6 +603,7 @@ impl MultiWalker {
             roots,
             config,
             shutdown_flag: None,
+            group_map: HashMap::new(),
         }
     }
 
@@ -593,6 +618,41 @@ impl MultiWalker {
     #[must_use]
     pub fn with_shutdown_flag(mut self, flag: Arc<AtomicBool>) -> Self {
         self.shutdown_flag = Some(flag);
+        self
+    }
+
+    /// Set the group mapping for named directory groups.
+    ///
+    /// The mapping associates canonical paths with group names. Files found
+    /// in directories matching these paths will have their `group_name` field
+    /// set to the corresponding group name.
+    ///
+    /// # Arguments
+    ///
+    /// * `map` - HashMap from canonical paths to group names
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustdupe::scanner::{MultiWalker, WalkerConfig};
+    /// use std::collections::HashMap;
+    /// use std::path::PathBuf;
+    ///
+    /// let paths = vec![
+    ///     PathBuf::from("/home/user/Photos"),
+    ///     PathBuf::from("/home/user/Docs"),
+    /// ];
+    ///
+    /// let mut group_map = HashMap::new();
+    /// group_map.insert(PathBuf::from("/home/user/Photos"), "photos".to_string());
+    /// group_map.insert(PathBuf::from("/home/user/Docs"), "docs".to_string());
+    ///
+    /// let walker = MultiWalker::new(paths, WalkerConfig::default())
+    ///     .with_group_map(group_map);
+    /// ```
+    #[must_use]
+    pub fn with_group_map(mut self, map: HashMap<PathBuf, String>) -> Self {
+        self.group_map = map;
         self
     }
 
@@ -736,10 +796,16 @@ impl MultiWalker {
 
                 log::debug!("MultiWalker: Starting scan of {}", root.display());
 
+                // Look up group name for this root
+                let group_name = self.group_map.get(root).cloned();
+
                 // Create a walker for this root
                 let mut walker = Walker::new(root, self.config.clone());
                 if let Some(ref flag) = self.shutdown_flag {
                     walker = walker.with_shutdown_flag(Arc::clone(flag));
+                }
+                if let Some(name) = group_name {
+                    walker = walker.with_group_name(name);
                 }
 
                 // Collect results from this walker
@@ -1486,5 +1552,149 @@ mod tests {
         // Both files should be found (they're in different directories)
         assert_eq!(files.len(), 2);
         assert!(files.iter().all(|f| f.size == content.len() as u64));
+    }
+
+    // ========================================================================
+    // Named Group Tests
+    // ========================================================================
+
+    #[test]
+    fn test_walker_with_group_name() {
+        let dir = create_test_dir();
+
+        let walker =
+            Walker::new(dir.path(), WalkerConfig::default()).with_group_name("photos".to_string());
+
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+
+        // All files should have the group name set
+        assert!(!files.is_empty());
+        for file in &files {
+            assert_eq!(file.group_name, Some("photos".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_walker_without_group_name() {
+        let dir = create_test_dir();
+
+        let walker = Walker::new(dir.path(), WalkerConfig::default());
+
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+
+        // No group name should be set
+        assert!(!files.is_empty());
+        for file in &files {
+            assert!(file.group_name.is_none());
+        }
+    }
+
+    #[test]
+    fn test_multi_walker_with_group_map() {
+        use std::collections::HashMap;
+
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+
+        // Create files in both directories
+        let file1 = dir1.path().join("photo.jpg");
+        let mut f = File::create(&file1).unwrap();
+        writeln!(f, "Photo content").unwrap();
+
+        let file2 = dir2.path().join("document.pdf");
+        let mut f = File::create(&file2).unwrap();
+        writeln!(f, "Document content").unwrap();
+
+        // Build group map with canonical paths
+        let mut group_map = HashMap::new();
+        group_map.insert(dir1.path().canonicalize().unwrap(), "photos".to_string());
+        group_map.insert(dir2.path().canonicalize().unwrap(), "docs".to_string());
+
+        let paths = vec![dir1.path().to_path_buf(), dir2.path().to_path_buf()];
+
+        let walker = MultiWalker::new(paths, WalkerConfig::default()).with_group_map(group_map);
+
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+
+        assert_eq!(files.len(), 2);
+
+        // Find the photo file
+        let photo = files
+            .iter()
+            .find(|f| f.path.to_string_lossy().contains("photo"));
+        assert!(photo.is_some());
+        assert_eq!(photo.unwrap().group_name, Some("photos".to_string()));
+
+        // Find the document file
+        let doc = files
+            .iter()
+            .find(|f| f.path.to_string_lossy().contains("document"));
+        assert!(doc.is_some());
+        assert_eq!(doc.unwrap().group_name, Some("docs".to_string()));
+    }
+
+    #[test]
+    fn test_multi_walker_group_map_partial() {
+        // Test when only some directories have groups
+        use std::collections::HashMap;
+
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+
+        // Create files in both directories
+        let file1 = dir1.path().join("file1.txt");
+        let mut f = File::create(&file1).unwrap();
+        writeln!(f, "Content 1").unwrap();
+
+        let file2 = dir2.path().join("file2.txt");
+        let mut f = File::create(&file2).unwrap();
+        writeln!(f, "Content 2").unwrap();
+
+        // Only dir1 has a group name
+        let mut group_map = HashMap::new();
+        group_map.insert(dir1.path().canonicalize().unwrap(), "grouped".to_string());
+
+        let paths = vec![dir1.path().to_path_buf(), dir2.path().to_path_buf()];
+
+        let walker = MultiWalker::new(paths, WalkerConfig::default()).with_group_map(group_map);
+
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+
+        assert_eq!(files.len(), 2);
+
+        // file1 should have group name
+        let file1_entry = files
+            .iter()
+            .find(|f| f.path.to_string_lossy().contains("file1"));
+        assert!(file1_entry.is_some());
+        assert_eq!(file1_entry.unwrap().group_name, Some("grouped".to_string()));
+
+        // file2 should NOT have group name
+        let file2_entry = files
+            .iter()
+            .find(|f| f.path.to_string_lossy().contains("file2"));
+        assert!(file2_entry.is_some());
+        assert!(file2_entry.unwrap().group_name.is_none());
+    }
+
+    #[test]
+    fn test_multi_walker_empty_group_map() {
+        use std::collections::HashMap;
+
+        let dir = TempDir::new().unwrap();
+
+        let file = dir.path().join("file.txt");
+        let mut f = File::create(&file).unwrap();
+        writeln!(f, "Content").unwrap();
+
+        let group_map: HashMap<PathBuf, String> = HashMap::new();
+        let paths = vec![dir.path().to_path_buf()];
+
+        let walker = MultiWalker::new(paths, WalkerConfig::default()).with_group_map(group_map);
+
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+
+        assert_eq!(files.len(), 1);
+        assert!(files[0].group_name.is_none());
     }
 }
