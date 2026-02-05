@@ -100,6 +100,18 @@ pub struct JsonSummary {
     pub exit_code: i32,
     /// The machine-readable exit code name (e.g., "RD000")
     pub exit_code_name: String,
+    /// Number of unique file sizes correctly identified by Bloom filter
+    pub bloom_size_unique: usize,
+    /// Number of unique file sizes incorrectly identified as duplicates by Bloom filter
+    pub bloom_size_fp: usize,
+    /// Observed false positive rate for the size Bloom filter (%)
+    pub bloom_size_fp_rate: f64,
+    /// Number of unique prehashes correctly identified by Bloom filter
+    pub bloom_prehash_unique: usize,
+    /// Number of unique prehashes incorrectly identified as duplicates by Bloom filter
+    pub bloom_prehash_fp: usize,
+    /// Observed false positive rate for the prehash Bloom filter (%)
+    pub bloom_prehash_fp_rate: f64,
 }
 
 impl JsonSummary {
@@ -116,6 +128,12 @@ impl JsonSummary {
             interrupted: summary.interrupted,
             exit_code: exit_code.as_i32(),
             exit_code_name: exit_code.code_prefix().to_string(),
+            bloom_size_unique: summary.bloom_size_unique,
+            bloom_size_fp: summary.bloom_size_fp,
+            bloom_size_fp_rate: summary.bloom_size_fp_rate(),
+            bloom_prehash_unique: summary.bloom_prehash_unique,
+            bloom_prehash_fp: summary.bloom_prehash_fp,
+            bloom_prehash_fp_rate: summary.bloom_prehash_fp_rate(),
         }
     }
 }
@@ -281,6 +299,10 @@ mod tests {
             scan_duration: Duration::from_millis(1234),
             interrupted: false,
             scan_errors: Vec::new(),
+            bloom_size_unique: 45,
+            bloom_size_fp: 5,
+            bloom_prehash_unique: 25,
+            bloom_prehash_fp: 5,
         }
     }
 

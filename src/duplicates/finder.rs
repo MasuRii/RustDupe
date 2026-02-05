@@ -160,6 +160,10 @@ pub struct PrehashStats {
     pub potential_duplicates: usize,
     /// Number of prehash groups with 2+ files
     pub duplicate_groups: usize,
+    /// Number of files identified as unique by Bloom filter
+    pub bloom_unique: usize,
+    /// Number of files incorrectly identified as potential duplicates by Bloom filter (False Positives)
+    pub bloom_fp: usize,
     /// Whether phase was interrupted by shutdown
     pub interrupted: bool,
 }
@@ -402,6 +406,7 @@ pub fn phase2_prehash(
         .filter(|(hash, files)| {
             if files.len() == 1 {
                 stats.unique_prehashes += 1;
+                stats.bloom_fp += 1;
                 log::trace!(
                     "Eliminated unique prehash {}: {}",
                     crate::scanner::hash_to_hex(hash),
@@ -423,6 +428,7 @@ pub fn phase2_prehash(
 
     // Add unique prehashes from first_prehash_occurrences to stats
     stats.unique_prehashes += first_prehash_occurrences.len();
+    stats.bloom_unique += first_prehash_occurrences.len();
 
     // Notify progress callback
     if let Some(ref callback) = config.progress_callback {
@@ -1079,6 +1085,14 @@ pub struct ScanSummary {
     pub interrupted: bool,
     /// Errors encountered during the scan
     pub scan_errors: Vec<crate::scanner::ScanError>,
+    /// Number of unique file sizes correctly identified by Bloom filter
+    pub bloom_size_unique: usize,
+    /// Number of unique file sizes incorrectly identified as duplicates by Bloom filter
+    pub bloom_size_fp: usize,
+    /// Number of unique prehashes correctly identified by Bloom filter
+    pub bloom_prehash_unique: usize,
+    /// Number of unique prehashes incorrectly identified as duplicates by Bloom filter
+    pub bloom_prehash_fp: usize,
 }
 
 impl ScanSummary {
@@ -1102,6 +1116,28 @@ impl ScanSummary {
     #[must_use]
     pub fn total_size_display(&self) -> String {
         format_size(self.total_size)
+    }
+
+    /// Calculate the observed false positive rate for the size Bloom filter.
+    #[must_use]
+    pub fn bloom_size_fp_rate(&self) -> f64 {
+        let total_unique = self.bloom_size_unique + self.bloom_size_fp;
+        if total_unique == 0 {
+            0.0
+        } else {
+            (self.bloom_size_fp as f64 / total_unique as f64) * 100.0
+        }
+    }
+
+    /// Calculate the observed false positive rate for the prehash Bloom filter.
+    #[must_use]
+    pub fn bloom_prehash_fp_rate(&self) -> f64 {
+        let total_unique = self.bloom_prehash_unique + self.bloom_prehash_fp;
+        if total_unique == 0 {
+            0.0
+        } else {
+            (self.bloom_prehash_fp as f64 / total_unique as f64) * 100.0
+        }
     }
 }
 
@@ -1341,6 +1377,7 @@ impl DuplicateFinder {
         summary.total_files = files.len() + first_occurrences.len();
         summary.total_size = files.iter().map(|f| f.size).sum::<u64>()
             + first_occurrences.values().map(|f| f.size).sum::<u64>();
+        summary.bloom_size_unique = first_occurrences.len();
 
         log::info!(
             "Found {} files ({} total)",
@@ -1366,6 +1403,8 @@ impl DuplicateFinder {
 
         // Update eliminated count to include files we discarded during walk
         summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
+        summary.bloom_size_unique = first_occurrences.len();
+        summary.bloom_size_fp = size_stats.eliminated_unique;
 
         log::info!(
             "Phase 1 complete: {} → {} files ({:.1}% eliminated)",
@@ -1402,6 +1441,8 @@ impl DuplicateFinder {
         summary.eliminated_by_prehash = prehash_stats.unique_prehashes;
         summary.cache_prehash_hits = prehash_stats.cache_hits;
         summary.cache_prehash_misses = prehash_stats.cache_misses;
+        summary.bloom_prehash_unique = prehash_stats.bloom_unique;
+        summary.bloom_prehash_fp = prehash_stats.bloom_fp;
 
         if !prehash_stats.errors.is_empty() {
             if self.config.strict {
@@ -1472,6 +1513,16 @@ impl DuplicateFinder {
             summary.duplicate_files,
             summary.reclaimable_display(),
             summary.cache_prehash_hits + summary.cache_fullhash_hits
+        );
+
+        log::debug!(
+            "Bloom Filter Efficiency: \n  Size Filter: {} unique, {} FPs ({:.4}% FPR)\n  Prehash Filter: {} unique, {} FPs ({:.4}% FPR)",
+            summary.bloom_size_unique,
+            summary.bloom_size_fp,
+            summary.bloom_size_fp_rate(),
+            summary.bloom_prehash_unique,
+            summary.bloom_prehash_fp,
+            summary.bloom_prehash_fp_rate()
         );
 
         Ok((duplicate_groups, summary))
@@ -1549,6 +1600,8 @@ impl DuplicateFinder {
 
         let (size_groups, size_stats) = super::group_by_size(potential_files);
         summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
+        summary.bloom_size_unique = first_occurrences.len();
+        summary.bloom_size_fp = size_stats.eliminated_unique;
 
         if self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
@@ -1575,6 +1628,8 @@ impl DuplicateFinder {
         summary.eliminated_by_prehash = prehash_stats.unique_prehashes;
         summary.cache_prehash_hits = prehash_stats.cache_hits;
         summary.cache_prehash_misses = prehash_stats.cache_misses;
+        summary.bloom_prehash_unique = prehash_stats.bloom_unique;
+        summary.bloom_prehash_fp = prehash_stats.bloom_fp;
 
         if !prehash_stats.errors.is_empty() {
             if self.config.strict {
@@ -1814,6 +1869,8 @@ impl DuplicateFinder {
 
         // Update eliminated count to include files we discarded during walk
         summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
+        summary.bloom_size_unique = first_occurrences.len();
+        summary.bloom_size_fp = size_stats.eliminated_unique;
 
         log::info!(
             "Phase 1 complete: {} → {} files ({:.1}% eliminated)",
@@ -1850,6 +1907,8 @@ impl DuplicateFinder {
         summary.eliminated_by_prehash = prehash_stats.unique_prehashes;
         summary.cache_prehash_hits = prehash_stats.cache_hits;
         summary.cache_prehash_misses = prehash_stats.cache_misses;
+        summary.bloom_prehash_unique = prehash_stats.bloom_unique;
+        summary.bloom_prehash_fp = prehash_stats.bloom_fp;
 
         if !prehash_stats.errors.is_empty() {
             if self.config.strict {
@@ -1983,6 +2042,8 @@ mod tests {
             unique_prehashes: 80,
             potential_duplicates: 20,
             duplicate_groups: 5,
+            bloom_unique: 70,
+            bloom_fp: 10,
             interrupted: false,
         };
 
