@@ -7,12 +7,19 @@
 //!
 //! # Key Mappings
 //!
+//! The default keybinding profile (Universal) supports both vim-style and arrow key
+//! navigation simultaneously. See [`KeyBindings`] for profile-specific mappings.
+//!
 //! | Key | Action |
 //! |-----|--------|
 //! | `j` / `Down` | Navigate to next file |
 //! | `k` / `Up` | Navigate to previous file |
-//! | `J` / `Page Down` | Navigate to next group |
-//! | `K` / `Page Up` | Navigate to previous group |
+//! | `h` / `Left` | Navigate to previous group (back) |
+//! | `l` / `Right` | Navigate to next group (forward) |
+//! | `J` / `Page Down` / `Ctrl+d` | Navigate to next group |
+//! | `K` / `Page Up` / `Ctrl+u` | Navigate to previous group |
+//! | `g` / `Home` | Go to top of list |
+//! | `G` / `End` | Go to bottom of list |
 //! | `Space` | Toggle selection of current file |
 //! | `a` | Select all in current group (except first) |
 //! | `u` | Deselect all files |
@@ -38,22 +45,24 @@
 
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyEvent};
 
+use super::keybindings::{KeyBindings, KeybindingProfile};
 use super::Action;
 
 /// Event handler for the TUI.
 ///
-/// Handles keyboard events and translates them to [`Action`]s.
-/// Uses crossterm for cross-platform input handling.
+/// Handles keyboard events and translates them to [`Action`]s using
+/// configurable [`KeyBindings`]. Uses crossterm for cross-platform input handling.
 ///
 /// # Thread Safety
 ///
 /// This struct should only be used from the main thread.
 /// Crossterm's event handling is not thread-safe.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct EventHandler {
-    _private: (), // Prevent construction except through new()
+    /// Keybindings configuration for translating key events to actions.
+    bindings: KeyBindings,
 }
 
 /// Error type for event handling operations.
@@ -64,8 +73,18 @@ pub enum EventError {
     Io(#[from] std::io::Error),
 }
 
+impl Default for EventHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EventHandler {
-    /// Create a new event handler.
+    /// Create a new event handler with default (Universal) keybindings.
+    ///
+    /// The Universal profile supports both vim-style (hjkl) AND arrow key
+    /// navigation simultaneously.
+    ///
     /// # Example
     ///
     /// ```
@@ -74,7 +93,48 @@ impl EventHandler {
     /// ```
     #[must_use]
     pub fn new() -> Self {
-        Self { _private: () }
+        Self {
+            bindings: KeyBindings::default(),
+        }
+    }
+
+    /// Create a new event handler with a specific keybinding profile.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::events::EventHandler;
+    /// use rustdupe::tui::keybindings::KeybindingProfile;
+    ///
+    /// let handler = EventHandler::with_profile(KeybindingProfile::Vim);
+    /// ```
+    #[must_use]
+    pub fn with_profile(profile: KeybindingProfile) -> Self {
+        Self {
+            bindings: KeyBindings::from_profile(profile),
+        }
+    }
+
+    /// Create a new event handler with custom keybindings.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustdupe::tui::events::EventHandler;
+    /// use rustdupe::tui::keybindings::KeyBindings;
+    ///
+    /// let bindings = KeyBindings::default();
+    /// let handler = EventHandler::with_bindings(bindings);
+    /// ```
+    #[must_use]
+    pub fn with_bindings(bindings: KeyBindings) -> Self {
+        Self { bindings }
+    }
+
+    /// Get a reference to the current keybindings.
+    #[must_use]
+    pub fn bindings(&self) -> &KeyBindings {
+        &self.bindings
     }
 
     /// Poll for an event with the specified timeout.
@@ -161,73 +221,18 @@ impl EventHandler {
         Ok(event::poll(Duration::ZERO)?)
     }
 
-    /// Translate a key event to an action.
+    /// Translate a key event to an action using the configured keybindings.
     ///
     /// Returns `None` if the key is not mapped to any action.
     fn translate_key(&self, key: KeyEvent) -> Option<Action> {
-        // Ignore key release events (some terminals send these)
-        if key.kind != event::KeyEventKind::Press {
-            return None;
-        }
-
-        match (key.code, key.modifiers) {
-            // Navigation - down
-            (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Action::NavigateDown),
-            (KeyCode::Down, KeyModifiers::NONE) => Some(Action::NavigateDown),
-
-            // Navigation - up
-            (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Action::NavigateUp),
-            (KeyCode::Up, KeyModifiers::NONE) => Some(Action::NavigateUp),
-
-            // Navigation - next group
-            (KeyCode::Char('J'), KeyModifiers::SHIFT) => Some(Action::NextGroup),
-            (KeyCode::Char('J'), KeyModifiers::NONE) => Some(Action::NextGroup), // Some terminals
-            (KeyCode::PageDown, KeyModifiers::NONE) => Some(Action::NextGroup),
-
-            // Navigation - previous group
-            (KeyCode::Char('K'), KeyModifiers::SHIFT) => Some(Action::PreviousGroup),
-            (KeyCode::Char('K'), KeyModifiers::NONE) => Some(Action::PreviousGroup), // Some terminals
-            (KeyCode::PageUp, KeyModifiers::NONE) => Some(Action::PreviousGroup),
-
-            // Selection
-            (KeyCode::Char(' '), KeyModifiers::NONE) => Some(Action::ToggleSelect),
-            (KeyCode::Char('a'), KeyModifiers::NONE) => Some(Action::SelectAllInGroup),
-            (KeyCode::Char('A'), KeyModifiers::SHIFT) => Some(Action::SelectAllDuplicates),
-            (KeyCode::Char('O'), KeyModifiers::SHIFT) => Some(Action::SelectOldest),
-            (KeyCode::Char('o'), KeyModifiers::NONE) => Some(Action::SelectOldest),
-            (KeyCode::Char('N'), KeyModifiers::SHIFT) => Some(Action::SelectNewest),
-            (KeyCode::Char('n'), KeyModifiers::NONE) => Some(Action::SelectNewest),
-            (KeyCode::Char('S'), KeyModifiers::SHIFT) => Some(Action::SelectSmallest),
-            (KeyCode::Char('s'), KeyModifiers::NONE) => Some(Action::SelectSmallest),
-            (KeyCode::Char('L'), KeyModifiers::SHIFT) => Some(Action::SelectLargest),
-            (KeyCode::Char('l'), KeyModifiers::NONE) => Some(Action::SelectLargest),
-            (KeyCode::Char('u'), KeyModifiers::NONE) => Some(Action::DeselectAll),
-
-            // Confirm/Cancel
-            (KeyCode::Enter, KeyModifiers::NONE) => Some(Action::Confirm),
-            (KeyCode::Esc, KeyModifiers::NONE) => Some(Action::Cancel),
-
-            // Actions
-            (KeyCode::Char('p'), KeyModifiers::NONE) => Some(Action::Preview),
-            (KeyCode::Char('f'), KeyModifiers::NONE) => Some(Action::SelectFolder),
-            (KeyCode::Char('F'), KeyModifiers::SHIFT) => Some(Action::SelectFolder),
-            (KeyCode::Char('d'), KeyModifiers::NONE) => Some(Action::Delete),
-            (KeyCode::Char('t'), KeyModifiers::NONE) => Some(Action::ToggleTheme),
-
-            // Quit
-            (KeyCode::Char('q'), KeyModifiers::NONE) => Some(Action::Quit),
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
-
-            // Unmapped key
-            _ => None,
-        }
+        self.bindings.resolve(&key)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyEventKind, KeyEventState};
+    use crossterm::event::{KeyCode, KeyEventKind, KeyEventState, KeyModifiers};
 
     fn make_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent {
@@ -250,9 +255,28 @@ mod tests {
     #[test]
     fn test_event_handler_new() {
         let handler = EventHandler::new();
-        // Just verify construction works
+        // Verify construction works and uses Universal profile
         let key = make_key(KeyCode::Char('q'), KeyModifiers::NONE);
         assert_eq!(handler.translate_key(key), Some(Action::Quit));
+    }
+
+    #[test]
+    fn test_event_handler_with_profile() {
+        let handler = EventHandler::with_profile(KeybindingProfile::Vim);
+        // Vim profile should still resolve 'j' to NavigateDown
+        let key = make_key(KeyCode::Char('j'), KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::NavigateDown));
+
+        // But arrow keys should NOT work in Vim profile
+        let key = make_key(KeyCode::Down, KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), None);
+    }
+
+    #[test]
+    fn test_event_handler_bindings_accessor() {
+        let handler = EventHandler::new();
+        let bindings = handler.bindings();
+        assert_eq!(bindings.profile(), KeybindingProfile::Universal);
     }
 
     #[test]
@@ -292,6 +316,14 @@ mod tests {
         // Page Down
         let key = make_key(KeyCode::PageDown, KeyModifiers::NONE);
         assert_eq!(handler.translate_key(key), Some(Action::NextGroup));
+
+        // Ctrl+d
+        let key = make_key(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        assert_eq!(handler.translate_key(key), Some(Action::NextGroup));
+
+        // Right arrow (forward navigation)
+        let key = make_key(KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::NextGroup));
     }
 
     #[test]
@@ -305,6 +337,44 @@ mod tests {
         // Page Up
         let key = make_key(KeyCode::PageUp, KeyModifiers::NONE);
         assert_eq!(handler.translate_key(key), Some(Action::PreviousGroup));
+
+        // Ctrl+u
+        let key = make_key(KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert_eq!(handler.translate_key(key), Some(Action::PreviousGroup));
+
+        // 'h' key (vim left / back)
+        let key = make_key(KeyCode::Char('h'), KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::PreviousGroup));
+
+        // Left arrow (back navigation)
+        let key = make_key(KeyCode::Left, KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::PreviousGroup));
+    }
+
+    #[test]
+    fn test_translate_go_to_top() {
+        let handler = EventHandler::new();
+
+        // Home key
+        let key = make_key(KeyCode::Home, KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::GoToTop));
+
+        // 'g' key (vim go to top)
+        let key = make_key(KeyCode::Char('g'), KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::GoToTop));
+    }
+
+    #[test]
+    fn test_translate_go_to_bottom() {
+        let handler = EventHandler::new();
+
+        // End key
+        let key = make_key(KeyCode::End, KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::GoToBottom));
+
+        // 'G' key (vim go to bottom)
+        let key = make_key(KeyCode::Char('G'), KeyModifiers::SHIFT);
+        assert_eq!(handler.translate_key(key), Some(Action::GoToBottom));
     }
 
     #[test]
@@ -410,7 +480,7 @@ mod tests {
     fn test_translate_unmapped_key() {
         let handler = EventHandler::new();
 
-        // Random letter
+        // Random letter that's not mapped
         let key = make_key(KeyCode::Char('z'), KeyModifiers::NONE);
         assert_eq!(handler.translate_key(key), None);
 
@@ -440,11 +510,7 @@ mod tests {
         let key = make_key(KeyCode::Char('j'), KeyModifiers::NONE);
         assert_eq!(handler.translate_key(key), Some(Action::NavigateDown));
 
-        // Ctrl+J = unmapped (should not trigger NavigateDown)
-        let key = make_key(KeyCode::Char('j'), KeyModifiers::CONTROL);
-        assert_eq!(handler.translate_key(key), None);
-
-        // Alt+J = unmapped
+        // Alt+J = unmapped (should not trigger NavigateDown)
         let key = make_key(KeyCode::Char('j'), KeyModifiers::ALT);
         assert_eq!(handler.translate_key(key), None);
     }
@@ -462,5 +528,43 @@ mod tests {
         let handler = EventHandler::default();
         let key = make_key(KeyCode::Char('q'), KeyModifiers::NONE);
         assert_eq!(handler.translate_key(key), Some(Action::Quit));
+    }
+
+    #[test]
+    fn test_dual_navigation_vim_and_arrows() {
+        // Verify that Universal profile supports BOTH vim and arrows
+        let handler = EventHandler::new();
+
+        // vim style
+        assert_eq!(
+            handler.translate_key(make_key(KeyCode::Char('j'), KeyModifiers::NONE)),
+            Some(Action::NavigateDown)
+        );
+        assert_eq!(
+            handler.translate_key(make_key(KeyCode::Char('k'), KeyModifiers::NONE)),
+            Some(Action::NavigateUp)
+        );
+        assert_eq!(
+            handler.translate_key(make_key(KeyCode::Char('h'), KeyModifiers::NONE)),
+            Some(Action::PreviousGroup)
+        );
+
+        // arrow style
+        assert_eq!(
+            handler.translate_key(make_key(KeyCode::Down, KeyModifiers::NONE)),
+            Some(Action::NavigateDown)
+        );
+        assert_eq!(
+            handler.translate_key(make_key(KeyCode::Up, KeyModifiers::NONE)),
+            Some(Action::NavigateUp)
+        );
+        assert_eq!(
+            handler.translate_key(make_key(KeyCode::Left, KeyModifiers::NONE)),
+            Some(Action::PreviousGroup)
+        );
+        assert_eq!(
+            handler.translate_key(make_key(KeyCode::Right, KeyModifiers::NONE)),
+            Some(Action::NextGroup)
+        );
     }
 }

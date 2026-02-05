@@ -102,6 +102,10 @@ pub enum Action {
     NextGroup,
     /// Navigate to previous group
     PreviousGroup,
+    /// Navigate to the first item (top of list)
+    GoToTop,
+    /// Navigate to the last item (bottom of list)
+    GoToBottom,
     /// Toggle selection of current item
     ToggleSelect,
     /// Select all files in current group (except first)
@@ -1029,6 +1033,53 @@ impl App {
 
     // ==================== Action Handling ====================
 
+    /// Navigate to the first item (top of list).
+    pub fn go_to_top(&mut self) {
+        if !self.mode.is_navigable() || self.groups.is_empty() {
+            return;
+        }
+
+        match self.mode {
+            AppMode::Reviewing => {
+                self.file_index = 0;
+                self.file_scroll = 0;
+                log::trace!("Navigate to top: file_index = 0");
+            }
+            AppMode::SelectingFolder => {
+                self.folder_index = 0;
+                log::trace!("Navigate to top folder: folder_index = 0");
+            }
+            _ => {}
+        }
+    }
+
+    /// Navigate to the last item (bottom of list).
+    pub fn go_to_bottom(&mut self) {
+        if !self.mode.is_navigable() || self.groups.is_empty() {
+            return;
+        }
+
+        match self.mode {
+            AppMode::Reviewing => {
+                if let Some(group) = self.current_group() {
+                    let last_index = group.files.len().saturating_sub(1);
+                    self.file_index = last_index;
+                    self.update_file_scroll();
+                    log::trace!("Navigate to bottom: file_index = {}", self.file_index);
+                }
+            }
+            AppMode::SelectingFolder => {
+                let last_index = self.folder_list.len().saturating_sub(1);
+                self.folder_index = last_index;
+                log::trace!(
+                    "Navigate to bottom folder: folder_index = {}",
+                    self.folder_index
+                );
+            }
+            _ => {}
+        }
+    }
+
     /// Handle a user action and update state accordingly.
     ///
     /// Returns true if the action was handled.
@@ -1059,6 +1110,14 @@ impl App {
             }
             Action::PreviousGroup => {
                 self.previous_group();
+                true
+            }
+            Action::GoToTop => {
+                self.go_to_top();
+                true
+            }
+            Action::GoToBottom => {
+                self.go_to_bottom();
                 true
             }
             Action::ToggleSelect => {
@@ -1661,5 +1720,77 @@ mod tests {
         app.apply_session(std::collections::BTreeSet::new(), 0, 10);
         assert_eq!(app.group_index(), 0);
         assert_eq!(app.file_index(), 0);
+    }
+
+    #[test]
+    fn test_go_to_top() {
+        let groups = vec![make_group(
+            100,
+            vec!["/a.txt", "/b.txt", "/c.txt", "/d.txt"],
+        )];
+        let mut app = App::with_groups(groups);
+
+        // Move to the middle
+        app.next();
+        app.next();
+        assert_eq!(app.file_index(), 2);
+
+        // Go to top
+        app.go_to_top();
+        assert_eq!(app.file_index(), 0);
+    }
+
+    #[test]
+    fn test_go_to_bottom() {
+        let groups = vec![make_group(
+            100,
+            vec!["/a.txt", "/b.txt", "/c.txt", "/d.txt"],
+        )];
+        let mut app = App::with_groups(groups);
+
+        assert_eq!(app.file_index(), 0);
+
+        // Go to bottom
+        app.go_to_bottom();
+        assert_eq!(app.file_index(), 3);
+    }
+
+    #[test]
+    fn test_handle_action_go_to_top_bottom() {
+        let groups = vec![make_group(
+            100,
+            vec!["/a.txt", "/b.txt", "/c.txt", "/d.txt"],
+        )];
+        let mut app = App::with_groups(groups);
+
+        // Go to bottom via action
+        assert!(app.handle_action(Action::GoToBottom));
+        assert_eq!(app.file_index(), 3);
+
+        // Go to top via action
+        assert!(app.handle_action(Action::GoToTop));
+        assert_eq!(app.file_index(), 0);
+    }
+
+    #[test]
+    fn test_go_to_top_bottom_in_folder_selection() {
+        let groups = vec![make_group(
+            100,
+            vec!["/dir1/a.txt", "/dir2/b.txt", "/dir3/c.txt"],
+        )];
+        let mut app = App::with_groups(groups);
+
+        // Enter folder selection mode
+        app.enter_folder_selection();
+        assert_eq!(app.mode(), AppMode::SelectingFolder);
+        assert_eq!(app.folder_list().len(), 3);
+
+        // Go to bottom
+        app.go_to_bottom();
+        assert_eq!(app.folder_index(), 2);
+
+        // Go to top
+        app.go_to_top();
+        assert_eq!(app.folder_index(), 0);
     }
 }

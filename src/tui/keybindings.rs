@@ -334,7 +334,7 @@ impl KeyBindings {
             ],
         );
 
-        // Navigation - previous group (vim 'K' AND Page Up AND Ctrl-u)
+        // Navigation - previous group (vim 'K' AND Page Up AND Ctrl-u AND h/Left)
         bindings.insert(
             Action::PreviousGroup,
             vec![
@@ -342,6 +342,34 @@ impl KeyBindings {
                 Self::key(KeyCode::Char('K'), KeyModifiers::NONE), // Some terminals
                 Self::key(KeyCode::PageUp, KeyModifiers::NONE),
                 Self::key(KeyCode::Char('u'), KeyModifiers::CONTROL),
+                Self::key(KeyCode::Char('h'), KeyModifiers::NONE), // vim left
+                Self::key(KeyCode::Left, KeyModifiers::NONE),      // arrow left
+            ],
+        );
+
+        // Navigation - next group also via l/Right (forward navigation)
+        // Note: 'l' is also used for SelectLargest, but Right is added here
+        // The action_keys map allows multiple keys to trigger the same action
+        if let Some(keys) = bindings.get_mut(&Action::NextGroup) {
+            keys.push(Self::key(KeyCode::Right, KeyModifiers::NONE));
+        }
+
+        // Navigation - go to top (Home AND 'g')
+        bindings.insert(
+            Action::GoToTop,
+            vec![
+                Self::key(KeyCode::Home, KeyModifiers::NONE),
+                Self::key(KeyCode::Char('g'), KeyModifiers::NONE),
+            ],
+        );
+
+        // Navigation - go to bottom (End AND 'G')
+        bindings.insert(
+            Action::GoToBottom,
+            vec![
+                Self::key(KeyCode::End, KeyModifiers::NONE),
+                Self::key(KeyCode::Char('G'), KeyModifiers::SHIFT),
+                Self::key(KeyCode::Char('G'), KeyModifiers::NONE), // Some terminals
             ],
         );
 
@@ -475,6 +503,22 @@ impl KeyBindings {
                 Self::key(KeyCode::Char('K'), KeyModifiers::SHIFT),
                 Self::key(KeyCode::Char('K'), KeyModifiers::NONE),
                 Self::key(KeyCode::Char('u'), KeyModifiers::CONTROL),
+                Self::key(KeyCode::Char('h'), KeyModifiers::NONE), // vim left
+            ],
+        );
+
+        // Navigation - go to top (vim 'g' or 'gg' pattern, we use single 'g')
+        bindings.insert(
+            Action::GoToTop,
+            vec![Self::key(KeyCode::Char('g'), KeyModifiers::NONE)],
+        );
+
+        // Navigation - go to bottom (vim 'G')
+        bindings.insert(
+            Action::GoToBottom,
+            vec![
+                Self::key(KeyCode::Char('G'), KeyModifiers::SHIFT),
+                Self::key(KeyCode::Char('G'), KeyModifiers::NONE),
             ],
         );
 
@@ -595,12 +639,30 @@ impl KeyBindings {
 
         bindings.insert(
             Action::NextGroup,
-            vec![Self::key(KeyCode::PageDown, KeyModifiers::NONE)],
+            vec![
+                Self::key(KeyCode::PageDown, KeyModifiers::NONE),
+                Self::key(KeyCode::Right, KeyModifiers::NONE), // arrow right for forward
+            ],
         );
 
         bindings.insert(
             Action::PreviousGroup,
-            vec![Self::key(KeyCode::PageUp, KeyModifiers::NONE)],
+            vec![
+                Self::key(KeyCode::PageUp, KeyModifiers::NONE),
+                Self::key(KeyCode::Left, KeyModifiers::NONE), // arrow left for back
+            ],
+        );
+
+        // Navigation - go to top (Home)
+        bindings.insert(
+            Action::GoToTop,
+            vec![Self::key(KeyCode::Home, KeyModifiers::NONE)],
+        );
+
+        // Navigation - go to bottom (End)
+        bindings.insert(
+            Action::GoToBottom,
+            vec![Self::key(KeyCode::End, KeyModifiers::NONE)],
         );
 
         // Selection
@@ -722,6 +784,25 @@ impl KeyBindings {
             vec![
                 Self::key(KeyCode::Char('v'), KeyModifiers::ALT), // Meta-v scroll up
                 Self::key(KeyCode::PageUp, KeyModifiers::NONE),
+                Self::key(KeyCode::Char('b'), KeyModifiers::CONTROL), // Ctrl-b backward
+            ],
+        );
+
+        // Navigation - go to top (Emacs: Meta-< or Home)
+        bindings.insert(
+            Action::GoToTop,
+            vec![
+                Self::key(KeyCode::Home, KeyModifiers::NONE),
+                Self::key(KeyCode::Char('<'), KeyModifiers::ALT), // Meta-<
+            ],
+        );
+
+        // Navigation - go to bottom (Emacs: Meta-> or End)
+        bindings.insert(
+            Action::GoToBottom,
+            vec![
+                Self::key(KeyCode::End, KeyModifiers::NONE),
+                Self::key(KeyCode::Char('>'), KeyModifiers::ALT), // Meta->
             ],
         );
 
