@@ -383,6 +383,7 @@ fn handle_scan(
             .with_reference_paths(reference_paths.clone())
             .with_group_map(group_map)
             .with_bloom_fp_rate(config.bloom_fp_rate)
+            .with_min_group_size(config.min_group_size)
             .with_similar_images(config.similar_images)
             .with_similarity_threshold(config.similarity_threshold);
 
@@ -415,6 +416,7 @@ fn handle_scan(
                     io_threads: config.io_threads,
                     paranoid: config.paranoid,
                     similar_images: config.similar_images,
+                    min_group_size: config.min_group_size,
                 };
                 (groups, summary, canonical_paths, settings, reference_paths)
             }
@@ -522,13 +524,7 @@ fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
             let session_groups = groups
                 .iter()
                 .enumerate()
-                .map(|(id, g)| SessionGroup {
-                    id,
-                    hash: g.hash,
-                    size: g.size,
-                    files: g.files.clone(),
-                    reference_paths: g.reference_paths.clone(),
-                })
+                .map(|(id, g)| SessionGroup::from_duplicate_group(g, id))
                 .collect();
             let mut session = Session::new(scan_paths.clone(), settings.clone(), session_groups);
             if let Some(ref initial) = initial_session {
@@ -597,13 +593,7 @@ fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
                     .groups()
                     .iter()
                     .enumerate()
-                    .map(|(id, g)| SessionGroup {
-                        id,
-                        hash: g.hash,
-                        size: g.size,
-                        files: g.files.clone(),
-                        reference_paths: g.reference_paths.clone(),
-                    })
+                    .map(|(id, g)| SessionGroup::from_duplicate_group(g, id))
                     .collect();
 
                 let mut session = Session::new(scan_paths, settings, session_groups);
@@ -672,13 +662,7 @@ fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
             let session_groups = groups
                 .iter()
                 .enumerate()
-                .map(|(id, g)| SessionGroup {
-                    id,
-                    hash: g.hash,
-                    size: g.size,
-                    files: g.files.clone(),
-                    reference_paths: g.reference_paths.clone(),
-                })
+                .map(|(id, g)| SessionGroup::from_duplicate_group(g, id))
                 .collect();
 
             let mut session = Session::new(scan_paths, settings, session_groups);

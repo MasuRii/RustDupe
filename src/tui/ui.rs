@@ -410,15 +410,17 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
 
             let is_expanded = app.is_expanded(&group.hash);
             let expand_indicator = if is_expanded { "[-] " } else { "[+] " };
+            let sim_indicator = if group.is_similar { " [SIM]" } else { "" };
 
             let text = format!(
-                "{}[{}] {} ({} copies) {} - {}",
+                "{}[{}] {} ({} copies) {} - {}{}",
                 expand_indicator,
                 i + 1,
                 label,
                 copies,
                 size,
-                wasted
+                wasted,
+                sim_indicator
             );
 
             let style = if i == selected_group {
@@ -446,11 +448,12 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
             create_block_with_title(
                 app.is_accessible(),
                 format!(
-                    "Duplicate Groups ({}/{}) - Sort: {} {}",
+                    "Groups ({}/{}) - {} {} - {}",
                     selected_group + 1,
                     visible_count,
                     app.sort_column().display_name(),
-                    app.sort_direction().indicator()
+                    app.sort_direction().indicator(),
+                    app.group_filter().display_name()
                 ),
             )
             .border_style(Style::default().fg(app.theme().primary)),
@@ -562,6 +565,18 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
             let path_str = entry.path.to_string_lossy();
             let path_display = truncate_path(&path_str, available_path_len);
 
+            let distance_label = if group.is_similar && !is_first {
+                if let (Some(ref h1), Some(ref h2)) =
+                    (&group.files[0].perceptual_hash, &entry.perceptual_hash)
+                {
+                    format!(" [dist: {}]", h1.dist(h2))
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
             let prefix = if is_selected {
                 "[X]"
             } else if is_ref {
@@ -572,7 +587,10 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
                 "[ ]"
             };
 
-            let text = format!("{} {}{}", prefix, group_label, path_display);
+            let text = format!(
+                "{} {}{}{}",
+                prefix, group_label, path_display, distance_label
+            );
 
             let style = if i == selected_file {
                 if is_selected {
@@ -1155,8 +1173,9 @@ fn get_reviewing_commands(
         ("f", "Dir"),
         ("s/l", "Size"),
         ("E/D", "Ext/Dir"),
+        ("v", "Filter"),
         ("U", "Undo"),
-        ("/", "Filter"),
+        ("/", "Search"),
     ];
     if !app.is_dry_run() {
         cmds.push(("d", "Del"));
@@ -1356,6 +1375,11 @@ fn get_help_lines_from_bindings<'a>(
     ));
     lines.push(format_help_line_single(
         app,
+        &bindings.key_hint(&Action::CycleGroupFilter),
+        "Cycle group filter",
+    ));
+    lines.push(format_help_line_single(
+        app,
         &bindings.key_hint(&Action::Preview),
         "Preview file",
     ));
@@ -1412,6 +1436,7 @@ fn get_default_help_lines(app: &App) -> Vec<Line<'static>> {
             Style::default().fg(app.theme().secondary),
         )),
         format_help_line_static(app, "Tab, S-Tab", "Cycle sort / Reverse"),
+        format_help_line_static(app, "v", "Cycle group filter"),
         format_help_line_static(app, "p", "Preview file"),
         format_help_line_static(app, "d", "Delete selected"),
         format_help_line_static(app, "t", "Toggle theme"),

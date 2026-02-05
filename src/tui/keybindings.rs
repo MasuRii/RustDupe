@@ -750,8 +750,8 @@ impl KeyBindings {
         );
 
         bindings.insert(
-            Action::ReverseSortDirection,
-            vec![Self::key(KeyCode::BackTab, KeyModifiers::SHIFT)],
+            Action::CycleGroupFilter,
+            vec![Self::key(KeyCode::Char('v'), KeyModifiers::NONE)],
         );
 
         // Help
@@ -951,8 +951,8 @@ impl KeyBindings {
         );
 
         bindings.insert(
-            Action::ReverseSortDirection,
-            vec![Self::key(KeyCode::BackTab, KeyModifiers::SHIFT)],
+            Action::CycleGroupFilter,
+            vec![Self::key(KeyCode::Char('v'), KeyModifiers::NONE)],
         );
 
         // Help
@@ -1131,8 +1131,8 @@ impl KeyBindings {
         );
 
         bindings.insert(
-            Action::ReverseSortDirection,
-            vec![Self::key(KeyCode::BackTab, KeyModifiers::SHIFT)],
+            Action::CycleGroupFilter,
+            vec![Self::key(KeyCode::Char('v'), KeyModifiers::NONE)],
         );
 
         // Help
@@ -1335,8 +1335,8 @@ impl KeyBindings {
         );
 
         bindings.insert(
-            Action::ReverseSortDirection,
-            vec![Self::key(KeyCode::BackTab, KeyModifiers::SHIFT)],
+            Action::CycleGroupFilter,
+            vec![Self::key(KeyCode::Char('v'), KeyModifiers::NONE)],
         );
 
         // Help

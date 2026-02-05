@@ -125,6 +125,40 @@ impl AppMode {
     }
 }
 
+/// Filter for which groups to display in the TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GroupFilter {
+    /// Show all groups (exact and similar)
+    #[default]
+    All,
+    /// Show only exact duplicate groups
+    ExactOnly,
+    /// Show only similar image groups
+    SimilarOnly,
+}
+
+impl GroupFilter {
+    /// Get the next filter in rotation.
+    #[must_use]
+    pub fn next(&self) -> Self {
+        match self {
+            Self::All => Self::ExactOnly,
+            Self::ExactOnly => Self::SimilarOnly,
+            Self::SimilarOnly => Self::All,
+        }
+    }
+
+    /// Get the display name of the filter.
+    #[must_use]
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::ExactOnly => "Exact Only",
+            Self::SimilarOnly => "Similar Only",
+        }
+    }
+}
+
 /// User action triggered by keyboard input.
 ///
 /// Actions are the result of key event processing and represent
@@ -189,6 +223,8 @@ pub enum Action {
     CycleSortColumn,
     /// Reverse sort direction
     ReverseSortDirection,
+    /// Cycle group filter (all, exact only, similar only)
+    CycleGroupFilter,
     /// Show help overlay with keybinding reference
     ShowHelp,
     /// Confirm current action
@@ -242,6 +278,7 @@ impl Action {
             Self::ToggleExpandAll => "toggle_expand_all",
             Self::CycleSortColumn => "cycle_sort_column",
             Self::ReverseSortDirection => "reverse_sort_direction",
+            Self::CycleGroupFilter => "cycle_group_filter",
             Self::ShowHelp => "show_help",
             Self::Confirm => "confirm",
             Self::Cancel => "cancel",
@@ -282,6 +319,7 @@ impl Action {
             "toggle_expand_all",
             "cycle_sort_column",
             "reverse_sort_direction",
+            "cycle_group_filter",
             "show_help",
             "confirm",
             "cancel",
@@ -291,7 +329,7 @@ impl Action {
 
     /// Returns all action variants.
     #[must_use]
-    pub const fn all() -> [Action; 33] {
+    pub const fn all() -> [Action; 34] {
         [
             Self::NavigateUp,
             Self::NavigateDown,
@@ -322,6 +360,7 @@ impl Action {
             Self::ToggleExpandAll,
             Self::CycleSortColumn,
             Self::ReverseSortDirection,
+            Self::CycleGroupFilter,
             Self::ShowHelp,
             Self::Confirm,
             Self::Cancel,
@@ -366,6 +405,7 @@ impl std::str::FromStr for Action {
             "reverse_sort_direction" | "reverse_sort" | "shift_tab" => {
                 Ok(Self::ReverseSortDirection)
             }
+            "cycle_group_filter" | "group_filter" | "v" => Ok(Self::CycleGroupFilter),
             "show_help" | "help" => Ok(Self::ShowHelp),
             "confirm" | "enter" => Ok(Self::Confirm),
             "cancel" | "escape" | "esc" => Ok(Self::Cancel),
@@ -584,6 +624,8 @@ pub struct App {
     sort_direction: SortDirection,
     /// Accessible mode for screen reader compatibility
     accessible: bool,
+    /// Filter for duplicate groups
+    group_filter: GroupFilter,
 }
 
 impl Default for App {
@@ -637,6 +679,7 @@ impl App {
             sort_column: SortColumn::default(),
             sort_direction: SortDirection::default(),
             accessible: false,
+            group_filter: GroupFilter::default(),
         }
     }
 
@@ -824,6 +867,7 @@ impl App {
             sort_column: SortColumn::default(),
             sort_direction: SortDirection::default(),
             accessible: false,
+            group_filter: GroupFilter::default(),
         };
 
         if app.has_groups() {
@@ -1862,23 +1906,49 @@ impl App {
 
     /// Apply the current search query to the groups.
     fn apply_search(&mut self) {
-        if self.search_query.is_empty() {
+        let has_search = !self.search_query.is_empty();
+        let has_filter = self.group_filter != GroupFilter::All;
+
+        if !has_search && !has_filter {
             self.filtered_indices = None;
         } else {
             let query = self.search_query.to_lowercase();
 
             // Try to compile as regex if it looks like one, or just use substring
             // We treat it as regex if it contains special chars or if it compiles successfully
-            let re = regex::RegexBuilder::new(&self.search_query)
-                .case_insensitive(true)
-                .build()
-                .ok();
+            let re = if has_search {
+                regex::RegexBuilder::new(&self.search_query)
+                    .case_insensitive(true)
+                    .build()
+                    .ok()
+            } else {
+                None
+            };
 
             let indices: Vec<usize> = self
                 .groups
                 .iter()
                 .enumerate()
                 .filter(|(_, group)| {
+                    // Respect group filter
+                    match self.group_filter {
+                        GroupFilter::All => {}
+                        GroupFilter::ExactOnly => {
+                            if group.is_similar {
+                                return false;
+                            }
+                        }
+                        GroupFilter::SimilarOnly => {
+                            if !group.is_similar {
+                                return false;
+                            }
+                        }
+                    }
+
+                    if !has_search {
+                        return true;
+                    }
+
                     // Match by filename, path, or group name
                     group.files.iter().any(|file| {
                         let path_str = file.path.to_string_lossy();
@@ -1907,22 +1977,51 @@ impl App {
         self.file_scroll = 0;
     }
 
-    /// Get the number of visible groups (filtered if search active).
+    /// Get the current group filter.
+    #[must_use]
+    pub fn group_filter(&self) -> GroupFilter {
+        self.group_filter
+    }
+
+    /// Cycle to the next group filter.
+    pub fn cycle_group_filter(&mut self) {
+        self.group_filter = self.group_filter.next();
+        self.group_index = 0;
+        self.group_scroll = 0;
+        self.file_index = 0;
+        self.file_scroll = 0;
+        // Re-apply search if active to update filtered_indices
+        self.apply_search();
+        log::debug!("Group filter cycled to {:?}", self.group_filter);
+    }
+
+    /// Get the number of visible groups (filtered if search or group filter active).
     #[must_use]
     pub fn visible_group_count(&self) -> usize {
-        self.filtered_indices
-            .as_ref()
-            .map_or(self.groups.len(), |v| v.len())
+        if let Some(ref indices) = self.filtered_indices {
+            indices.len()
+        } else {
+            match self.group_filter {
+                GroupFilter::All => self.groups.len(),
+                GroupFilter::ExactOnly => self.groups.iter().filter(|g| !g.is_similar).count(),
+                GroupFilter::SimilarOnly => self.groups.iter().filter(|g| g.is_similar).count(),
+            }
+        }
     }
 
     /// Get a visible group by its relative index.
     #[must_use]
     pub fn visible_group_at(&self, index: usize) -> Option<&DuplicateGroup> {
-        let actual_idx = match &self.filtered_indices {
-            Some(indices) => *indices.get(index)?,
-            None => index,
-        };
-        self.groups.get(actual_idx)
+        if let Some(ref indices) = self.filtered_indices {
+            let actual_idx = *indices.get(index)?;
+            self.groups.get(actual_idx)
+        } else {
+            match self.group_filter {
+                GroupFilter::All => self.groups.get(index),
+                GroupFilter::ExactOnly => self.groups.iter().filter(|g| !g.is_similar).nth(index),
+                GroupFilter::SimilarOnly => self.groups.iter().filter(|g| g.is_similar).nth(index),
+            }
+        }
     }
 
     // ==================== Folder Selection ====================
@@ -2385,6 +2484,10 @@ impl App {
             }
             Action::ReverseSortDirection => {
                 self.reverse_sort_direction();
+                true
+            }
+            Action::CycleGroupFilter => {
+                self.cycle_group_filter();
                 true
             }
             Action::ShowHelp => {
@@ -3480,22 +3583,24 @@ mod tests {
     #[test]
     fn test_action_all_names() {
         let names = Action::all_names();
-        assert_eq!(names.len(), 33);
+        assert_eq!(names.len(), 34);
         assert!(names.contains(&"navigate_down"));
         assert!(names.contains(&"show_help"));
         assert!(names.contains(&"select_group"));
         assert!(names.contains(&"search"));
+        assert!(names.contains(&"cycle_group_filter"));
         assert!(names.contains(&"quit"));
     }
 
     #[test]
     fn test_action_all() {
         let actions = Action::all();
-        assert_eq!(actions.len(), 33);
+        assert_eq!(actions.len(), 34);
         assert!(actions.contains(&Action::NavigateDown));
         assert!(actions.contains(&Action::ShowHelp));
         assert!(actions.contains(&Action::SelectGroup));
         assert!(actions.contains(&Action::Search));
+        assert!(actions.contains(&Action::CycleGroupFilter));
         assert!(actions.contains(&Action::Quit));
     }
 }

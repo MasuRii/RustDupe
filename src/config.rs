@@ -235,6 +235,10 @@ pub struct Config {
     #[serde(default = "default_bloom_fp_rate")]
     pub bloom_fp_rate: f64,
 
+    /// Minimum number of files in a group to be considered a duplicate.
+    #[serde(default = "default_min_group_size")]
+    pub min_group_size: usize,
+
     // Named Profiles
     /// Named configuration profiles.
     ///
@@ -249,6 +253,10 @@ fn default_io_threads() -> usize {
 
 fn default_bloom_fp_rate() -> f64 {
     0.01
+}
+
+fn default_min_group_size() -> usize {
+    2
 }
 
 impl Default for Config {
@@ -279,6 +287,7 @@ impl Default for Config {
             output: OutputFormat::Tui,
             similarity_threshold: None,
             bloom_fp_rate: 0.01,
+            min_group_size: 2,
             profile: HashMap::new(),
         }
     }
@@ -501,6 +510,9 @@ impl Config {
         if let Some(threshold) = args.similarity_threshold {
             self.similarity_threshold = Some(threshold);
         }
+        if let Some(min_group) = args.min_group_size {
+            self.min_group_size = min_group;
+        }
     }
 
     /// Merge load arguments into the configuration.
@@ -545,6 +557,7 @@ fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str)
         "output",
         "similarity_threshold",
         "bloom_fp_rate",
+        "min_group_size",
         "profile",
     ];
 

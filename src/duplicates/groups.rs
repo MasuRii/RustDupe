@@ -129,13 +129,17 @@ impl SizeGroup {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DuplicateGroup {
     /// BLAKE3 hash of the file content (32 bytes)
+    /// For similar groups, this is the perceptual hash of the first file.
     pub hash: [u8; 32],
-    /// File size in bytes (shared by all files)
+    /// File size in bytes (shared by all files in exact groups, varied in similar)
     pub size: u64,
     /// Detailed file information for each duplicate
     pub files: Vec<FileEntry>,
     /// Protected reference paths
     pub reference_paths: Vec<std::path::PathBuf>,
+    /// Whether this is a similarity-based group rather than an exact duplicate
+    #[serde(default)]
+    pub is_similar: bool,
 }
 
 impl DuplicateGroup {
@@ -159,6 +163,24 @@ impl DuplicateGroup {
             size,
             files,
             reference_paths,
+            is_similar: false,
+        }
+    }
+
+    /// Create a new similar image group.
+    #[must_use]
+    pub fn new_similar(
+        id_hash: [u8; 32],
+        files: Vec<FileEntry>,
+        reference_paths: Vec<std::path::PathBuf>,
+    ) -> Self {
+        let size = files.first().map_or(0, |f| f.size);
+        Self {
+            hash: id_hash,
+            size,
+            files,
+            reference_paths,
+            is_similar: true,
         }
     }
 

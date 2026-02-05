@@ -107,6 +107,7 @@ fn test_load_referencing_deleted_files_integration() {
         size: 7,
         files: vec![rustdupe::scanner::FileEntry::new(file_path.clone(), 7, now)],
         reference_paths: Vec::new(),
+        is_similar: false,
     };
 
     let session = Session::new(

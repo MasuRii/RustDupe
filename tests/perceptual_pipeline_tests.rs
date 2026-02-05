@@ -23,8 +23,11 @@ fn test_perceptual_hashing_integration() {
 
     let (groups, summary) = finder.find_duplicates(dir.path()).unwrap();
 
-    // Should find the duplicate pair
-    assert_eq!(groups.len(), 1);
+    // Should find the exact duplicate pair AND the similar image group
+    // (In this case they contain the same files because distance is 0)
+    assert_eq!(groups.len(), 2);
+    assert!(groups.iter().any(|g| !g.is_similar));
+    assert!(groups.iter().any(|g| g.is_similar));
 
     // Should have processed 2 images for perceptual hashing
     assert_eq!(summary.images_perceptual_hashed, 2);

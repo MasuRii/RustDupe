@@ -148,6 +148,7 @@ mod tests {
                 crate::scanner::FileEntry::new("/tmp/b.txt".into(), 100, now),
             ],
             reference_paths: Vec::new(),
+            is_similar: false,
         }];
         let session = Session::new(vec!["/tmp".into()], settings, groups);
 
@@ -173,6 +174,7 @@ mod tests {
                 crate::scanner::FileEntry::new("/tmp/d.txt".into(), 200, now),
             ],
             reference_paths: Vec::new(),
+            is_similar: false,
         }];
         let mut session = Session::new(vec!["/tmp".into()], settings, groups);
         session.user_selections.insert("/tmp/c.txt".into());
@@ -201,6 +203,7 @@ mod tests {
                 crate::scanner::FileEntry::new("/tmp/d.txt".into(), 200, now),
             ],
             reference_paths: Vec::new(),
+            is_similar: false,
         }];
         let mut session = Session::new(vec!["/tmp".into()], settings, groups);
         session.user_selections.insert("/tmp/c.txt".into());
@@ -286,6 +289,7 @@ mod tests {
                 crate::scanner::FileEntry::new("/tmp/b.txt".into(), 100, now),
             ],
             reference_paths: Vec::new(),
+            is_similar: false,
         }];
         let session = Session::new(vec!["/tmp".into()], SessionSettings::default(), groups);
 
@@ -317,6 +321,7 @@ mod tests {
                     crate::scanner::FileEntry::new(format!("/tmp/b_{}.txt", i).into(), 100, now),
                 ],
                 reference_paths: Vec::new(),
+                is_similar: false,
             });
         }
 
@@ -357,6 +362,7 @@ mod tests {
                 now,
             )],
             reference_paths: Vec::new(),
+            is_similar: false,
         }];
         let session = Session::new(vec!["/tmp".into()], SessionSettings::default(), groups);
         session.save(&path).unwrap();

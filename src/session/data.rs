@@ -116,6 +116,13 @@ pub struct SessionSettings {
     /// Whether similar image detection was enabled.
     #[serde(default)]
     pub similar_images: bool,
+    /// Minimum group size.
+    #[serde(default = "default_min_group_size")]
+    pub min_group_size: usize,
+}
+
+fn default_min_group_size() -> usize {
+    2
 }
 
 /// A group of duplicates within a session.
@@ -135,6 +142,9 @@ pub struct SessionGroup {
     /// Protected reference paths.
     #[serde(default)]
     pub reference_paths: Vec<PathBuf>,
+    /// Whether this is a similar image group.
+    #[serde(default)]
+    pub is_similar: bool,
 }
 
 impl SessionGroup {
@@ -152,12 +162,15 @@ impl SessionGroup {
             size: group.size,
             files: group.files.clone(),
             reference_paths: group.reference_paths.clone(),
+            is_similar: group.is_similar,
         }
     }
 }
 
 impl From<SessionGroup> for DuplicateGroup {
     fn from(sg: SessionGroup) -> Self {
-        DuplicateGroup::new(sg.hash, sg.size, sg.files, sg.reference_paths)
+        let mut group = DuplicateGroup::new(sg.hash, sg.size, sg.files, sg.reference_paths);
+        group.is_similar = sg.is_similar;
+        group
     }
 }

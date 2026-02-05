@@ -686,20 +686,15 @@ mod tests {
         cache.insert_prehash(&entry, [1u8; 32]).unwrap();
         assert!(cache.is_valid(Path::new("/test/file.txt"), 1024, now));
 
-        // Prune with 0 age (should prune everything)
-        let pruned = cache
-            .prune_by_age(std::time::Duration::from_secs(0))
-            .unwrap();
-        assert_eq!(pruned, 0); // Wait, if it's "created_at < now - 0", it should be 1 if now matches.
-                               // Actually, Self::now_secs() might be the same as created_at.
-                               // Let's use a very large duration to NOT prune.
+        // Prune with a large age (should prune nothing)
         let pruned = cache
             .prune_by_age(std::time::Duration::from_secs(3600))
             .unwrap();
         assert_eq!(pruned, 0);
         assert!(cache.is_valid(Path::new("/test/file.txt"), 1024, now));
 
-        // We can't easily test pruning without mocking time or sleeping, but we can verify the SQL.
+        // We can't easily test pruning with 0 age because of timing,
+        // but we can verify it with an old entry.
         // Let's manually insert an old entry.
         {
             let lock = cache.conn.lock().unwrap();

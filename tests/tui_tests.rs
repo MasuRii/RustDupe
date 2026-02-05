@@ -114,7 +114,7 @@ fn test_render_selection_highlight() {
 
 #[test]
 fn test_render_footer() {
-    let mut terminal = setup_terminal(150, 24);
+    let mut terminal = setup_terminal(200, 24);
     let app = App::with_groups(vec![make_group(100, vec!["a", "b"])]);
 
     terminal

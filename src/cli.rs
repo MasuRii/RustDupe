@@ -462,6 +462,10 @@ pub struct ScanArgs {
     /// - aHash: 5
     #[arg(long, value_name = "N", help_heading = "Scanning Options")]
     pub similarity_threshold: Option<u32>,
+
+    /// Minimum number of files in a group to be considered a duplicate (default: 2)
+    #[arg(long, value_name = "N", help_heading = "Scanning Options")]
+    pub min_group_size: Option<usize>,
 }
 
 /// Arguments for the load subcommand.

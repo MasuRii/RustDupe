@@ -53,7 +53,7 @@ pub use path_utils::{
     is_nfc, normalize_path_str, normalize_path_str_cow, normalize_pathbuf, path_key, paths_equal,
     paths_equal_normalized,
 };
-pub use perceptual::{PerceptualAlgorithm, PerceptualError, PerceptualHasher};
+pub use perceptual::{PerceptualAlgorithm, PerceptualError, PerceptualHasher, SimilarityIndex};
 use regex::Regex;
 pub use walker::{MultiWalker, Walker};
 

@@ -89,6 +89,7 @@ fn test_session_load_with_missing_files() {
             now,
         )],
         reference_paths: Vec::new(),
+        is_similar: false,
     };
 
     let session = Session::new(

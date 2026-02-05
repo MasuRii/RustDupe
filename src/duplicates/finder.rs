@@ -934,6 +934,8 @@ pub struct FinderConfig {
     pub group_map: std::collections::HashMap<PathBuf, String>,
     /// False positive rate for Bloom filters (default: 0.01).
     pub bloom_fp_rate: f64,
+    /// Minimum number of files in a group to be considered a duplicate (default: 2).
+    pub min_group_size: usize,
     /// Enable similar image detection using perceptual hashing.
     pub similar_images: bool,
     /// Algorithm to use for perceptual hashing.
@@ -957,6 +959,8 @@ impl std::fmt::Debug for FinderConfig {
             .field("reference_paths", &self.reference_paths)
             .field("group_map", &self.group_map)
             .field("bloom_fp_rate", &self.bloom_fp_rate)
+            .field("min_group_size", &self.min_group_size)
+            .field("similar_images", &self.similar_images)
             .finish()
     }
 }
@@ -974,6 +978,7 @@ impl Default for FinderConfig {
             reference_paths: Vec::new(),
             group_map: std::collections::HashMap::new(),
             bloom_fp_rate: 0.01,
+            min_group_size: 2,
             similar_images: false,
             perceptual_algorithm: crate::scanner::PerceptualAlgorithm::default(),
             similarity_threshold: None,
@@ -1049,6 +1054,13 @@ impl FinderConfig {
     #[must_use]
     pub fn with_bloom_fp_rate(mut self, rate: f64) -> Self {
         self.bloom_fp_rate = rate.clamp(0.0001, 0.1);
+        self
+    }
+
+    /// Set the minimum group size.
+    #[must_use]
+    pub fn with_min_group_size(mut self, size: usize) -> Self {
+        self.min_group_size = size.max(2);
         self
     }
 
@@ -1368,6 +1380,85 @@ impl DuplicateFinder {
         )
     }
 
+    /// Find similar groups based on perceptual hashes.
+    fn find_similar_groups(&self, files: &[FileEntry]) -> Vec<super::DuplicateGroup> {
+        if files.is_empty() {
+            return Vec::new();
+        }
+
+        let mut image_files = Vec::new();
+        let mut index = crate::scanner::SimilarityIndex::new();
+        let mut hash_to_indices = std::collections::HashMap::new();
+
+        for file in files {
+            if let Some(ref hash) = file.perceptual_hash {
+                let idx = image_files.len();
+                image_files.push(file);
+                index.insert(hash.clone());
+                hash_to_indices
+                    .entry(hash.as_bytes().to_vec())
+                    .or_insert_with(Vec::new)
+                    .push(idx);
+            }
+        }
+
+        if image_files.is_empty() {
+            return Vec::new();
+        }
+
+        let threshold = self
+            .config
+            .similarity_threshold
+            .unwrap_or_else(|| self.config.perceptual_algorithm.default_threshold());
+
+        let mut groups = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+
+        for (i, file) in image_files.iter().enumerate() {
+            if visited.contains(&i) {
+                continue;
+            }
+
+            let hash = file.perceptual_hash.as_ref().unwrap();
+            let matches = index.find(hash, threshold);
+
+            // Collect all unique file indices from all matching hashes
+            let mut group_indices = Vec::new();
+            for (_, match_hash) in matches {
+                if let Some(indices) = hash_to_indices.get(match_hash.as_bytes()) {
+                    for &idx in indices {
+                        if !visited.contains(&idx) {
+                            group_indices.push(idx);
+                        }
+                    }
+                }
+            }
+
+            if group_indices.len() >= self.config.min_group_size {
+                let mut group_files = Vec::new();
+                for idx in group_indices {
+                    group_files.push((*image_files[idx]).clone());
+                    visited.insert(idx);
+                }
+
+                // Generate a stable ID hash for the similar group
+                // Use the perceptual hash of the first file
+                let id_bytes = group_files[0].perceptual_hash.as_ref().unwrap().as_bytes();
+                let mut hash_array = [0u8; 32];
+                let len = id_bytes.len().min(32);
+                hash_array[..len].copy_from_slice(&id_bytes[..len]);
+
+                groups.push(super::DuplicateGroup::new_similar(
+                    hash_array,
+                    group_files,
+                    self.config.reference_paths.clone(),
+                ));
+            }
+        }
+
+        groups
+    }
+
     /// Find all duplicate files starting from the given path.
     ///
     /// Runs the complete multi-phase duplicate detection pipeline and
@@ -1445,32 +1536,11 @@ impl DuplicateFinder {
             walker = walker.with_progress_callback(callback.clone());
         }
 
-        let mut files = Vec::new();
-        let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
-        let mut duplicate_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
-        let mut first_occurrences: HashMap<u64, FileEntry> = HashMap::new();
-
+        let mut all_discovered = Vec::new();
         for result in walker.walk() {
             match result {
                 Ok(file) => {
-                    // Empty files are handled separately by group_by_size
-                    if file.size == 0 {
-                        files.push(file);
-                        continue;
-                    }
-
-                    if duplicate_sizes.contains(file.size) {
-                        files.push(file);
-                    } else if seen_sizes.contains(file.size) {
-                        duplicate_sizes.insert(file.size);
-                        if let Some(first) = first_occurrences.remove(&file.size) {
-                            files.push(first);
-                        }
-                        files.push(file);
-                    } else {
-                        seen_sizes.insert(file.size);
-                        first_occurrences.insert(file.size, file);
-                    }
+                    all_discovered.push(file);
                 }
                 Err(e) => {
                     if self.config.strict {
@@ -1482,15 +1552,6 @@ impl DuplicateFinder {
             }
         }
 
-        // Add remaining first occurrences that were actually duplicates (false negatives from Bloom)
-        // Actually, Bloom filter has no false negatives, only false positives.
-        // So any size not in duplicate_sizes is either unique or a false positive from seen_sizes.
-        // If it's a false positive, it means we thought we saw it, but we didn't.
-        // Wait, Bloom filter 'contains' returning true means it MIGHT be there.
-        // If seen_sizes.contains(&file.size) returns true, but it's a false positive,
-        // we'll add it to duplicate_sizes and move it to 'files'.
-        // This is safe, it just means we might keep a few unique files.
-
         if let Some(ref callback) = self.config.progress_callback {
             callback.on_phase_end("walking");
         }
@@ -1499,23 +1560,52 @@ impl DuplicateFinder {
         if self.config.similar_images {
             if let Some(ref hasher) = self.perceptual_hasher {
                 log::info!("Phase 0.5: Computing perceptual hashes for images...");
+                let mut image_refs: Vec<&mut FileEntry> =
+                    all_discovered.iter_mut().filter(|f| f.is_image()).collect();
+
                 if let Some(ref callback) = self.config.progress_callback {
-                    callback.on_phase_start("perceptual_hashing", 0);
+                    callback.on_phase_start("perceptual_hashing", image_refs.len());
                 }
 
-                // Collect all discovered files for hashing
-                let mut all_files: Vec<&mut FileEntry> = files.iter_mut().collect();
-                for f in first_occurrences.values_mut() {
-                    all_files.push(f);
-                }
-
-                let (count, hits) = self.compute_perceptual_hashes(&mut all_files, hasher);
+                let (count, hits) = self.compute_perceptual_hashes(&mut image_refs, hasher);
                 summary.images_perceptual_hashed = count;
                 summary.images_perceptual_hash_cache_hits = hits;
 
                 if let Some(ref callback) = self.config.progress_callback {
                     callback.on_phase_end("perceptual_hashing");
                 }
+            }
+        }
+
+        // Phase 1: Group by size (and prepare for Phase 2)
+        let mut files = Vec::new();
+        let mut images = Vec::new();
+        let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
+        let mut duplicate_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
+        let mut first_occurrences: HashMap<u64, FileEntry> = HashMap::new();
+
+        for file in all_discovered {
+            // Collect images for similarity detection
+            if self.config.similar_images && file.is_image() {
+                images.push(file.clone());
+            }
+
+            if file.size == 0 {
+                files.push(file);
+                continue;
+            }
+
+            if duplicate_sizes.contains(file.size) {
+                files.push(file);
+            } else if seen_sizes.contains(file.size) {
+                duplicate_sizes.insert(file.size);
+                if let Some(first) = first_occurrences.remove(&file.size) {
+                    files.push(first);
+                }
+                files.push(file);
+            } else {
+                seen_sizes.insert(file.size);
+                first_occurrences.insert(file.size, file);
             }
         }
 
@@ -1653,9 +1743,18 @@ impl DuplicateFinder {
         summary.cache_fullhash_misses = fullhash_stats.cache_misses;
         summary.scan_duration = start_time.elapsed();
 
+        // Phase 4: Similar Image Detection
+        let mut all_groups = duplicate_groups;
+        if self.config.similar_images {
+            log::info!("Phase 4: Detecting similar images...");
+            let similar_groups = self.find_similar_groups(&images);
+            log::info!("Found {} similar image groups", similar_groups.len());
+            all_groups.extend(similar_groups);
+        }
+
         log::info!(
-            "Scan complete: {} duplicate groups, {} duplicate files, {} reclaimable, {} cache hits",
-            summary.duplicate_groups,
+            "Scan complete: {} duplicate/similar groups, {} duplicate files, {} reclaimable, {} cache hits",
+            all_groups.len(),
             summary.duplicate_files,
             summary.reclaimable_display(),
             summary.cache_prehash_hits + summary.cache_fullhash_hits
@@ -1671,7 +1770,7 @@ impl DuplicateFinder {
             summary.bloom_prehash_fp_rate()
         );
 
-        Ok((duplicate_groups, summary))
+        Ok((all_groups, summary))
     }
 
     /// Find duplicates from a pre-collected list of files.
@@ -1723,12 +1822,14 @@ impl DuplicateFinder {
         if self.config.similar_images {
             if let Some(ref hasher) = self.perceptual_hasher {
                 log::info!("Phase 0.5: Computing perceptual hashes for images...");
+                let mut image_refs: Vec<&mut FileEntry> =
+                    files.iter_mut().filter(|f| f.is_image()).collect();
+
                 if let Some(ref callback) = self.config.progress_callback {
-                    callback.on_phase_start("perceptual_hashing", 0);
+                    callback.on_phase_start("perceptual_hashing", image_refs.len());
                 }
 
-                let mut refs: Vec<&mut FileEntry> = files.iter_mut().collect();
-                let (count, hits) = self.compute_perceptual_hashes(&mut refs, hasher);
+                let (count, hits) = self.compute_perceptual_hashes(&mut image_refs, hasher);
                 summary.images_perceptual_hashed = count;
                 summary.images_perceptual_hash_cache_hits = hits;
 
@@ -1739,12 +1840,18 @@ impl DuplicateFinder {
         }
 
         // Phase 1: Group by size
+        let mut images = Vec::new();
         let mut potential_files = Vec::new();
         let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, files.len());
         let mut duplicate_sizes = GrowableBloom::new(self.config.bloom_fp_rate, files.len());
         let mut first_occurrences: HashMap<u64, FileEntry> = HashMap::new();
 
         for file in files {
+            // Collect images for similarity detection
+            if self.config.similar_images && file.is_image() {
+                images.push(file.clone());
+            }
+
             if file.size == 0 {
                 potential_files.push(file);
                 continue;
@@ -1860,7 +1967,16 @@ impl DuplicateFinder {
         summary.cache_fullhash_misses = fullhash_stats.cache_misses;
         summary.scan_duration = start_time.elapsed();
 
-        Ok((duplicate_groups, summary))
+        // Phase 4: Similar Image Detection
+        let mut all_groups = duplicate_groups;
+        if self.config.similar_images {
+            log::info!("Phase 4: Detecting similar images...");
+            let similar_groups = self.find_similar_groups(&images);
+            log::info!("Found {} similar image groups", similar_groups.len());
+            all_groups.extend(similar_groups);
+        }
+
+        Ok((all_groups, summary))
     }
 
     /// Find all duplicate files across multiple directories.
@@ -1966,32 +2082,11 @@ impl DuplicateFinder {
             multi_walker = multi_walker.with_progress_callback(callback.clone());
         }
 
-        let mut files = Vec::new();
-        let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
-        let mut duplicate_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
-        let mut first_occurrences: HashMap<u64, FileEntry> = HashMap::new();
-
+        let mut all_discovered = Vec::new();
         for result in multi_walker.walk() {
             match result {
                 Ok(file) => {
-                    // Empty files are handled separately by group_by_size
-                    if file.size == 0 {
-                        files.push(file);
-                        continue;
-                    }
-
-                    if duplicate_sizes.contains(file.size) {
-                        files.push(file);
-                    } else if seen_sizes.contains(file.size) {
-                        duplicate_sizes.insert(file.size);
-                        if let Some(first) = first_occurrences.remove(&file.size) {
-                            files.push(first);
-                        }
-                        files.push(file);
-                    } else {
-                        seen_sizes.insert(file.size);
-                        first_occurrences.insert(file.size, file);
-                    }
+                    all_discovered.push(file);
                 }
                 Err(e) => {
                     if self.config.strict {
@@ -2011,23 +2106,52 @@ impl DuplicateFinder {
         if self.config.similar_images {
             if let Some(ref hasher) = self.perceptual_hasher {
                 log::info!("Phase 0.5: Computing perceptual hashes for images...");
+                let mut image_refs: Vec<&mut FileEntry> =
+                    all_discovered.iter_mut().filter(|f| f.is_image()).collect();
+
                 if let Some(ref callback) = self.config.progress_callback {
-                    callback.on_phase_start("perceptual_hashing", 0);
+                    callback.on_phase_start("perceptual_hashing", image_refs.len());
                 }
 
-                // Collect all discovered files for hashing
-                let mut all_files: Vec<&mut FileEntry> = files.iter_mut().collect();
-                for f in first_occurrences.values_mut() {
-                    all_files.push(f);
-                }
-
-                let (count, hits) = self.compute_perceptual_hashes(&mut all_files, hasher);
+                let (count, hits) = self.compute_perceptual_hashes(&mut image_refs, hasher);
                 summary.images_perceptual_hashed = count;
                 summary.images_perceptual_hash_cache_hits = hits;
 
                 if let Some(ref callback) = self.config.progress_callback {
                     callback.on_phase_end("perceptual_hashing");
                 }
+            }
+        }
+
+        // Phase 1: Group by size
+        let mut files = Vec::new();
+        let mut images = Vec::new();
+        let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
+        let mut duplicate_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
+        let mut first_occurrences: HashMap<u64, FileEntry> = HashMap::new();
+
+        for file in all_discovered {
+            // Collect images for similarity detection
+            if self.config.similar_images && file.is_image() {
+                images.push(file.clone());
+            }
+
+            if file.size == 0 {
+                files.push(file);
+                continue;
+            }
+
+            if duplicate_sizes.contains(file.size) {
+                files.push(file);
+            } else if seen_sizes.contains(file.size) {
+                duplicate_sizes.insert(file.size);
+                if let Some(first) = first_occurrences.remove(&file.size) {
+                    files.push(first);
+                }
+                files.push(file);
+            } else {
+                seen_sizes.insert(file.size);
+                first_occurrences.insert(file.size, file);
             }
         }
 
@@ -2163,14 +2287,23 @@ impl DuplicateFinder {
         summary.cache_fullhash_misses = fullhash_stats.cache_misses;
         summary.scan_duration = start_time.elapsed();
 
+        // Phase 4: Similar Image Detection
+        let mut all_groups = duplicate_groups;
+        if self.config.similar_images {
+            log::info!("Phase 4: Detecting similar images...");
+            let similar_groups = self.find_similar_groups(&images);
+            log::info!("Found {} similar image groups", similar_groups.len());
+            all_groups.extend(similar_groups);
+        }
+
         log::info!(
-            "Multi-directory scan complete: {} duplicate groups, {} duplicate files, {} reclaimable",
-            summary.duplicate_groups,
+            "Multi-directory scan complete: {} duplicate/similar groups, {} duplicate files, {} reclaimable",
+            all_groups.len(),
             summary.duplicate_files,
             summary.reclaimable_display()
         );
 
-        Ok((duplicate_groups, summary))
+        Ok((all_groups, summary))
     }
 }
 
