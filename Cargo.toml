@@ -125,7 +125,7 @@ filetime = "0.2"
 criterion = "0.5"
 
 [[bench]]
-name = "scan_benchmark"
+name = "scan_benchmarks"
 harness = false
 
 [profile.release]
