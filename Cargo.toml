@@ -80,6 +80,10 @@ directories = "5"
 # Used with figment for layered config (defaults < file < env < CLI)
 toml = "0.8"
 
+# Layered Configuration - figment enables hierarchical config merging
+# Supports: defaults < config file < environment variables < CLI flags
+figment = { version = "0.10", features = ["toml", "env"] }
+
 # Unicode Path Normalization - Critical for macOS NFD vs NFC issues
 unicode-normalization = "0.1"
 
