@@ -191,3 +191,52 @@ fn test_multiple_reference_directories_integration() {
         }
     }
 }
+
+#[test]
+fn test_first_path_is_reference_in_multi_path_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let path1 = dir.path().join("path1");
+    let path2 = dir.path().join("path2");
+
+    fs::create_dir(&path1).unwrap();
+    fs::create_dir(&path2).unwrap();
+
+    let content = b"duplicate content";
+    let file1 = path1.join("file1.txt");
+    fs::write(&file1, content).unwrap();
+    let file2 = path2.join("file2.txt");
+    fs::write(&file2, content).unwrap();
+
+    let canon_path1 = path1.canonicalize().unwrap();
+    let canon_path2 = path2.canonicalize().unwrap();
+
+    // Simulate main.rs logic: multiple paths -> first is reference
+    let mut reference_paths = Vec::new();
+    let scan_paths = vec![canon_path1.clone(), canon_path2];
+    if scan_paths.len() > 1 {
+        reference_paths.push(scan_paths[0].clone());
+    }
+
+    let finder_config = FinderConfig::default().with_reference_paths(reference_paths);
+    let finder = DuplicateFinder::new(finder_config);
+
+    let (groups, _) = finder.find_duplicates_in_paths(scan_paths).unwrap();
+
+    assert_eq!(groups.len(), 1);
+    let group = &groups[0];
+
+    // file1 is in path1 (the first path), so it should be a reference
+    let entry1 = group
+        .files
+        .iter()
+        .find(|f| f.path.ends_with("file1.txt"))
+        .unwrap();
+    let entry2 = group
+        .files
+        .iter()
+        .find(|f| f.path.ends_with("file2.txt"))
+        .unwrap();
+
+    assert!(group.is_in_reference_dir(&entry1.path));
+    assert!(!group.is_in_reference_dir(&entry2.path));
+}

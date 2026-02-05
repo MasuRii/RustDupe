@@ -165,6 +165,16 @@ fn handle_scan(
 
         // Validate and canonicalize reference paths
         let mut reference_paths = Vec::new();
+
+        // Treat first path as reference by default if multiple paths are specified
+        if canonical_paths.len() > 1 {
+            log::info!(
+                "Multi-path mode: treating first path as reference: {}",
+                canonical_paths[0].display()
+            );
+            reference_paths.push(canonical_paths[0].clone());
+        }
+
         for ref_path in args.reference_paths {
             if !ref_path.exists() {
                 anyhow::bail!("Reference path does not exist: {}", ref_path.display());
@@ -172,7 +182,10 @@ fn handle_scan(
             if !ref_path.is_dir() {
                 anyhow::bail!("Reference path is not a directory: {}", ref_path.display());
             }
-            reference_paths.push(ref_path.canonicalize()?);
+            let canon = ref_path.canonicalize()?;
+            if !reference_paths.contains(&canon) {
+                reference_paths.push(canon);
+            }
         }
 
         // Resolve cache path
