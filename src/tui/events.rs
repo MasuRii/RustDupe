@@ -484,13 +484,22 @@ mod tests {
         let key = make_key(KeyCode::Char('z'), KeyModifiers::NONE);
         assert_eq!(handler.translate_key(key), None);
 
-        // F1 key
-        let key = make_key(KeyCode::F(1), KeyModifiers::NONE);
-        assert_eq!(handler.translate_key(key), None);
-
         // Tab
         let key = make_key(KeyCode::Tab, KeyModifiers::NONE);
         assert_eq!(handler.translate_key(key), None);
+    }
+
+    #[test]
+    fn test_translate_show_help() {
+        let handler = EventHandler::new();
+
+        // '?' key
+        let key = make_key(KeyCode::Char('?'), KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::ShowHelp));
+
+        // F1 key
+        let key = make_key(KeyCode::F(1), KeyModifiers::NONE);
+        assert_eq!(handler.translate_key(key), Some(Action::ShowHelp));
     }
 
     #[test]

@@ -704,6 +704,15 @@ impl KeyBindings {
             vec![Self::key(KeyCode::Char('t'), KeyModifiers::NONE)],
         );
 
+        // Help
+        bindings.insert(
+            Action::ShowHelp,
+            vec![
+                Self::key(KeyCode::Char('?'), KeyModifiers::NONE),
+                Self::key(KeyCode::F(1), KeyModifiers::NONE),
+            ],
+        );
+
         // Quit
         bindings.insert(
             Action::Quit,
@@ -853,6 +862,15 @@ impl KeyBindings {
             vec![Self::key(KeyCode::Char('t'), KeyModifiers::NONE)],
         );
 
+        // Help
+        bindings.insert(
+            Action::ShowHelp,
+            vec![
+                Self::key(KeyCode::Char('?'), KeyModifiers::NONE),
+                Self::key(KeyCode::F(1), KeyModifiers::NONE),
+            ],
+        );
+
         // Quit
         bindings.insert(
             Action::Quit,
@@ -979,6 +997,15 @@ impl KeyBindings {
         bindings.insert(
             Action::ToggleTheme,
             vec![Self::key(KeyCode::Char('t'), KeyModifiers::NONE)],
+        );
+
+        // Help
+        bindings.insert(
+            Action::ShowHelp,
+            vec![
+                Self::key(KeyCode::Char('?'), KeyModifiers::NONE),
+                Self::key(KeyCode::F(1), KeyModifiers::NONE),
+            ],
         );
 
         // Quit
@@ -1123,6 +1150,15 @@ impl KeyBindings {
         bindings.insert(
             Action::ToggleTheme,
             vec![Self::key(KeyCode::Char('t'), KeyModifiers::NONE)],
+        );
+
+        // Help
+        bindings.insert(
+            Action::ShowHelp,
+            vec![
+                Self::key(KeyCode::Char('?'), KeyModifiers::NONE),
+                Self::key(KeyCode::F(1), KeyModifiers::NONE),
+            ],
         );
 
         // Quit

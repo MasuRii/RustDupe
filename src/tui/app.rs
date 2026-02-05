@@ -70,6 +70,8 @@ pub enum AppMode {
     Confirming,
     /// Selecting a folder for batch selection
     SelectingFolder,
+    /// Showing help overlay with keybinding reference
+    ShowingHelp,
     /// Application is quitting
     Quitting,
 }
@@ -85,6 +87,15 @@ impl AppMode {
     #[must_use]
     pub fn is_done(&self) -> bool {
         matches!(self, Self::Quitting)
+    }
+
+    /// Check if the application is in a modal state.
+    #[must_use]
+    pub fn is_modal(&self) -> bool {
+        matches!(
+            self,
+            Self::Previewing | Self::Confirming | Self::SelectingFolder | Self::ShowingHelp
+        )
     }
 }
 
@@ -130,6 +141,8 @@ pub enum Action {
     Delete,
     /// Toggle theme
     ToggleTheme,
+    /// Show help overlay with keybinding reference
+    ShowHelp,
     /// Confirm current action
     Confirm,
     /// Cancel current action
@@ -170,6 +183,7 @@ impl Action {
             Self::SelectFolder => "select_folder",
             Self::Delete => "delete",
             Self::ToggleTheme => "toggle_theme",
+            Self::ShowHelp => "show_help",
             Self::Confirm => "confirm",
             Self::Cancel => "cancel",
             Self::Quit => "quit",
@@ -198,6 +212,7 @@ impl Action {
             "select_folder",
             "delete",
             "toggle_theme",
+            "show_help",
             "confirm",
             "cancel",
             "quit",
@@ -206,7 +221,7 @@ impl Action {
 
     /// Returns all action variants.
     #[must_use]
-    pub const fn all() -> [Action; 21] {
+    pub const fn all() -> [Action; 22] {
         [
             Self::NavigateUp,
             Self::NavigateDown,
@@ -226,6 +241,7 @@ impl Action {
             Self::SelectFolder,
             Self::Delete,
             Self::ToggleTheme,
+            Self::ShowHelp,
             Self::Confirm,
             Self::Cancel,
             Self::Quit,
@@ -256,6 +272,7 @@ impl std::str::FromStr for Action {
             "select_folder" | "folder" => Ok(Self::SelectFolder),
             "delete" => Ok(Self::Delete),
             "toggle_theme" | "theme" => Ok(Self::ToggleTheme),
+            "show_help" | "help" => Ok(Self::ShowHelp),
             "confirm" | "enter" => Ok(Self::Confirm),
             "cancel" | "escape" | "esc" => Ok(Self::Cancel),
             "quit" | "exit" => Ok(Self::Quit),
@@ -362,6 +379,8 @@ pub struct App {
     theme_arg: ThemeArg,
     /// TUI theme colors
     theme: Theme,
+    /// Active keybindings for display in help
+    keybindings: Option<crate::tui::keybindings::KeyBindings>,
 }
 
 impl Default for App {
@@ -402,6 +421,7 @@ impl App {
             dry_run: false,
             theme_arg: ThemeArg::Auto,
             theme: Theme::dark(),
+            keybindings: None,
         }
     }
 
@@ -444,6 +464,23 @@ impl App {
     #[must_use]
     pub fn theme(&self) -> &Theme {
         &self.theme
+    }
+
+    /// Set keybindings for help display.
+    pub fn set_keybindings(&mut self, bindings: crate::tui::keybindings::KeyBindings) {
+        self.keybindings = Some(bindings);
+    }
+
+    /// Set keybindings for help display (builder pattern).
+    pub fn with_keybindings(mut self, bindings: crate::tui::keybindings::KeyBindings) -> Self {
+        self.keybindings = Some(bindings);
+        self
+    }
+
+    /// Get the current keybindings, if set.
+    #[must_use]
+    pub fn keybindings(&self) -> Option<&crate::tui::keybindings::KeyBindings> {
+        self.keybindings.as_ref()
     }
 
     /// Set dry-run mode for the application.
@@ -523,6 +560,7 @@ impl App {
             dry_run: false,
             theme_arg: ThemeArg::Auto,
             theme: Theme::dark(),
+            keybindings: None,
         }
     }
 
@@ -1316,6 +1354,15 @@ impl App {
                 self.toggle_theme();
                 true
             }
+            Action::ShowHelp => {
+                if self.mode == AppMode::ShowingHelp {
+                    // Toggle off - return to reviewing
+                    self.set_mode(AppMode::Reviewing);
+                } else if self.mode == AppMode::Reviewing {
+                    self.set_mode(AppMode::ShowingHelp);
+                }
+                true
+            }
             Action::Confirm => {
                 if self.mode == AppMode::SelectingFolder {
                     self.select_by_folder();
@@ -1335,6 +1382,9 @@ impl App {
                         self.set_mode(AppMode::Reviewing);
                     }
                     AppMode::SelectingFolder => {
+                        self.set_mode(AppMode::Reviewing);
+                    }
+                    AppMode::ShowingHelp => {
                         self.set_mode(AppMode::Reviewing);
                     }
                     _ => {}
@@ -1996,16 +2046,18 @@ mod tests {
     #[test]
     fn test_action_all_names() {
         let names = Action::all_names();
-        assert_eq!(names.len(), 21);
+        assert_eq!(names.len(), 22);
         assert!(names.contains(&"navigate_down"));
+        assert!(names.contains(&"show_help"));
         assert!(names.contains(&"quit"));
     }
 
     #[test]
     fn test_action_all() {
         let actions = Action::all();
-        assert_eq!(actions.len(), 21);
+        assert_eq!(actions.len(), 22);
         assert!(actions.contains(&Action::NavigateDown));
+        assert!(actions.contains(&Action::ShowHelp));
         assert!(actions.contains(&Action::Quit));
     }
 }

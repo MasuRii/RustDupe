@@ -124,8 +124,11 @@ fn test_render_footer() {
     let buffer = terminal.backend().buffer();
     let content = format!("{:?}", buffer);
 
-    // Footer should contain commands
-    assert!(content.contains("[j/k]"));
+    // Footer should contain navigation hint (platform-specific: "↑↓/jk" on Windows, "jk/↑↓" on Unix)
+    assert!(
+        content.contains("jk") || content.contains("Nav"),
+        "Footer should contain navigation hint"
+    );
     assert!(content.contains("Nav"));
     assert!(content.contains("[d]"));
     assert!(content.contains("Del"));

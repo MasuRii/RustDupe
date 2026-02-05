@@ -219,6 +219,9 @@ fn run_tui_inner(
         None => EventHandler::new(),
     };
 
+    // Pass keybindings to App for help dialog rendering
+    app.set_keybindings(event_handler.bindings().clone());
+
     // Track frame timing for rate limiting
     let mut last_render = Instant::now();
 

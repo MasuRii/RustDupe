@@ -71,6 +71,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         AppMode::Previewing => render_preview_dialog(frame, app, area),
         AppMode::Confirming => render_confirm_dialog(frame, app, area),
         AppMode::SelectingFolder => render_folder_selection_dialog(frame, app, area),
+        AppMode::ShowingHelp => render_help_dialog(frame, app, area),
         _ => {}
     }
 }
@@ -96,6 +97,9 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
             "rustdupe - Smart Duplicate Finder{} [Select Folder]",
             dry_run_suffix
         ),
+        AppMode::ShowingHelp => {
+            format!("rustdupe - Smart Duplicate Finder{} [Help]", dry_run_suffix)
+        }
         AppMode::Quitting => format!("rustdupe - Goodbye!{}", dry_run_suffix),
     };
 
@@ -141,7 +145,8 @@ fn render_content(frame: &mut Frame, app: &App, area: Rect) {
         AppMode::Reviewing
         | AppMode::Previewing
         | AppMode::Confirming
-        | AppMode::SelectingFolder => render_reviewing_content(frame, app, area),
+        | AppMode::SelectingFolder
+        | AppMode::ShowingHelp => render_reviewing_content(frame, app, area),
         AppMode::Quitting => render_quitting_content(frame, app, area),
     }
 }
@@ -156,37 +161,12 @@ fn render_quitting_content(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Render the footer with available commands.
+///
+/// The footer hints adapt based on:
+/// - Active keybinding profile (if available from App)
+/// - Platform (Windows shows arrow keys, Linux/macOS shows vim keys)
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
-    let commands = match app.mode() {
-        AppMode::Scanning => vec![("q", "Quit"), ("", "Press Ctrl+C to cancel scan")],
-        AppMode::Reviewing => {
-            let mut cmds = vec![
-                ("j/k", "Nav"),
-                ("J/K", "Grp"),
-                ("Space", "Sel"),
-                ("a/A", "All"),
-                ("o/n", "Age"),
-                ("f", "Dir"),
-                ("s/l", "Size"),
-            ];
-            if !app.is_dry_run() {
-                cmds.push(("d", "Del"));
-            }
-            cmds.push(("p", "Prv"));
-            cmds.push(("t", "Thm"));
-            cmds.push(("q", "Quit"));
-            cmds
-        }
-        AppMode::Previewing => vec![("Esc", "Close"), ("q", "Quit")],
-        AppMode::Confirming => vec![("Enter", "Confirm"), ("Esc", "Cancel")],
-        AppMode::SelectingFolder => vec![
-            ("j/k", "Nav"),
-            ("Enter", "Select"),
-            ("Esc", "Cancel"),
-            ("q", "Quit"),
-        ],
-        AppMode::Quitting => vec![],
-    };
+    let commands = get_footer_commands(app);
 
     let spans: Vec<Span> = commands
         .iter()
@@ -790,6 +770,376 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+// ==================== Dynamic Footer Hints ====================
+
+/// Detect if running on Windows platform.
+#[must_use]
+pub fn is_windows_platform() -> bool {
+    cfg!(target_os = "windows")
+}
+
+/// Get footer commands based on app mode, keybinding profile, and platform.
+///
+/// This function generates context-appropriate keybinding hints that:
+/// - Reflect the active keybinding profile (if set)
+/// - Show platform-appropriate hints (Windows: arrows, Linux/macOS: vim keys)
+fn get_footer_commands(app: &App) -> Vec<(&'static str, &'static str)> {
+    // Get the active profile to determine hint style
+    // Default to Universal profile if no keybindings are set
+    let profile = app
+        .keybindings()
+        .map(|kb| kb.profile())
+        .unwrap_or(crate::tui::keybindings::KeybindingProfile::Universal);
+
+    match app.mode() {
+        AppMode::Scanning => vec![("q", "Quit"), ("", "Press Ctrl+C to cancel scan")],
+        AppMode::Reviewing => get_reviewing_commands(app, profile),
+        AppMode::Previewing => vec![("Esc", "Close"), ("q", "Quit")],
+        AppMode::Confirming => vec![("Enter", "Confirm"), ("Esc", "Cancel")],
+        AppMode::SelectingFolder => get_folder_selection_commands(profile),
+        AppMode::ShowingHelp => vec![("Esc", "Close"), ("?/F1", "Help")],
+        AppMode::Quitting => vec![],
+    }
+}
+
+/// Get navigation hint based on keybinding profile and platform.
+fn get_nav_hint(profile: crate::tui::keybindings::KeybindingProfile) -> &'static str {
+    use crate::tui::keybindings::KeybindingProfile;
+    match profile {
+        KeybindingProfile::Universal => {
+            // Show platform-appropriate hint first
+            if is_windows_platform() {
+                "↑↓/jk"
+            } else {
+                "jk/↑↓"
+            }
+        }
+        KeybindingProfile::Vim => "jk",
+        KeybindingProfile::Standard => "↑↓",
+        KeybindingProfile::Emacs => "C-n/p",
+    }
+}
+
+/// Get group navigation hint based on keybinding profile.
+fn get_group_nav_hint(profile: crate::tui::keybindings::KeybindingProfile) -> &'static str {
+    use crate::tui::keybindings::KeybindingProfile;
+    match profile {
+        KeybindingProfile::Universal => {
+            if is_windows_platform() {
+                "PgDn/Up"
+            } else {
+                "JK"
+            }
+        }
+        KeybindingProfile::Vim => "JK",
+        KeybindingProfile::Standard => "PgDn/Up",
+        KeybindingProfile::Emacs => "C-v/M-v",
+    }
+}
+
+/// Get reviewing mode commands based on profile.
+fn get_reviewing_commands(
+    app: &App,
+    profile: crate::tui::keybindings::KeybindingProfile,
+) -> Vec<(&'static str, &'static str)> {
+    let mut cmds = vec![
+        (get_nav_hint(profile), "Nav"),
+        (get_group_nav_hint(profile), "Grp"),
+        ("Space", "Sel"),
+        ("a/A", "All"),
+        ("o/n", "Age"),
+        ("f", "Dir"),
+        ("s/l", "Size"),
+    ];
+    if !app.is_dry_run() {
+        cmds.push(("d", "Del"));
+    }
+    cmds.push(("p", "Prv"));
+    cmds.push(("?", "Help"));
+    cmds.push(("q", "Quit"));
+    cmds
+}
+
+/// Get folder selection commands based on profile.
+fn get_folder_selection_commands(
+    profile: crate::tui::keybindings::KeybindingProfile,
+) -> Vec<(&'static str, &'static str)> {
+    vec![
+        (get_nav_hint(profile), "Nav"),
+        ("Enter", "Select"),
+        ("Esc", "Cancel"),
+        ("q", "Quit"),
+    ]
+}
+
+// ==================== Help Dialog ====================
+
+/// Render help overlay with complete keybinding reference.
+fn render_help_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let dialog_area = centered_rect(80, 85, area);
+    frame.render_widget(Clear, dialog_area);
+
+    let profile_name = app
+        .keybindings()
+        .map(|kb| kb.profile().display_name())
+        .unwrap_or("Universal (Vim + Arrow keys)");
+
+    let platform = if is_windows_platform() {
+        "Windows"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else {
+        "Linux"
+    };
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            "Keybinding Reference",
+            Style::default()
+                .fg(app.theme().primary)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Profile: ", Style::default().fg(app.theme().dim)),
+            Span::styled(
+                profile_name,
+                Style::default()
+                    .fg(app.theme().secondary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Platform: ", Style::default().fg(app.theme().dim)),
+            Span::styled(platform, Style::default().fg(app.theme().normal)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "─── Navigation ───",
+            Style::default().fg(app.theme().secondary),
+        )),
+    ];
+
+    // Add keybinding groups based on whether we have keybindings info
+    if let Some(bindings) = app.keybindings() {
+        lines.extend(get_help_lines_from_bindings(app, bindings));
+    } else {
+        // Show default Universal profile hints
+        lines.extend(get_default_help_lines(app));
+    }
+
+    // Footer
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Press Esc or ? to close",
+        Style::default().fg(app.theme().dim),
+    )));
+
+    let help = Paragraph::new(Text::from(lines))
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Help")
+                .border_style(Style::default().fg(app.theme().primary)),
+        );
+
+    frame.render_widget(help, dialog_area);
+}
+
+/// Generate help lines from actual keybindings.
+fn get_help_lines_from_bindings<'a>(
+    app: &App,
+    bindings: &crate::tui::keybindings::KeyBindings,
+) -> Vec<Line<'a>> {
+    use crate::tui::Action;
+
+    let mut lines = Vec::new();
+
+    // Navigation section
+    lines.push(format_help_line(
+        app,
+        bindings.key_hint(&Action::NavigateUp),
+        bindings.key_hint(&Action::NavigateDown),
+        "Move up/down",
+    ));
+    lines.push(format_help_line(
+        app,
+        bindings.key_hint(&Action::PreviousGroup),
+        bindings.key_hint(&Action::NextGroup),
+        "Prev/next group",
+    ));
+    lines.push(format_help_line_single(
+        app,
+        &format!(
+            "{}, {}",
+            bindings.key_hint(&Action::GoToTop),
+            bindings.key_hint(&Action::GoToBottom)
+        ),
+        "Go to top/bottom",
+    ));
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "─── Selection ───",
+        Style::default().fg(app.theme().secondary),
+    )));
+
+    lines.push(format_help_line_single(
+        app,
+        &bindings.key_hint(&Action::ToggleSelect),
+        "Toggle selection",
+    ));
+    lines.push(format_help_line(
+        app,
+        bindings.key_hint(&Action::SelectAllInGroup),
+        bindings.key_hint(&Action::SelectAllDuplicates),
+        "Select group/all",
+    ));
+    lines.push(format_help_line(
+        app,
+        bindings.key_hint(&Action::SelectOldest),
+        bindings.key_hint(&Action::SelectNewest),
+        "Select old/new",
+    ));
+    lines.push(format_help_line(
+        app,
+        bindings.key_hint(&Action::SelectSmallest),
+        bindings.key_hint(&Action::SelectLargest),
+        "Select size",
+    ));
+    lines.push(format_help_line_single(
+        app,
+        &bindings.key_hint(&Action::SelectFolder),
+        "Select by folder",
+    ));
+    lines.push(format_help_line_single(
+        app,
+        &bindings.key_hint(&Action::DeselectAll),
+        "Deselect all",
+    ));
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "─── Actions ───",
+        Style::default().fg(app.theme().secondary),
+    )));
+
+    lines.push(format_help_line_single(
+        app,
+        &bindings.key_hint(&Action::Preview),
+        "Preview file",
+    ));
+    lines.push(format_help_line_single(
+        app,
+        &bindings.key_hint(&Action::Delete),
+        "Delete selected",
+    ));
+    lines.push(format_help_line_single(
+        app,
+        &bindings.key_hint(&Action::ToggleTheme),
+        "Toggle theme",
+    ));
+    lines.push(format_help_line_single(
+        app,
+        &bindings.key_hint(&Action::ShowHelp),
+        "Show help",
+    ));
+    lines.push(format_help_line_single(
+        app,
+        &bindings.key_hint(&Action::Quit),
+        "Quit",
+    ));
+
+    lines
+}
+
+/// Generate default help lines for Universal profile.
+fn get_default_help_lines(app: &App) -> Vec<Line<'static>> {
+    vec![
+        format_help_line_static(app, "j/↓, k/↑", "Move down/up"),
+        format_help_line_static(app, "J/K, PgDn/Up", "Next/prev group"),
+        format_help_line_static(app, "g/Home, G/End", "Top/bottom"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "─── Selection ───",
+            Style::default().fg(app.theme().secondary),
+        )),
+        format_help_line_static(app, "Space", "Toggle selection"),
+        format_help_line_static(app, "a, A", "Select group/all"),
+        format_help_line_static(app, "o, n", "Select oldest/newest"),
+        format_help_line_static(app, "s, l", "Select smallest/largest"),
+        format_help_line_static(app, "f", "Select by folder"),
+        format_help_line_static(app, "u", "Deselect all"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "─── Actions ───",
+            Style::default().fg(app.theme().secondary),
+        )),
+        format_help_line_static(app, "p", "Preview file"),
+        format_help_line_static(app, "d", "Delete selected"),
+        format_help_line_static(app, "t", "Toggle theme"),
+        format_help_line_static(app, "?/F1", "Show help"),
+        format_help_line_static(app, "q", "Quit"),
+    ]
+}
+
+/// Format a help line with two keys and description.
+fn format_help_line<'a>(app: &App, key1: String, key2: String, desc: &'static str) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {:>6}", key1),
+            Style::default()
+                .fg(app.theme().secondary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(", ", Style::default().fg(app.theme().dim)),
+        Span::styled(
+            format!("{:<6}", key2),
+            Style::default()
+                .fg(app.theme().secondary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {}", desc),
+            Style::default().fg(app.theme().normal),
+        ),
+    ])
+}
+
+/// Format a help line with single key and description.
+fn format_help_line_single<'a>(app: &App, key: &str, desc: &'static str) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {:>14}", key),
+            Style::default()
+                .fg(app.theme().secondary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {}", desc),
+            Style::default().fg(app.theme().normal),
+        ),
+    ])
+}
+
+/// Format a static help line (for default hints).
+fn format_help_line_static(app: &App, key: &'static str, desc: &'static str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {:>14}", key),
+            Style::default()
+                .fg(app.theme().secondary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("  {}", desc),
+            Style::default().fg(app.theme().normal),
+        ),
+    ])
 }
 
 #[cfg(test)]
