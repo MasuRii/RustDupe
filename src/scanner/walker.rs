@@ -526,7 +526,7 @@ impl Walker {
                 log::warn!("I/O error for {}: {}", path.display(), error);
                 Err(ScanError::Io {
                     path: path.to_path_buf(),
-                    source: error,
+                    source: Arc::new(error),
                 })
             }
         }
@@ -542,7 +542,7 @@ impl Walker {
         log::warn!("Walker error for {}: {}", path.display(), error);
         Err(ScanError::Io {
             path,
-            source: std::io::Error::other(error.to_string()),
+            source: Arc::new(std::io::Error::other(error.to_string())),
         })
     }
 }

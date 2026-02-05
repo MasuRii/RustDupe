@@ -242,7 +242,10 @@ impl Hasher {
                 log::debug!("Hash operation interrupted for: {}", path.display());
                 return Err(HashError::Io {
                     path: path.to_path_buf(),
-                    source: std::io::Error::new(ErrorKind::Interrupted, "Operation interrupted"),
+                    source: Arc::new(std::io::Error::new(
+                        ErrorKind::Interrupted,
+                        "Operation interrupted",
+                    )),
                 });
             }
 
@@ -297,7 +300,7 @@ impl Hasher {
                 log::warn!("I/O error for {}: {}", path.display(), error);
                 HashError::Io {
                     path: path.to_path_buf(),
-                    source: error,
+                    source: Arc::new(error),
                 }
             }
         }

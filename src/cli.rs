@@ -425,6 +425,14 @@ pub struct ScanArgs {
         help_heading = "Scanning Options"
     )]
     pub groups: Vec<DirectoryGroup>,
+
+    /// Fail-fast on any error during scan
+    #[arg(long = "strict", help_heading = "Scanning Options")]
+    pub strict: bool,
+
+    /// Continue scan on errors (default)
+    #[arg(long = "no-strict", overrides_with = "strict", hide = true)]
+    pub no_strict: bool,
 }
 
 /// Arguments for the load subcommand.

@@ -292,8 +292,10 @@ impl WalkerConfig {
     }
 }
 
+use std::sync::Arc;
+
 /// Errors that can occur during directory scanning.
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, Clone)]
 pub enum ScanError {
     /// Permission was denied when accessing a file or directory.
     #[error("Permission denied: {0} - try running with elevated privileges")]
@@ -314,12 +316,49 @@ pub enum ScanError {
         path: PathBuf,
         /// The underlying I/O error
         #[source]
-        source: std::io::Error,
+        source: Arc<std::io::Error>,
     },
+
+    /// An error occurred during hashing.
+    #[error(transparent)]
+    HashError(#[from] HashError),
+}
+
+impl PartialEq for ScanError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::PermissionDenied(p1), Self::PermissionDenied(p2)) => p1 == p2,
+            (Self::NotFound(p1), Self::NotFound(p2)) => p1 == p2,
+            (Self::NotADirectory(p1), Self::NotADirectory(p2)) => p1 == p2,
+            (
+                Self::Io {
+                    path: p1,
+                    source: s1,
+                },
+                Self::Io {
+                    path: p2,
+                    source: s2,
+                },
+            ) => p1 == p2 && s1.kind() == s2.kind() && s1.to_string() == s2.to_string(),
+            (Self::HashError(e1), Self::HashError(e2)) => e1 == e2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ScanError {}
+
+impl From<std::io::Error> for ScanError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Io {
+            path: PathBuf::new(),
+            source: Arc::new(err),
+        }
+    }
 }
 
 /// Errors that can occur during file hashing.
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, Clone)]
 pub enum HashError {
     /// The specified file was not found.
     #[error("File not found: {0}")]
@@ -336,9 +375,31 @@ pub enum HashError {
         path: PathBuf,
         /// The underlying I/O error
         #[source]
-        source: std::io::Error,
+        source: Arc<std::io::Error>,
     },
 }
+
+impl PartialEq for HashError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::NotFound(p1), Self::NotFound(p2)) => p1 == p2,
+            (Self::PermissionDenied(p1), Self::PermissionDenied(p2)) => p1 == p2,
+            (
+                Self::Io {
+                    path: p1,
+                    source: s1,
+                },
+                Self::Io {
+                    path: p2,
+                    source: s2,
+                },
+            ) => p1 == p2 && s1.kind() == s2.kind() && s1.to_string() == s2.to_string(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for HashError {}
 
 #[cfg(test)]
 mod tests {
@@ -397,6 +458,13 @@ mod tests {
 
         let err = ScanError::NotADirectory(PathBuf::from("/file.txt"));
         assert_eq!(err.to_string(), "Not a directory: /file.txt");
+
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test error");
+        let err = ScanError::Io {
+            path: PathBuf::from("/test.txt"),
+            source: Arc::new(io_err),
+        };
+        assert_eq!(err.to_string(), "I/O error for /test.txt: test error");
     }
 
     #[test]

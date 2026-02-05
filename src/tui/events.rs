@@ -69,7 +69,7 @@ pub struct EventHandler {
 #[derive(Debug, thiserror::Error)]
 pub enum EventError {
     /// I/O error from crossterm
-    #[error("Event I/O error: {0}")]
+    #[error("Event I/O error: {0} - terminal may have been closed or resized incorrectly")]
     Io(#[from] std::io::Error),
 }
 

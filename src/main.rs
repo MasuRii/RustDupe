@@ -317,6 +317,7 @@ fn handle_scan(
         // Configure the duplicate finder
         let mut finder_config = FinderConfig::default()
             .with_io_threads(config.io_threads)
+            .with_strict(config.strict)
             .with_paranoid(config.paranoid)
             .with_walker_config(walker_config)
             .with_shutdown_flag(shutdown_flag.clone())
@@ -485,7 +486,25 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
         }
     }
 
-    // 2. Output results based on format
+    // 2. Display error summary if any
+    if !summary.scan_errors.is_empty() {
+        eprintln!(
+            "\nWarning: Encountered {} error(s) during scan:",
+            summary.scan_errors.len()
+        );
+        for (i, err) in summary.scan_errors.iter().enumerate().take(10) {
+            eprintln!("  {}. {}", i + 1, err);
+        }
+        if summary.scan_errors.len() > 10 {
+            eprintln!(
+                "  ... and {} more (use --verbose for details)",
+                summary.scan_errors.len() - 10
+            );
+        }
+        eprintln!();
+    }
+
+    // 3. Output results based on format
     match output_format {
         OutputFormat::Tui => {
             // Initialize TUI with results

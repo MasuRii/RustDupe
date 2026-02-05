@@ -136,6 +136,8 @@ pub struct PrehashStats {
     pub hashed_files: usize,
     /// Number of files that failed to hash (I/O errors)
     pub failed_files: usize,
+    /// Errors encountered during prehash
+    pub errors: Vec<crate::scanner::HashError>,
     /// Number of cache hits for prehashes
     pub cache_hits: usize,
     /// Number of cache misses for prehashes
@@ -255,7 +257,12 @@ pub fn phase2_prehash(
         });
 
     // Compute prehashes in parallel with limited I/O parallelism
-    let prehash_results: Vec<(FileEntry, Option<Hash>, bool)> = pool.install(|| {
+    let prehash_results: Vec<(
+        FileEntry,
+        Result<Hash, crate::scanner::HashError>,
+        bool,
+        bool,
+    )> = pool.install(|| {
         all_files
             .into_par_iter()
             .enumerate()
@@ -263,7 +270,18 @@ pub fn phase2_prehash(
                 // Check shutdown flag
                 if config.is_shutdown_requested() {
                     log::debug!("Phase 2: Shutdown requested, skipping remaining files");
-                    return (file, None, false);
+                    return (
+                        file,
+                        Err(crate::scanner::HashError::Io {
+                            path: PathBuf::new(),
+                            source: Arc::new(std::io::Error::new(
+                                std::io::ErrorKind::Interrupted,
+                                "Shutdown",
+                            )),
+                        }),
+                        false,
+                        true,
+                    );
                 }
 
                 // Report progress
@@ -276,7 +294,7 @@ pub fn phase2_prehash(
                     match cache.get_prehash(&file.path, file.size, file.modified) {
                         Ok(Some(hash)) => {
                             log::trace!("Prehash cache hit: {}", file.path.display());
-                            return (file, Some(hash), true);
+                            return (file, Ok(hash), true, false);
                         }
                         Ok(None) => {
                             log::trace!("Prehash cache miss: {}", file.path.display());
@@ -304,11 +322,11 @@ pub fn phase2_prehash(
                             }
                         }
 
-                        (file, Some(hash), false)
+                        (file, Ok(hash), false, false)
                     }
                     Err(e) => {
                         log::warn!("Failed to prehash {}: {}", file.path.display(), e);
-                        (file, None, false)
+                        (file, Err(e), false, false)
                     }
                 }
             })
@@ -324,9 +342,12 @@ pub fn phase2_prehash(
     // Group by prehash
     let mut prehash_groups: HashMap<Hash, Vec<FileEntry>> = HashMap::new();
 
-    for (file, prehash_opt, is_hit) in prehash_results {
-        match prehash_opt {
-            Some(prehash) => {
+    for (file, res, is_hit, is_interrupted) in prehash_results {
+        if is_interrupted {
+            continue;
+        }
+        match res {
+            Ok(prehash) => {
                 stats.hashed_files += 1;
                 if is_hit {
                     stats.cache_hits += 1;
@@ -335,8 +356,9 @@ pub fn phase2_prehash(
                 }
                 prehash_groups.entry(prehash).or_default().push(file);
             }
-            None => {
+            Err(e) => {
                 stats.failed_files += 1;
+                stats.errors.push(e);
             }
         }
     }
@@ -570,6 +592,8 @@ pub struct FullhashStats {
     pub hashed_files: usize,
     /// Number of files that failed to hash (I/O errors)
     pub failed_files: usize,
+    /// Errors encountered during full hash
+    pub errors: Vec<crate::scanner::HashError>,
     /// Number of cache hits for full hashes
     pub cache_hits: usize,
     /// Number of cache misses for full hashes
@@ -684,7 +708,12 @@ pub fn phase3_fullhash(
         });
 
     // Compute full hashes in parallel with limited I/O parallelism
-    let hash_results: Vec<(FileEntry, Option<Hash>, bool)> = pool.install(|| {
+    let hash_results: Vec<(
+        FileEntry,
+        Result<Hash, crate::scanner::HashError>,
+        bool,
+        bool,
+    )> = pool.install(|| {
         all_files
             .into_par_iter()
             .enumerate()
@@ -692,7 +721,18 @@ pub fn phase3_fullhash(
                 // Check shutdown flag
                 if config.is_shutdown_requested() {
                     log::debug!("Phase 3: Shutdown requested, skipping remaining files");
-                    return (file, None, false);
+                    return (
+                        file,
+                        Err(crate::scanner::HashError::Io {
+                            path: PathBuf::new(),
+                            source: Arc::new(std::io::Error::new(
+                                std::io::ErrorKind::Interrupted,
+                                "Shutdown",
+                            )),
+                        }),
+                        false,
+                        true,
+                    );
                 }
 
                 // Log large files for visibility
@@ -714,7 +754,7 @@ pub fn phase3_fullhash(
                     match cache.get_fullhash(&file.path, file.size, file.modified) {
                         Ok(Some(hash)) => {
                             log::trace!("Full hash cache hit: {}", file.path.display());
-                            return (file, Some(hash), true);
+                            return (file, Ok(hash), true, false);
                         }
                         Ok(None) => {
                             log::trace!("Full hash cache miss: {}", file.path.display());
@@ -746,11 +786,11 @@ pub fn phase3_fullhash(
                             }
                         }
 
-                        (file, Some(hash), false)
+                        (file, Ok(hash), false, false)
                     }
                     Err(e) => {
                         log::warn!("Failed to hash {}: {}", file.path.display(), e);
-                        (file, None, false)
+                        (file, Err(e), false, false)
                     }
                 }
             })
@@ -766,9 +806,12 @@ pub fn phase3_fullhash(
     // Group by full hash
     let mut fullhash_groups: HashMap<Hash, Vec<FileEntry>> = HashMap::new();
 
-    for (file, fullhash_opt, is_hit) in hash_results {
-        match fullhash_opt {
-            Some(fullhash) => {
+    for (file, res, is_hit, is_interrupted) in hash_results {
+        if is_interrupted {
+            continue;
+        }
+        match res {
+            Ok(fullhash) => {
                 stats.hashed_files += 1;
                 stats.bytes_hashed += file.size;
                 if is_hit {
@@ -778,8 +821,9 @@ pub fn phase3_fullhash(
                 }
                 fullhash_groups.entry(fullhash).or_default().push(file);
             }
-            None => {
+            Err(e) => {
                 stats.failed_files += 1;
+                stats.errors.push(e);
             }
         }
     }
@@ -830,6 +874,8 @@ pub struct FinderConfig {
     /// Number of I/O threads for parallel hashing.
     /// Default is 4 to prevent disk thrashing.
     pub io_threads: usize,
+    /// Fail-fast on any error during scan.
+    pub strict: bool,
     /// Optional hash cache for faster rescans.
     pub cache: Option<Arc<HashCache>>,
     /// Enable byte-by-byte verification after hash matching (paranoid mode).
@@ -868,6 +914,7 @@ impl Default for FinderConfig {
     fn default() -> Self {
         Self {
             io_threads: 4,
+            strict: false,
             cache: None,
             paranoid: false,
             walker_config: crate::scanner::WalkerConfig::default(),
@@ -884,6 +931,13 @@ impl FinderConfig {
     #[must_use]
     pub fn with_io_threads(mut self, threads: usize) -> Self {
         self.io_threads = threads.max(1);
+        self
+    }
+
+    /// Set fail-fast on any error.
+    #[must_use]
+    pub fn with_strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
         self
     }
 
@@ -976,6 +1030,8 @@ pub struct ScanSummary {
     pub scan_duration: std::time::Duration,
     /// Whether the scan was interrupted
     pub interrupted: bool,
+    /// Errors encountered during the scan
+    pub scan_errors: Vec<crate::scanner::ScanError>,
 }
 
 impl ScanSummary {
@@ -1050,6 +1106,10 @@ pub enum FinderError {
         #[source]
         source: std::io::Error,
     },
+
+    /// A scan error occurred.
+    #[error(transparent)]
+    ScanError(#[from] crate::scanner::ScanError),
 }
 
 /// Duplicate finder that orchestrates the multi-phase detection pipeline.
@@ -1180,7 +1240,19 @@ impl DuplicateFinder {
             walker = walker.with_progress_callback(callback.clone());
         }
 
-        let files: Vec<FileEntry> = walker.walk().filter_map(|r| r.ok()).collect();
+        let mut files = Vec::new();
+        for result in walker.walk() {
+            match result {
+                Ok(file) => files.push(file),
+                Err(e) => {
+                    if self.config.strict {
+                        return Err(FinderError::ScanError(e));
+                    } else {
+                        summary.scan_errors.push(e);
+                    }
+                }
+            }
+        }
 
         if let Some(ref callback) = self.config.progress_callback {
             callback.on_phase_end("walking");
@@ -1247,6 +1319,21 @@ impl DuplicateFinder {
         summary.cache_prehash_hits = prehash_stats.cache_hits;
         summary.cache_prehash_misses = prehash_stats.cache_misses;
 
+        if !prehash_stats.errors.is_empty() {
+            if self.config.strict {
+                return Err(FinderError::ScanError(
+                    crate::scanner::ScanError::HashError(prehash_stats.errors[0].clone()),
+                ));
+            } else {
+                summary.scan_errors.extend(
+                    prehash_stats
+                        .errors
+                        .into_iter()
+                        .map(crate::scanner::ScanError::from),
+                );
+            }
+        }
+
         if prehash_stats.interrupted || self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
         }
@@ -1267,6 +1354,21 @@ impl DuplicateFinder {
 
         let (duplicate_groups, fullhash_stats) =
             phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config);
+
+        if !fullhash_stats.errors.is_empty() {
+            if self.config.strict {
+                return Err(FinderError::ScanError(
+                    crate::scanner::ScanError::HashError(fullhash_stats.errors[0].clone()),
+                ));
+            } else {
+                summary.scan_errors.extend(
+                    fullhash_stats
+                        .errors
+                        .into_iter()
+                        .map(crate::scanner::ScanError::from),
+                );
+            }
+        }
 
         if fullhash_stats.interrupted || self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
@@ -1364,6 +1466,21 @@ impl DuplicateFinder {
         summary.cache_prehash_hits = prehash_stats.cache_hits;
         summary.cache_prehash_misses = prehash_stats.cache_misses;
 
+        if !prehash_stats.errors.is_empty() {
+            if self.config.strict {
+                return Err(FinderError::ScanError(
+                    crate::scanner::ScanError::HashError(prehash_stats.errors[0].clone()),
+                ));
+            } else {
+                summary.scan_errors.extend(
+                    prehash_stats
+                        .errors
+                        .into_iter()
+                        .map(crate::scanner::ScanError::from),
+                );
+            }
+        }
+
         if prehash_stats.interrupted || self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
         }
@@ -1384,6 +1501,21 @@ impl DuplicateFinder {
 
         let (duplicate_groups, fullhash_stats) =
             phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config);
+
+        if !fullhash_stats.errors.is_empty() {
+            if self.config.strict {
+                return Err(FinderError::ScanError(
+                    crate::scanner::ScanError::HashError(fullhash_stats.errors[0].clone()),
+                ));
+            } else {
+                summary.scan_errors.extend(
+                    fullhash_stats
+                        .errors
+                        .into_iter()
+                        .map(crate::scanner::ScanError::from),
+                );
+            }
+        }
 
         if fullhash_stats.interrupted || self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
@@ -1503,7 +1635,19 @@ impl DuplicateFinder {
             multi_walker = multi_walker.with_progress_callback(callback.clone());
         }
 
-        let files: Vec<FileEntry> = multi_walker.walk().filter_map(|r| r.ok()).collect();
+        let mut files = Vec::new();
+        for result in multi_walker.walk() {
+            match result {
+                Ok(file) => files.push(file),
+                Err(e) => {
+                    if self.config.strict {
+                        return Err(FinderError::ScanError(e));
+                    } else {
+                        summary.scan_errors.push(e);
+                    }
+                }
+            }
+        }
 
         if let Some(ref callback) = self.config.progress_callback {
             callback.on_phase_end("walking");
@@ -1571,6 +1715,21 @@ impl DuplicateFinder {
         summary.cache_prehash_hits = prehash_stats.cache_hits;
         summary.cache_prehash_misses = prehash_stats.cache_misses;
 
+        if !prehash_stats.errors.is_empty() {
+            if self.config.strict {
+                return Err(FinderError::ScanError(
+                    crate::scanner::ScanError::HashError(prehash_stats.errors[0].clone()),
+                ));
+            } else {
+                summary.scan_errors.extend(
+                    prehash_stats
+                        .errors
+                        .into_iter()
+                        .map(crate::scanner::ScanError::from),
+                );
+            }
+        }
+
         if prehash_stats.interrupted || self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
         }
@@ -1591,6 +1750,21 @@ impl DuplicateFinder {
 
         let (duplicate_groups, fullhash_stats) =
             phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config);
+
+        if !fullhash_stats.errors.is_empty() {
+            if self.config.strict {
+                return Err(FinderError::ScanError(
+                    crate::scanner::ScanError::HashError(fullhash_stats.errors[0].clone()),
+                ));
+            } else {
+                summary.scan_errors.extend(
+                    fullhash_stats
+                        .errors
+                        .into_iter()
+                        .map(crate::scanner::ScanError::from),
+                );
+            }
+        }
 
         if fullhash_stats.interrupted || self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
@@ -1667,6 +1841,7 @@ mod tests {
             input_files: 100,
             hashed_files: 100,
             failed_files: 0,
+            errors: Vec::new(),
             cache_hits: 0,
             cache_misses: 100,
             unique_prehashes: 80,

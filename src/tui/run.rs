@@ -77,7 +77,7 @@ const POLL_TIMEOUT: Duration = Duration::from_millis(16);
 #[derive(Debug, Error)]
 pub enum TuiError {
     /// I/O error from terminal operations.
-    #[error("terminal I/O error: {0}")]
+    #[error("terminal I/O error: {0} - check terminal permissions and state")]
     Io(#[from] io::Error),
 
     /// Event handling error.

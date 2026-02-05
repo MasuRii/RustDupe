@@ -265,6 +265,7 @@ mod tests {
             reclaimable_space: 51200,
             scan_duration: Duration::from_millis(1234),
             interrupted: false,
+            scan_errors: Vec::new(),
         }
     }
 

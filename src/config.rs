@@ -175,6 +175,10 @@ pub struct Config {
     #[serde(default = "default_io_threads")]
     pub io_threads: usize,
 
+    /// Fail-fast on any error during scan.
+    #[serde(default)]
+    pub strict: bool,
+
     /// Enable paranoid mode (byte-by-byte verification).
     #[serde(default)]
     pub paranoid: bool,
@@ -245,6 +249,7 @@ impl Default for Config {
             newer_than: None,
             older_than: None,
             io_threads: 4,
+            strict: false,
             paranoid: false,
             ignore_patterns: Vec::new(),
             regex_include: Vec::new(),
@@ -417,6 +422,12 @@ impl Config {
         if let Some(threads) = args.io_threads {
             self.io_threads = threads;
         }
+        if args.strict {
+            self.strict = true;
+        }
+        if args.no_strict {
+            self.strict = false;
+        }
         if args.paranoid {
             self.paranoid = true;
         }
@@ -489,6 +500,7 @@ fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str)
         "newer_than",
         "older_than",
         "io_threads",
+        "strict",
         "paranoid",
         "ignore_patterns",
         "regex_include",
@@ -583,6 +595,7 @@ fn validate_profile_keys(table: &toml_edit::Table, path: &str, content: &str) {
         "newer_than",
         "older_than",
         "io_threads",
+        "strict",
         "paranoid",
         "ignore_patterns",
         "regex_include",
