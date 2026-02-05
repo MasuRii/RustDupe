@@ -25,7 +25,7 @@ pub enum CacheError {
     ConnectionClosed,
 
     /// Failed to acquire database lock.
-    #[error("Database lock error")]
+    #[error("Database lock error - ensure no other instance is using the cache")]
     LockError,
 }
 

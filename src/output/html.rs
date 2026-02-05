@@ -141,7 +141,7 @@ pub enum HtmlOutputError {
     Template(#[from] askama::Error),
 
     /// I/O error during writing
-    #[error("I/O error: {0}")]
+    #[error("I/O error during HTML generation: {0}")]
     Io(#[from] std::io::Error),
 }
 

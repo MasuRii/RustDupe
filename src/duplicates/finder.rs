@@ -1040,6 +1040,16 @@ pub enum FinderError {
     /// An I/O error occurred during scanning.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// An I/O error occurred during scanning with a specific path.
+    #[error("I/O error for {path}: {source}")]
+    IoWithPath {
+        /// Path where the error occurred
+        path: PathBuf,
+        /// The underlying I/O error
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// Duplicate finder that orchestrates the multi-phase detection pipeline.

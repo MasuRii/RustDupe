@@ -296,7 +296,7 @@ impl WalkerConfig {
 #[derive(thiserror::Error, Debug)]
 pub enum ScanError {
     /// Permission was denied when accessing a file or directory.
-    #[error("Permission denied: {0}")]
+    #[error("Permission denied: {0} - try running with elevated privileges")]
     PermissionDenied(PathBuf),
 
     /// The specified path was not found.
@@ -326,7 +326,7 @@ pub enum HashError {
     NotFound(PathBuf),
 
     /// Permission was denied when reading the file.
-    #[error("Permission denied: {0}")]
+    #[error("Permission denied: {0} - try running with elevated privileges")]
     PermissionDenied(PathBuf),
 
     /// An I/O error occurred while reading the file.
@@ -389,7 +389,8 @@ mod tests {
     #[test]
     fn test_scan_error_display() {
         let err = ScanError::PermissionDenied(PathBuf::from("/test"));
-        assert_eq!(err.to_string(), "Permission denied: /test");
+        assert!(err.to_string().contains("Permission denied"));
+        assert!(err.to_string().contains("elevated privileges"));
 
         let err = ScanError::NotFound(PathBuf::from("/missing"));
         assert_eq!(err.to_string(), "Path not found: /missing");
@@ -404,6 +405,7 @@ mod tests {
         assert_eq!(err.to_string(), "File not found: /test");
 
         let err = HashError::PermissionDenied(PathBuf::from("/secret"));
-        assert_eq!(err.to_string(), "Permission denied: /secret");
+        assert!(err.to_string().contains("Permission denied"));
+        assert!(err.to_string().contains("elevated privileges"));
     }
 }

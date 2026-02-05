@@ -2,7 +2,7 @@
 //!
 //! Entry point for the RustDupe CLI application.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use directories::ProjectDirs;
 use rustdupe::{
@@ -198,7 +198,9 @@ fn handle_scan(
             if !ref_path.is_dir() {
                 anyhow::bail!("Reference path is not a directory: {}", ref_path.display());
             }
-            let canon = ref_path.canonicalize()?;
+            let canon = ref_path.canonicalize().with_context(|| {
+                format!("Failed to resolve reference path: {}", ref_path.display())
+            })?;
             if !reference_paths.contains(&canon) {
                 reference_paths.push(canon);
             }
@@ -211,7 +213,9 @@ fn handle_scan(
             let project_dirs = ProjectDirs::from("com", "rustdupe", "rustdupe")
                 .ok_or_else(|| anyhow::anyhow!("Failed to determine project directories"))?;
             let cache_dir = project_dirs.cache_dir();
-            fs::create_dir_all(cache_dir)?;
+            fs::create_dir_all(cache_dir).with_context(|| {
+                format!("Failed to create cache directory: {}", cache_dir.display())
+            })?;
             cache_dir.join("hashes.db")
         };
 
@@ -259,7 +263,7 @@ fn handle_scan(
             if let Some(ref cache) = cache {
                 if args.clear_cache {
                     log::info!("Clearing cache...");
-                    cache.clear()?;
+                    cache.clear().context("Failed to clear cache")?;
                 }
             }
             cache.map(Arc::new)
@@ -526,38 +530,55 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
         OutputFormat::Json => {
             let json_output = output::JsonOutput::new(&groups, &summary);
             if let Some(path) = output_file {
-                let mut file = fs::File::create(&path)?;
-                json_output.write_to(&mut file, true)?;
-                file.flush()?;
+                let mut file = fs::File::create(&path)
+                    .with_context(|| format!("Failed to create output file: {}", path.display()))?;
+                json_output.write_to(&mut file, true).with_context(|| {
+                    format!("Failed to write JSON output to: {}", path.display())
+                })?;
+                file.flush()
+                    .with_context(|| format!("Failed to flush output file: {}", path.display()))?;
                 log::info!("JSON results saved to {:?}", path);
             } else {
                 let mut stdout = io::stdout().lock();
-                json_output.write_to(&mut stdout, true)?;
-                stdout.flush()?;
+                json_output
+                    .write_to(&mut stdout, true)
+                    .context("Failed to write JSON output to stdout")?;
+                stdout.flush().context("Failed to flush stdout")?;
             }
         }
         OutputFormat::Csv => {
             let csv_output = output::CsvOutput::new(&groups);
             if let Some(path) = output_file {
-                let file = fs::File::create(&path)?;
-                csv_output.write_to(file)?;
+                let file = fs::File::create(&path)
+                    .with_context(|| format!("Failed to create output file: {}", path.display()))?;
+                csv_output.write_to(file).with_context(|| {
+                    format!("Failed to write CSV output to: {}", path.display())
+                })?;
                 log::info!("CSV results saved to {:?}", path);
             } else {
                 let stdout = io::stdout().lock();
-                csv_output.write_to(stdout)?;
+                csv_output
+                    .write_to(stdout)
+                    .context("Failed to write CSV output to stdout")?;
             }
         }
         OutputFormat::Html => {
             let html_output = output::HtmlOutput::new(&groups, &summary);
             if let Some(path) = output_file {
-                let mut file = fs::File::create(&path)?;
-                html_output.write_to(&mut file)?;
-                file.flush()?;
+                let mut file = fs::File::create(&path)
+                    .with_context(|| format!("Failed to create output file: {}", path.display()))?;
+                html_output.write_to(&mut file).with_context(|| {
+                    format!("Failed to write HTML report to: {}", path.display())
+                })?;
+                file.flush()
+                    .with_context(|| format!("Failed to flush output file: {}", path.display()))?;
                 log::info!("HTML report saved to {:?}", path);
             } else {
                 let mut stdout = io::stdout().lock();
-                html_output.write_to(&mut stdout)?;
-                stdout.flush()?;
+                html_output
+                    .write_to(&mut stdout)
+                    .context("Failed to write HTML report to stdout")?;
+                stdout.flush().context("Failed to flush stdout")?;
             }
         }
         OutputFormat::Session => {
@@ -579,14 +600,17 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
                 session.group_index = initial.group_index;
                 session.file_index = initial.file_index;
             }
-            let json = session.to_json()?;
+            let json = session.to_json().context("Failed to serialize session")?;
             if let Some(path) = output_file {
-                fs::write(&path, json)?;
+                fs::write(&path, json)
+                    .with_context(|| format!("Failed to write session file: {}", path.display()))?;
                 log::info!("Session saved to {:?}", path);
             } else {
                 let mut stdout = io::stdout().lock();
-                stdout.write_all(json.as_bytes())?;
-                stdout.flush()?;
+                stdout
+                    .write_all(json.as_bytes())
+                    .context("Failed to write session to stdout")?;
+                stdout.flush().context("Failed to flush stdout")?;
             }
         }
         OutputFormat::Script => {
@@ -605,14 +629,20 @@ fn handle_results(ctx: ResultContext) -> Result<()> {
             }
 
             if let Some(path) = output_file {
-                let mut file = fs::File::create(&path)?;
-                script_output.write_to(&mut file)?;
-                file.flush()?;
+                let mut file = fs::File::create(&path)
+                    .with_context(|| format!("Failed to create output file: {}", path.display()))?;
+                script_output.write_to(&mut file).with_context(|| {
+                    format!("Failed to write deletion script to: {}", path.display())
+                })?;
+                file.flush()
+                    .with_context(|| format!("Failed to flush output file: {}", path.display()))?;
                 log::info!("Deletion script saved to {:?}", path);
             } else {
                 let mut stdout = io::stdout().lock();
-                script_output.write_to(&mut stdout)?;
-                stdout.flush()?;
+                script_output
+                    .write_to(&mut stdout)
+                    .context("Failed to write deletion script to stdout")?;
+                stdout.flush().context("Failed to flush stdout")?;
             }
         }
     }

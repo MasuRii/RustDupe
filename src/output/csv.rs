@@ -37,11 +37,11 @@ use crate::duplicates::DuplicateGroup;
 #[derive(Debug, Error)]
 pub enum CsvOutputError {
     /// I/O error during writing.
-    #[error("I/O error: {0}")]
+    #[error("I/O error during CSV generation: {0}")]
     Io(#[from] io::Error),
 
     /// Error during CSV serialization.
-    #[error("CSV error: {0}")]
+    #[error("CSV serialization error: {0}")]
     Csv(#[from] csv::Error),
 }
 

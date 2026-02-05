@@ -42,7 +42,7 @@ pub enum DeleteError {
     NotFound(PathBuf),
 
     /// Permission denied when attempting to delete.
-    #[error("permission denied: {0}")]
+    #[error("permission denied: {0} - try running with elevated privileges")]
     PermissionDenied(PathBuf),
 
     /// File was modified since scan (TOCTOU protection).

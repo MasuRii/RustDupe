@@ -240,7 +240,7 @@ pub enum JsonOutputError {
     Serialization(#[from] serde_json::Error),
 
     /// I/O error during writing
-    #[error("I/O error: {0}")]
+    #[error("I/O error during JSON generation: {0}")]
     Io(#[from] std::io::Error),
 }
 

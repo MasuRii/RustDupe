@@ -142,32 +142,11 @@ impl Default for ShutdownHandler {
 }
 
 /// Error type for signal handler installation.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum SignalError {
     /// Failed to install the Ctrl+C handler.
-    InstallFailed(ctrlc::Error),
-}
-
-impl std::fmt::Display for SignalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SignalError::InstallFailed(e) => write!(f, "Failed to install signal handler: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for SignalError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            SignalError::InstallFailed(e) => Some(e),
-        }
-    }
-}
-
-impl From<ctrlc::Error> for SignalError {
-    fn from(err: ctrlc::Error) -> Self {
-        SignalError::InstallFailed(err)
-    }
+    #[error("Failed to install signal handler: {0}")]
+    InstallFailed(#[from] ctrlc::Error),
 }
 
 /// Install a Ctrl+C handler that sets the shutdown flag on interrupt.

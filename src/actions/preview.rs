@@ -113,11 +113,11 @@ pub enum PreviewError {
     NotFound(String),
 
     /// Permission was denied when reading the file.
-    #[error("permission denied: {0}")]
+    #[error("permission denied: {0} - try running with elevated privileges")]
     PermissionDenied(String),
 
     /// An I/O error occurred.
-    #[error("I/O error: {0}")]
+    #[error("I/O error during preview: {0}")]
     Io(#[from] io::Error),
 }
 
