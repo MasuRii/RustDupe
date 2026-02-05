@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-05
+
 ### Added
 - Persistent Hash Caching: SQLite-backed cache for skipping unchanged files during rescans.
 - Session Management: Save/load duplicate reviews with SHA256 integrity verification.
@@ -46,5 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Initial project release.
 
-[Unreleased]: https://github.com/MasuRii/RustDupe/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/MasuRii/RustDupe/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/MasuRii/RustDupe/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MasuRii/RustDupe/releases/tag/v0.1.0

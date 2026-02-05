@@ -22,7 +22,7 @@ This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDU
 
 ### Prerequisites
 
-- **Rust 1.75 or later** — Install via [rustup](https://rustup.rs/)
+- **Rust 1.85 or later** — Install via [rustup](https://rustup.rs/)
 - **Git** — For version control
 - **pre-commit** (optional) — For automated pre-commit hooks
 
