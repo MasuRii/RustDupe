@@ -262,7 +262,8 @@
             <h1>Duplicate Report</h1>
             <div class="meta">
                 <span>{{ timestamp }}</span>
-                <span>RustDupe v0.2.0</span>
+                <span>RustDupe v{{ version }}</span>
+                <span>Scan Time: {{ total_duration }}</span>
             </div>
         </header>
 
@@ -282,6 +283,18 @@
             <div class="stat-box highlight">
                 <span class="stat-label">Reclaimable</span>
                 <span class="stat-value">{{ reclaimable_space }}</span>
+            </div>
+        </section>
+
+        <section class="phases" style="margin-bottom: 40px;">
+            <h2 style="margin-bottom: 20px;">Phase Breakdown</h2>
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 15px;">
+                {% for phase in phases %}
+                <div style="background: var(--card-bg); padding: 15px; border-radius: 10px; border: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--secondary-color);">{{ phase.name }}</span>
+                    <span style="font-weight: 700; color: var(--primary-color);">{{ phase.duration }}</span>
+                </div>
+                {% endfor %}
             </div>
         </section>
 

@@ -94,6 +94,18 @@ pub struct JsonSummary {
     pub reclaimable_space: u64,
     /// Duration of the scan in milliseconds
     pub scan_duration_ms: u64,
+    /// Duration of the walking phase in milliseconds
+    pub walk_duration_ms: u64,
+    /// Duration of the perceptual hashing phase in milliseconds
+    pub perceptual_duration_ms: u64,
+    /// Duration of the size grouping phase in milliseconds
+    pub size_duration_ms: u64,
+    /// Duration of the prehash phase in milliseconds
+    pub prehash_duration_ms: u64,
+    /// Duration of the full hash phase in milliseconds
+    pub fullhash_duration_ms: u64,
+    /// Duration of the similar image detection phase in milliseconds
+    pub clustering_duration_ms: u64,
     /// Whether the scan was interrupted
     pub interrupted: bool,
     /// The exit code number
@@ -129,6 +141,12 @@ impl JsonSummary {
             duplicate_files: summary.duplicate_files,
             reclaimable_space: summary.reclaimable_space,
             scan_duration_ms: summary.scan_duration.as_millis() as u64,
+            walk_duration_ms: summary.walk_duration.as_millis() as u64,
+            perceptual_duration_ms: summary.perceptual_duration.as_millis() as u64,
+            size_duration_ms: summary.size_duration.as_millis() as u64,
+            prehash_duration_ms: summary.prehash_duration.as_millis() as u64,
+            fullhash_duration_ms: summary.fullhash_duration.as_millis() as u64,
+            clustering_duration_ms: summary.clustering_duration.as_millis() as u64,
             interrupted: summary.interrupted,
             exit_code: exit_code.as_i32(),
             exit_code_name: exit_code.code_prefix().to_string(),
@@ -303,6 +321,12 @@ mod tests {
             duplicate_files: 10,
             reclaimable_space: 51200,
             scan_duration: Duration::from_millis(1234),
+            walk_duration: Duration::from_millis(100),
+            perceptual_duration: Duration::from_millis(0),
+            size_duration: Duration::from_millis(50),
+            prehash_duration: Duration::from_millis(200),
+            fullhash_duration: Duration::from_millis(800),
+            clustering_duration: Duration::from_millis(0),
             interrupted: false,
             scan_errors: Vec::new(),
             bloom_size_unique: 45,

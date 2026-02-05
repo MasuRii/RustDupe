@@ -35,14 +35,28 @@ use crate::duplicates::{DuplicateGroup, ScanSummary};
 pub struct HtmlOutput {
     /// Formatted generation timestamp
     pub timestamp: String,
+    /// Application version
+    pub version: String,
     /// Scan summary statistics
     pub summary: ScanSummary,
     /// Human-readable total size
     pub total_size: String,
     /// Human-readable reclaimable space
     pub reclaimable_space: String,
+    /// Human-readable total duration
+    pub total_duration: String,
+    /// Formatted phase durations
+    pub phases: Vec<HtmlPhaseDuration>,
     /// List of duplicate groups formatted for HTML
     pub groups: Vec<HtmlDuplicateGroup>,
+}
+
+/// A phase duration formatted for HTML.
+pub struct HtmlPhaseDuration {
+    /// Name of the phase
+    pub name: String,
+    /// Formatted duration
+    pub duration: String,
 }
 
 /// A duplicate group formatted for HTML presentation.
@@ -75,6 +89,37 @@ impl HtmlOutput {
     #[must_use]
     pub fn new(groups: &[DuplicateGroup], summary: &ScanSummary) -> Self {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let version = env!("CARGO_PKG_VERSION").to_string();
+
+        let mut phases = vec![
+            HtmlPhaseDuration {
+                name: "Walking".to_string(),
+                duration: format_duration(summary.walk_duration),
+            },
+            HtmlPhaseDuration {
+                name: "Size Grouping".to_string(),
+                duration: format_duration(summary.size_duration),
+            },
+            HtmlPhaseDuration {
+                name: "Prehashing".to_string(),
+                duration: format_duration(summary.prehash_duration),
+            },
+            HtmlPhaseDuration {
+                name: "Full Hashing".to_string(),
+                duration: format_duration(summary.fullhash_duration),
+            },
+        ];
+
+        if summary.images_perceptual_hashed > 0 {
+            phases.push(HtmlPhaseDuration {
+                name: "Perceptual Hashing".to_string(),
+                duration: format_duration(summary.perceptual_duration),
+            });
+            phases.push(HtmlPhaseDuration {
+                name: "Clustering".to_string(),
+                duration: format_duration(summary.clustering_duration),
+            });
+        }
 
         let html_groups = groups
             .iter()
@@ -95,13 +140,32 @@ impl HtmlOutput {
 
         Self {
             timestamp,
+            version,
             summary: summary.clone(),
             total_size: ByteSize::b(summary.total_size).to_string(),
             reclaimable_space: ByteSize::b(summary.reclaimable_space).to_string(),
+            total_duration: format_duration(summary.scan_duration),
+            phases,
             groups: html_groups,
         }
     }
+}
 
+/// Format a duration as a human-readable string.
+fn format_duration(duration: std::time::Duration) -> String {
+    let secs = duration.as_secs();
+    if secs >= 3600 {
+        format!("{}h {}m {}s", secs / 3600, (secs % 3600) / 60, secs % 60)
+    } else if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else if secs > 0 {
+        format!("{}.{:03}s", secs, duration.subsec_millis())
+    } else {
+        format!("{}ms", duration.subsec_millis())
+    }
+}
+
+impl HtmlOutput {
     /// Generate the HTML string using the embedded template.
     ///
     /// # Errors

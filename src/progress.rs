@@ -158,6 +158,7 @@ pub struct Progress {
     prehash: Mutex<Option<ProgressBar>>,
     fullhash: Mutex<Option<ProgressBar>>,
     prefix: Mutex<String>,
+    phase_name: Mutex<String>,
     active_phase: Mutex<Option<String>>,
     metrics: Mutex<HashMap<String, ProgressMetrics>>,
     total_bytes: Mutex<HashMap<String, u64>>,
@@ -186,6 +187,7 @@ impl Progress {
             prehash: Mutex::new(None),
             fullhash: Mutex::new(None),
             prefix: Mutex::new(String::new()),
+            phase_name: Mutex::new(String::new()),
             active_phase: Mutex::new(None),
             metrics: Mutex::new(HashMap::new()),
             total_bytes: Mutex::new(HashMap::new()),
@@ -216,6 +218,7 @@ impl Progress {
             prehash: Mutex::new(None),
             fullhash: Mutex::new(None),
             prefix: Mutex::new(String::new()),
+            phase_name: Mutex::new(String::new()),
             active_phase: Mutex::new(None),
             metrics: Mutex::new(HashMap::new()),
             total_bytes: Mutex::new(HashMap::new()),
@@ -287,6 +290,24 @@ impl ProgressCallback for Progress {
         }
 
         *self.active_phase.lock().unwrap() = Some(phase.to_string());
+        let display_name = match phase {
+            "walking" => "Walking",
+            "prehash" => "Prehashing",
+            "fullhash" => "Full Hashing",
+            "perceptual_hashing" => "Perceptual Hashing",
+            _ => {
+                let name = phase.replace('_', " ");
+                let mut chars = name.chars();
+                match chars.next() {
+                    None => "",
+                    Some(f) => {
+                        let capitalized = f.to_uppercase().collect::<String>() + chars.as_str();
+                        Box::leak(capitalized.into_boxed_str())
+                    }
+                }
+            }
+        };
+        *self.phase_name.lock().unwrap() = display_name.to_string();
         self.metrics
             .lock()
             .unwrap()
@@ -300,7 +321,7 @@ impl ProgressCallback for Progress {
             "walking" => {
                 let pb = self.multi.add(ProgressBar::new_spinner());
                 pb.set_style(self.walking_style());
-                pb.set_message("Walking directory");
+                pb.set_message("Walking");
                 // In accessible mode, use a slower tick rate
                 let tick_rate = if self.accessible { 500 } else { 100 };
                 pb.enable_steady_tick(Duration::from_millis(tick_rate));
@@ -317,16 +338,30 @@ impl ProgressCallback for Progress {
             "fullhash" => {
                 let pb = self.multi.add(ProgressBar::new(total as u64));
                 pb.set_style(self.fullhash_style());
-                pb.set_message("Full hashing");
+                pb.set_message("Full Hashing");
                 let mut fullhash = self.fullhash.lock().unwrap();
                 *fullhash = Some(pb);
+            }
+            "perceptual_hashing" => {
+                let pb = self.multi.add(ProgressBar::new(total as u64));
+                pb.set_style(self.prehash_style());
+                pb.set_message("Perceptual Hashing");
+                let mut prehash = self.prehash.lock().unwrap();
+                *prehash = Some(pb);
             }
             _ => {
                 // For any other phase, use a default bar
                 let pb = self.multi.add(ProgressBar::new(total as u64));
                 pb.set_style(self.prehash_style());
-                pb.set_message(phase.to_string());
-                // We don't store these for now, or we could have a map
+                let name = phase.replace('_', " ");
+                let mut chars = name.chars();
+                let capitalized = match chars.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+                };
+                pb.set_message(capitalized);
+                let mut prehash = self.prehash.lock().unwrap();
+                *prehash = Some(pb);
             }
         }
     }
@@ -337,10 +372,11 @@ impl ProgressCallback for Progress {
         }
 
         let prefix = self.prefix.lock().unwrap();
+        let phase_name = self.phase_name.lock().unwrap();
         let display_msg = if prefix.is_empty() {
-            truncate_path(path, 30)
+            format!("{}: {}", *phase_name, truncate_path(path, 30))
         } else {
-            format!("{}: {}", *prefix, truncate_path(path, 30))
+            format!("{}: {}: {}", *phase_name, *prefix, truncate_path(path, 30))
         };
 
         // Update metrics and generate status

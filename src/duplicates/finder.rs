@@ -35,6 +35,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use growable_bloom_filter::GrowableBloom;
+use indicatif::HumanDuration;
 use rayon::prelude::*;
 
 use crate::cache::{CacheEntry, HashCache};
@@ -1130,6 +1131,18 @@ pub struct ScanSummary {
     pub reclaimable_space: u64,
     /// Duration of the entire scan
     pub scan_duration: std::time::Duration,
+    /// Duration of the walking phase
+    pub walk_duration: std::time::Duration,
+    /// Duration of the perceptual hashing phase
+    pub perceptual_duration: std::time::Duration,
+    /// Duration of the size grouping phase (Phase 1)
+    pub size_duration: std::time::Duration,
+    /// Duration of the prehash phase (Phase 2)
+    pub prehash_duration: std::time::Duration,
+    /// Duration of the full hash phase (Phase 3)
+    pub fullhash_duration: std::time::Duration,
+    /// Duration of the similar image detection phase (Phase 4)
+    pub clustering_duration: std::time::Duration,
     /// Whether the scan was interrupted
     pub interrupted: bool,
     /// Errors encountered during the scan
@@ -1190,6 +1203,86 @@ impl ScanSummary {
             0.0
         } else {
             (self.bloom_prehash_fp as f64 / total_unique as f64) * 100.0
+        }
+    }
+
+    /// Print a human-readable summary of the scan results.
+    pub fn print(&self) {
+        eprintln!("\nScan Summary:");
+        eprintln!("  Total files:      {}", self.total_files);
+        eprintln!("  Total size:       {}", self.total_size_display());
+        eprintln!(
+            "  Duplicates found: {} (in {} groups)",
+            self.duplicate_files, self.duplicate_groups
+        );
+        eprintln!("  Reclaimable:      {}", self.reclaimable_display());
+        eprintln!("  Scan duration:    {}", HumanDuration(self.scan_duration));
+
+        eprintln!("\nPhase Breakdown:");
+        eprintln!(
+            "  Walking:          {:>10}",
+            HumanDuration(self.walk_duration)
+        );
+        eprintln!(
+            "  Size Grouping:    {:>10}",
+            HumanDuration(self.size_duration)
+        );
+        eprintln!(
+            "  Prehashing:       {:>10}",
+            HumanDuration(self.prehash_duration)
+        );
+        eprintln!(
+            "  Full Hashing:     {:>10}",
+            HumanDuration(self.fullhash_duration)
+        );
+        if self.images_perceptual_hashed > 0 {
+            eprintln!(
+                "  Perceptual Hash:  {:>10}",
+                HumanDuration(self.perceptual_duration)
+            );
+            eprintln!(
+                "  Clustering:       {:>10}",
+                HumanDuration(self.clustering_duration)
+            );
+        }
+
+        if self.bloom_size_unique > 0 || self.bloom_prehash_unique > 0 {
+            eprintln!("\nBloom Filter Efficiency:");
+            if self.bloom_size_unique > 0 {
+                eprintln!(
+                    "  Size Filter:      {} unique, {} FPs ({:.4}% FPR)",
+                    self.bloom_size_unique,
+                    self.bloom_size_fp,
+                    self.bloom_size_fp_rate()
+                );
+            }
+            if self.bloom_prehash_unique > 0 {
+                eprintln!(
+                    "  Prehash Filter:   {} unique, {} FPs ({:.4}% FPR)",
+                    self.bloom_prehash_unique,
+                    self.bloom_prehash_fp,
+                    self.bloom_prehash_fp_rate()
+                );
+            }
+        }
+
+        if self.cache_prehash_hits > 0
+            || self.cache_fullhash_hits > 0
+            || self.images_perceptual_hash_cache_hits > 0
+        {
+            eprintln!("\nCache Effectiveness:");
+            if self.cache_prehash_hits > 0 {
+                eprintln!("  Prehash hits:     {}", self.cache_prehash_hits);
+            }
+            if self.cache_fullhash_hits > 0 {
+                eprintln!("  Full hash hits:   {}", self.cache_fullhash_hits);
+            }
+            if self.images_perceptual_hash_cache_hits > 0 {
+                eprintln!(
+                    "  Perceptual hits:  {}",
+                    self.images_perceptual_hash_cache_hits
+                );
+            }
         }
     }
 }
@@ -1523,6 +1616,7 @@ impl DuplicateFinder {
         }
 
         // Phase 0: Walk directory and collect files
+        let walk_start = std::time::Instant::now();
         if let Some(ref callback) = self.config.progress_callback {
             callback.on_phase_start("walking", 0);
             callback.on_message(&format!("Walking {}", path.display()));
@@ -1559,10 +1653,12 @@ impl DuplicateFinder {
         if let Some(ref callback) = self.config.progress_callback {
             callback.on_phase_end("walking");
         }
+        summary.walk_duration = walk_start.elapsed();
 
         // Phase 0.5: Perceptual Hashing
         if self.config.similar_images {
             if let Some(ref hasher) = self.perceptual_hasher {
+                let perceptual_start = std::time::Instant::now();
                 log::info!("Phase 0.5: Computing perceptual hashes for images...");
                 let mut image_refs: Vec<&mut FileEntry> =
                     all_discovered.iter_mut().filter(|f| f.is_image()).collect();
@@ -1578,10 +1674,12 @@ impl DuplicateFinder {
                 if let Some(ref callback) = self.config.progress_callback {
                     callback.on_phase_end("perceptual_hashing");
                 }
+                summary.perceptual_duration = perceptual_start.elapsed();
             }
         }
 
         // Phase 1: Group by size (and prepare for Phase 2)
+        let size_start = std::time::Instant::now();
         let mut files = Vec::new();
         let mut images = Vec::new();
         let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
@@ -1633,6 +1731,7 @@ impl DuplicateFinder {
         if files.is_empty() {
             log::info!("No potential duplicates found after size filtering, scan complete");
             summary.scan_duration = start_time.elapsed();
+            summary.size_duration = size_start.elapsed();
             return Ok((Vec::new(), summary));
         }
 
@@ -1645,6 +1744,7 @@ impl DuplicateFinder {
         summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
         summary.bloom_size_unique = first_occurrences.len();
         summary.bloom_size_fp = size_stats.eliminated_unique;
+        summary.size_duration = size_start.elapsed();
 
         log::info!(
             "Phase 1 complete: {} → {} files ({:.1}% eliminated)",
@@ -1665,6 +1765,7 @@ impl DuplicateFinder {
         }
 
         // Phase 2: Prehash comparison
+        let prehash_start = std::time::Instant::now();
         log::info!("Phase 2: Computing prehashes...");
         let prehash_config = PrehashConfig {
             io_threads: self.config.io_threads,
@@ -1683,6 +1784,7 @@ impl DuplicateFinder {
         summary.cache_prehash_misses = prehash_stats.cache_misses;
         summary.bloom_prehash_unique = prehash_stats.bloom_unique;
         summary.bloom_prehash_fp = prehash_stats.bloom_fp;
+        summary.prehash_duration = prehash_start.elapsed();
 
         if !prehash_stats.errors.is_empty() {
             if self.config.strict {
@@ -1709,6 +1811,7 @@ impl DuplicateFinder {
         }
 
         // Phase 3: Full hash comparison
+        let fullhash_start = std::time::Instant::now();
         let fullhash_config = FullhashConfig {
             io_threads: self.config.io_threads,
             cache: self.config.cache.clone(),
@@ -1745,15 +1848,18 @@ impl DuplicateFinder {
         summary.reclaimable_space = fullhash_stats.wasted_space;
         summary.cache_fullhash_hits = fullhash_stats.cache_hits;
         summary.cache_fullhash_misses = fullhash_stats.cache_misses;
+        summary.fullhash_duration = fullhash_start.elapsed();
         summary.scan_duration = start_time.elapsed();
 
         // Phase 4: Similar Image Detection
         let mut all_groups = duplicate_groups;
         if self.config.similar_images {
+            let clustering_start = std::time::Instant::now();
             log::info!("Phase 4: Detecting similar images...");
             let similar_groups = self.find_similar_groups(&images);
             log::info!("Found {} similar image groups", similar_groups.len());
             all_groups.extend(similar_groups);
+            summary.clustering_duration = clustering_start.elapsed();
         }
 
         log::info!(
@@ -1825,6 +1931,7 @@ impl DuplicateFinder {
         let mut files = files;
         if self.config.similar_images {
             if let Some(ref hasher) = self.perceptual_hasher {
+                let perceptual_start = std::time::Instant::now();
                 log::info!("Phase 0.5: Computing perceptual hashes for images...");
                 let mut image_refs: Vec<&mut FileEntry> =
                     files.iter_mut().filter(|f| f.is_image()).collect();
@@ -1840,10 +1947,12 @@ impl DuplicateFinder {
                 if let Some(ref callback) = self.config.progress_callback {
                     callback.on_phase_end("perceptual_hashing");
                 }
+                summary.perceptual_duration = perceptual_start.elapsed();
             }
         }
 
         // Phase 1: Group by size
+        let size_start = std::time::Instant::now();
         let mut images = Vec::new();
         let mut potential_files = Vec::new();
         let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, files.len());
@@ -1879,6 +1988,7 @@ impl DuplicateFinder {
         summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
         summary.bloom_size_unique = first_occurrences.len();
         summary.bloom_size_fp = size_stats.eliminated_unique;
+        summary.size_duration = size_start.elapsed();
 
         if self.config.is_shutdown_requested() {
             return Err(FinderError::Interrupted);
@@ -1890,6 +2000,7 @@ impl DuplicateFinder {
         }
 
         // Phase 2: Prehash comparison
+        let prehash_start = std::time::Instant::now();
         let prehash_config = PrehashConfig {
             io_threads: self.config.io_threads,
             cache: self.config.cache.clone(),
@@ -1907,6 +2018,7 @@ impl DuplicateFinder {
         summary.cache_prehash_misses = prehash_stats.cache_misses;
         summary.bloom_prehash_unique = prehash_stats.bloom_unique;
         summary.bloom_prehash_fp = prehash_stats.bloom_fp;
+        summary.prehash_duration = prehash_start.elapsed();
 
         if !prehash_stats.errors.is_empty() {
             if self.config.strict {
@@ -1933,6 +2045,7 @@ impl DuplicateFinder {
         }
 
         // Phase 3: Full hash comparison
+        let fullhash_start = std::time::Instant::now();
         let fullhash_config = FullhashConfig {
             io_threads: self.config.io_threads,
             cache: self.config.cache.clone(),
@@ -1969,15 +2082,18 @@ impl DuplicateFinder {
         summary.reclaimable_space = fullhash_stats.wasted_space;
         summary.cache_fullhash_hits = fullhash_stats.cache_hits;
         summary.cache_fullhash_misses = fullhash_stats.cache_misses;
+        summary.fullhash_duration = fullhash_start.elapsed();
         summary.scan_duration = start_time.elapsed();
 
         // Phase 4: Similar Image Detection
         let mut all_groups = duplicate_groups;
         if self.config.similar_images {
+            let clustering_start = std::time::Instant::now();
             log::info!("Phase 4: Detecting similar images...");
             let similar_groups = self.find_similar_groups(&images);
             log::info!("Found {} similar image groups", similar_groups.len());
             all_groups.extend(similar_groups);
+            summary.clustering_duration = clustering_start.elapsed();
         }
 
         Ok((all_groups, summary))
@@ -2049,6 +2165,7 @@ impl DuplicateFinder {
         log::info!("Starting multi-directory scan of {} path(s)", paths.len());
 
         // Phase 0: Walk all directories and collect files
+        let walk_start = std::time::Instant::now();
         if let Some(ref callback) = self.config.progress_callback {
             callback.on_phase_start("walking", 0);
             callback.on_message(&format!("Walking {} directories", paths.len()));
@@ -2105,10 +2222,12 @@ impl DuplicateFinder {
         if let Some(ref callback) = self.config.progress_callback {
             callback.on_phase_end("walking");
         }
+        summary.walk_duration = walk_start.elapsed();
 
         // Phase 0.5: Perceptual Hashing
         if self.config.similar_images {
             if let Some(ref hasher) = self.perceptual_hasher {
+                let perceptual_start = std::time::Instant::now();
                 log::info!("Phase 0.5: Computing perceptual hashes for images...");
                 let mut image_refs: Vec<&mut FileEntry> =
                     all_discovered.iter_mut().filter(|f| f.is_image()).collect();
@@ -2124,10 +2243,12 @@ impl DuplicateFinder {
                 if let Some(ref callback) = self.config.progress_callback {
                     callback.on_phase_end("perceptual_hashing");
                 }
+                summary.perceptual_duration = perceptual_start.elapsed();
             }
         }
 
         // Phase 1: Group by size
+        let size_start = std::time::Instant::now();
         let mut files = Vec::new();
         let mut images = Vec::new();
         let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
@@ -2177,6 +2298,7 @@ impl DuplicateFinder {
         if files.is_empty() {
             log::info!("No potential duplicates found across all directories, scan complete");
             summary.scan_duration = start_time.elapsed();
+            summary.size_duration = size_start.elapsed();
             return Ok((Vec::new(), summary));
         }
 
@@ -2189,6 +2311,7 @@ impl DuplicateFinder {
         summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
         summary.bloom_size_unique = first_occurrences.len();
         summary.bloom_size_fp = size_stats.eliminated_unique;
+        summary.size_duration = size_start.elapsed();
 
         log::info!(
             "Phase 1 complete: {} → {} files ({:.1}% eliminated)",
@@ -2209,6 +2332,7 @@ impl DuplicateFinder {
         }
 
         // Phase 2: Prehash comparison
+        let prehash_start = std::time::Instant::now();
         log::info!("Phase 2: Computing prehashes...");
         let prehash_config = PrehashConfig {
             io_threads: self.config.io_threads,
@@ -2227,6 +2351,7 @@ impl DuplicateFinder {
         summary.cache_prehash_misses = prehash_stats.cache_misses;
         summary.bloom_prehash_unique = prehash_stats.bloom_unique;
         summary.bloom_prehash_fp = prehash_stats.bloom_fp;
+        summary.prehash_duration = prehash_start.elapsed();
 
         if !prehash_stats.errors.is_empty() {
             if self.config.strict {
@@ -2253,6 +2378,7 @@ impl DuplicateFinder {
         }
 
         // Phase 3: Full hash comparison
+        let fullhash_start = std::time::Instant::now();
         let fullhash_config = FullhashConfig {
             io_threads: self.config.io_threads,
             cache: self.config.cache.clone(),
@@ -2289,15 +2415,18 @@ impl DuplicateFinder {
         summary.reclaimable_space = fullhash_stats.wasted_space;
         summary.cache_fullhash_hits = fullhash_stats.cache_hits;
         summary.cache_fullhash_misses = fullhash_stats.cache_misses;
+        summary.fullhash_duration = fullhash_start.elapsed();
         summary.scan_duration = start_time.elapsed();
 
         // Phase 4: Similar Image Detection
         let mut all_groups = duplicate_groups;
         if self.config.similar_images {
+            let clustering_start = std::time::Instant::now();
             log::info!("Phase 4: Detecting similar images...");
             let similar_groups = self.find_similar_groups(&images);
             log::info!("Found {} similar image groups", similar_groups.len());
             all_groups.extend(similar_groups);
+            summary.clustering_duration = clustering_start.elapsed();
         }
 
         log::info!(

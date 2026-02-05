@@ -439,6 +439,7 @@ fn handle_scan(
         initial_session: None,
         reference_paths,
         dry_run: config.dry_run,
+        quiet,
         theme,
         keybindings,
         accessible,
@@ -449,7 +450,7 @@ fn handle_load(
     args: LoadArgs,
     config: Config,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
-    _quiet: bool,
+    quiet: bool,
     theme: ThemeArg,
     keybindings: KeyBindings,
     accessible: bool,
@@ -475,6 +476,7 @@ fn handle_load(
         initial_session: Some(session),
         reference_paths,
         dry_run: config.dry_run,
+        quiet,
         theme,
         keybindings,
         accessible,
@@ -494,6 +496,7 @@ struct ResultContext {
     initial_session: Option<Session>,
     reference_paths: Vec<std::path::PathBuf>,
     dry_run: bool,
+    quiet: bool,
     theme: ThemeArg,
     keybindings: KeyBindings,
     accessible: bool,
@@ -513,6 +516,7 @@ fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
         initial_session,
         reference_paths,
         dry_run,
+        quiet,
         theme,
         keybindings,
         accessible,
@@ -565,6 +569,10 @@ fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
     };
 
     // 3. Output results based on format
+    if output_format != OutputFormat::Tui && !quiet {
+        summary.print();
+    }
+
     match output_format {
         OutputFormat::Tui => {
             // Initialize TUI with results
