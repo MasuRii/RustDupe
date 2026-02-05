@@ -48,6 +48,7 @@ use std::time::SystemTime;
 // Re-export main types
 pub use hardlink::HardlinkTracker;
 pub use hasher::{hash_to_hex, hex_to_hash, Hash, Hasher, PREHASH_SIZE};
+pub use image_hasher::ImageHash;
 pub use path_utils::{
     is_nfc, normalize_path_str, normalize_path_str_cow, normalize_pathbuf, path_key, paths_equal,
     paths_equal_normalized,
@@ -106,6 +107,41 @@ pub struct FileEntry {
     /// Optional group name (set when using --group flag)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_name: Option<String>,
+    /// Optional perceptual image hash for similarity detection
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "perceptual_hash_serde"
+    )]
+    pub perceptual_hash: Option<ImageHash>,
+}
+
+pub mod perceptual_hash_serde {
+    use super::*;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(hash: &Option<ImageHash>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match hash {
+            Some(h) => serializer.serialize_some(h.as_bytes()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<ImageHash>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt: Option<Vec<u8>> = Option::deserialize(deserializer)?;
+        match opt {
+            Some(bytes) => ImageHash::from_bytes(&bytes)
+                .map(Some)
+                .map_err(|e| serde::de::Error::custom(format!("{:?}", e))),
+            None => Ok(None),
+        }
+    }
 }
 
 impl FileEntry {
@@ -125,6 +161,7 @@ impl FileEntry {
             is_symlink: false,
             is_hardlink: false,
             group_name: None,
+            perceptual_hash: None,
         }
     }
 
@@ -138,12 +175,33 @@ impl FileEntry {
             is_symlink: false,
             is_hardlink: false,
             group_name: Some(group_name),
+            perceptual_hash: None,
         }
     }
 
     /// Set the group name for this entry.
     pub fn set_group_name(&mut self, name: String) {
         self.group_name = Some(name);
+    }
+
+    /// Set the perceptual hash for this entry.
+    pub fn set_perceptual_hash(&mut self, hash: ImageHash) {
+        self.perceptual_hash = Some(hash);
+    }
+
+    /// Check if this file is likely an image based on its extension.
+    #[must_use]
+    pub fn is_image(&self) -> bool {
+        let extension = self
+            .path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+
+        FileCategory::Images
+            .extensions()
+            .contains(&extension.as_str())
     }
 }
 

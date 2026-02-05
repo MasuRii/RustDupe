@@ -179,6 +179,10 @@ pub struct Config {
     #[serde(default)]
     pub strict: bool,
 
+    /// Enable similar image detection using perceptual hashing.
+    #[serde(default)]
+    pub similar_images: bool,
+
     /// Enable paranoid mode (byte-by-byte verification).
     #[serde(default)]
     pub paranoid: bool,
@@ -262,6 +266,7 @@ impl Default for Config {
             older_than: None,
             io_threads: 4,
             strict: false,
+            similar_images: false,
             paranoid: false,
             ignore_patterns: Vec::new(),
             regex_include: Vec::new(),
@@ -442,6 +447,12 @@ impl Config {
         if args.no_strict {
             self.strict = false;
         }
+        if args.similar_images {
+            self.similar_images = true;
+        }
+        if args.no_similar_images {
+            self.similar_images = false;
+        }
         if args.paranoid {
             self.paranoid = true;
         }
@@ -521,6 +532,7 @@ fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str)
         "older_than",
         "io_threads",
         "strict",
+        "similar_images",
         "paranoid",
         "ignore_patterns",
         "regex_include",
@@ -618,6 +630,7 @@ fn validate_profile_keys(table: &toml_edit::Table, path: &str, content: &str) {
         "older_than",
         "io_threads",
         "strict",
+        "similar_images",
         "paranoid",
         "ignore_patterns",
         "regex_include",

@@ -934,6 +934,12 @@ pub struct FinderConfig {
     pub group_map: std::collections::HashMap<PathBuf, String>,
     /// False positive rate for Bloom filters (default: 0.01).
     pub bloom_fp_rate: f64,
+    /// Enable similar image detection using perceptual hashing.
+    pub similar_images: bool,
+    /// Algorithm to use for perceptual hashing.
+    pub perceptual_algorithm: crate::scanner::PerceptualAlgorithm,
+    /// Threshold for similarity matching (Hamming distance).
+    pub similarity_threshold: Option<u32>,
 }
 
 impl std::fmt::Debug for FinderConfig {
@@ -968,6 +974,9 @@ impl Default for FinderConfig {
             reference_paths: Vec::new(),
             group_map: std::collections::HashMap::new(),
             bloom_fp_rate: 0.01,
+            similar_images: false,
+            perceptual_algorithm: crate::scanner::PerceptualAlgorithm::default(),
+            similarity_threshold: None,
         }
     }
 }
@@ -1043,6 +1052,30 @@ impl FinderConfig {
         self
     }
 
+    /// Enable similar image detection.
+    #[must_use]
+    pub fn with_similar_images(mut self, enabled: bool) -> Self {
+        self.similar_images = enabled;
+        self
+    }
+
+    /// Set the perceptual hashing algorithm.
+    #[must_use]
+    pub fn with_perceptual_algorithm(
+        mut self,
+        algorithm: crate::scanner::PerceptualAlgorithm,
+    ) -> Self {
+        self.perceptual_algorithm = algorithm;
+        self
+    }
+
+    /// Set the similarity threshold.
+    #[must_use]
+    pub fn with_similarity_threshold(mut self, threshold: Option<u32>) -> Self {
+        self.similarity_threshold = threshold;
+        self
+    }
+
     /// Check if shutdown has been requested.
     fn is_shutdown_requested(&self) -> bool {
         self.shutdown_flag
@@ -1093,6 +1126,10 @@ pub struct ScanSummary {
     pub bloom_prehash_unique: usize,
     /// Number of unique prehashes incorrectly identified as duplicates by Bloom filter
     pub bloom_prehash_fp: usize,
+    /// Number of images processed for perceptual hashing
+    pub images_perceptual_hashed: usize,
+    /// Number of perceptual hash cache hits
+    pub images_perceptual_hash_cache_hits: usize,
 }
 
 impl ScanSummary {
@@ -1220,6 +1257,7 @@ pub enum FinderError {
 pub struct DuplicateFinder {
     config: FinderConfig,
     hasher: Arc<Hasher>,
+    perceptual_hasher: Option<crate::scanner::PerceptualHasher>,
 }
 
 impl DuplicateFinder {
@@ -1234,9 +1272,19 @@ impl DuplicateFinder {
         if let Some(ref flag) = config.shutdown_flag {
             hasher = hasher.with_shutdown_flag(flag.clone());
         }
+
+        let perceptual_hasher = if config.similar_images {
+            Some(crate::scanner::PerceptualHasher::new(
+                config.perceptual_algorithm,
+            ))
+        } else {
+            None
+        };
+
         Self {
             config,
             hasher: Arc::new(hasher),
+            perceptual_hasher,
         }
     }
 
@@ -1244,6 +1292,80 @@ impl DuplicateFinder {
     #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(FinderConfig::default())
+    }
+
+    /// Compute perceptual hashes for a list of files in parallel.
+    /// Returns (total_processed, cache_hits)
+    fn compute_perceptual_hashes(
+        &self,
+        files: &mut [&mut FileEntry],
+        hasher: &crate::scanner::PerceptualHasher,
+    ) -> (usize, usize) {
+        use rayon::prelude::*;
+        use std::sync::atomic::AtomicUsize;
+
+        let processed_count = AtomicUsize::new(0);
+        let cache_hits = AtomicUsize::new(0);
+
+        // Build thread pool for I/O
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(self.config.io_threads)
+            .build()
+            .unwrap_or_else(|_| {
+                rayon::ThreadPoolBuilder::new()
+                    .build()
+                    .expect("Failed to build global thread pool")
+            });
+
+        pool.install(|| {
+            files.par_iter_mut().for_each(|file| {
+                if !file.is_image() {
+                    return;
+                }
+
+                if self.config.is_shutdown_requested() {
+                    return;
+                }
+
+                // Check cache
+                if let Some(ref cache) = self.config.cache {
+                    if let Ok(Some(hash)) =
+                        cache.get_perceptual_hash(&file.path, file.size, file.modified)
+                    {
+                        file.set_perceptual_hash(hash);
+                        processed_count.fetch_add(1, Ordering::SeqCst);
+                        cache_hits.fetch_add(1, Ordering::SeqCst);
+                        return;
+                    }
+                }
+
+                // Compute
+                match hasher.compute_hash(&file.path) {
+                    Ok(hash) => {
+                        file.set_perceptual_hash(hash.clone());
+                        processed_count.fetch_add(1, Ordering::SeqCst);
+
+                        // Update cache
+                        if let Some(ref cache) = self.config.cache {
+                            let entry = CacheEntry::from((*file).clone());
+                            let _ = cache.insert_perceptual_hash(&entry, hash);
+                        }
+                    }
+                    Err(e) => {
+                        log::debug!(
+                            "Failed to compute perceptual hash for {}: {}",
+                            file.path.display(),
+                            e
+                        );
+                    }
+                }
+            });
+        });
+
+        (
+            processed_count.load(Ordering::SeqCst),
+            cache_hits.load(Ordering::SeqCst),
+        )
     }
 
     /// Find all duplicate files starting from the given path.
@@ -1371,6 +1493,30 @@ impl DuplicateFinder {
 
         if let Some(ref callback) = self.config.progress_callback {
             callback.on_phase_end("walking");
+        }
+
+        // Phase 0.5: Perceptual Hashing
+        if self.config.similar_images {
+            if let Some(ref hasher) = self.perceptual_hasher {
+                log::info!("Phase 0.5: Computing perceptual hashes for images...");
+                if let Some(ref callback) = self.config.progress_callback {
+                    callback.on_phase_start("perceptual_hashing", 0);
+                }
+
+                // Collect all discovered files for hashing
+                let mut all_files: Vec<&mut FileEntry> = files.iter_mut().collect();
+                for f in first_occurrences.values_mut() {
+                    all_files.push(f);
+                }
+
+                let (count, hits) = self.compute_perceptual_hashes(&mut all_files, hasher);
+                summary.images_perceptual_hashed = count;
+                summary.images_perceptual_hash_cache_hits = hits;
+
+                if let Some(ref callback) = self.config.progress_callback {
+                    callback.on_phase_end("perceptual_hashing");
+                }
+            }
         }
 
         // Summary counts should reflect what we actually found
@@ -1570,6 +1716,26 @@ impl DuplicateFinder {
         if files.is_empty() {
             summary.scan_duration = start_time.elapsed();
             return Ok((Vec::new(), summary));
+        }
+
+        // Phase 0.5: Perceptual Hashing
+        let mut files = files;
+        if self.config.similar_images {
+            if let Some(ref hasher) = self.perceptual_hasher {
+                log::info!("Phase 0.5: Computing perceptual hashes for images...");
+                if let Some(ref callback) = self.config.progress_callback {
+                    callback.on_phase_start("perceptual_hashing", 0);
+                }
+
+                let mut refs: Vec<&mut FileEntry> = files.iter_mut().collect();
+                let (count, hits) = self.compute_perceptual_hashes(&mut refs, hasher);
+                summary.images_perceptual_hashed = count;
+                summary.images_perceptual_hash_cache_hits = hits;
+
+                if let Some(ref callback) = self.config.progress_callback {
+                    callback.on_phase_end("perceptual_hashing");
+                }
+            }
         }
 
         // Phase 1: Group by size
@@ -1839,6 +2005,30 @@ impl DuplicateFinder {
 
         if let Some(ref callback) = self.config.progress_callback {
             callback.on_phase_end("walking");
+        }
+
+        // Phase 0.5: Perceptual Hashing
+        if self.config.similar_images {
+            if let Some(ref hasher) = self.perceptual_hasher {
+                log::info!("Phase 0.5: Computing perceptual hashes for images...");
+                if let Some(ref callback) = self.config.progress_callback {
+                    callback.on_phase_start("perceptual_hashing", 0);
+                }
+
+                // Collect all discovered files for hashing
+                let mut all_files: Vec<&mut FileEntry> = files.iter_mut().collect();
+                for f in first_occurrences.values_mut() {
+                    all_files.push(f);
+                }
+
+                let (count, hits) = self.compute_perceptual_hashes(&mut all_files, hasher);
+                summary.images_perceptual_hashed = count;
+                summary.images_perceptual_hash_cache_hits = hits;
+
+                if let Some(ref callback) = self.config.progress_callback {
+                    callback.on_phase_end("perceptual_hashing");
+                }
+            }
         }
 
         summary.total_files = files.len() + first_occurrences.len();

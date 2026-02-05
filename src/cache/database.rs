@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use thiserror::Error;
 
 use crate::cache::CacheEntry;
-use crate::scanner::Hash;
+use crate::scanner::{Hash, ImageHash};
 
 /// Errors that can occur during cache operations.
 #[derive(Error, Debug)]
@@ -67,6 +67,7 @@ impl HashCache {
                 inode INTEGER,
                 prehash BLOB NOT NULL,
                 fullhash BLOB,
+                perceptual_hash BLOB,
                 created_at INTEGER NOT NULL
             )",
             [],
@@ -79,6 +80,10 @@ impl HashCache {
             "CREATE INDEX IF NOT EXISTS idx_hashes_size_mtime ON hashes (size, mtime_ns)",
             [],
         )?;
+
+        // Migration: Add perceptual_hash column if it doesn't exist (v0.3.0)
+        // We use a try-and-ignore approach for simplicity in this version.
+        let _ = conn.execute("ALTER TABLE hashes ADD COLUMN perceptual_hash BLOB", []);
 
         Ok(Self {
             conn: Mutex::new(Some(conn)),
@@ -177,6 +182,37 @@ impl HashCache {
         Ok(None)
     }
 
+    /// Retrieve the perceptual hash for a file if it exists and metadata matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn get_perceptual_hash(
+        &self,
+        path: &Path,
+        size: u64,
+        mtime: SystemTime,
+    ) -> CacheResult<Option<ImageHash>> {
+        let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
+        let mtime_ns = Self::system_time_to_ns(mtime);
+
+        let mut stmt = conn.prepare_cached(
+            "SELECT perceptual_hash FROM hashes WHERE path = ?1 AND size = ?2 AND mtime_ns = ?3",
+        )?;
+        let mut rows = stmt.query(params![path.to_string_lossy().to_string(), size, mtime_ns])?;
+
+        if let Some(row) = rows.next()? {
+            let blob: Option<Vec<u8>> = row.get(0)?;
+            if let Some(blob) = blob {
+                if let Ok(hash) = ImageHash::from_bytes(&blob) {
+                    return Ok(Some(hash));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Insert or update a prehash in the cache.
     ///
     /// # Errors
@@ -189,14 +225,15 @@ impl HashCache {
         let now = Self::now_secs();
 
         conn.execute(
-            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)
+            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7)
              ON CONFLICT(path) DO UPDATE SET
                 size = excluded.size,
                 mtime_ns = excluded.mtime_ns,
                 inode = excluded.inode,
                 prehash = excluded.prehash,
                 fullhash = NULL,
+                perceptual_hash = excluded.perceptual_hash,
                 created_at = excluded.created_at",
             params![
                 entry.path.to_string_lossy().to_string(),
@@ -204,6 +241,7 @@ impl HashCache {
                 mtime_ns,
                 entry.inode,
                 &hash[..],
+                entry.perceptual_hash.as_ref().map(|h| h.as_bytes()),
                 now,
             ],
         )?;
@@ -222,14 +260,15 @@ impl HashCache {
         let now = Self::now_secs();
 
         conn.execute(
-            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(path) DO UPDATE SET
                 size = excluded.size,
                 mtime_ns = excluded.mtime_ns,
                 inode = excluded.inode,
                 prehash = excluded.prehash,
                 fullhash = excluded.fullhash,
+                perceptual_hash = excluded.perceptual_hash,
                 created_at = excluded.created_at",
             params![
                 entry.path.to_string_lossy().to_string(),
@@ -238,6 +277,41 @@ impl HashCache {
                 entry.inode,
                 &entry.prehash[..],
                 &hash[..],
+                entry.perceptual_hash.as_ref().map(|h| h.as_bytes()),
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Insert or update a perceptual hash in the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn insert_perceptual_hash(&self, entry: &CacheEntry, hash: ImageHash) -> CacheResult<()> {
+        let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
+        let mtime_ns = Self::system_time_to_ns(entry.mtime);
+        let now = Self::now_secs();
+
+        conn.execute(
+            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, created_at)
+             VALUES (?1, ?2, ?3, ?4, x'0000000000000000000000000000000000000000000000000000000000000000', NULL, ?5, ?6)
+             ON CONFLICT(path) DO UPDATE SET
+                prehash = CASE WHEN size = excluded.size AND mtime_ns = excluded.mtime_ns THEN hashes.prehash ELSE excluded.prehash END,
+                fullhash = CASE WHEN size = excluded.size AND mtime_ns = excluded.mtime_ns THEN hashes.fullhash ELSE NULL END,
+                size = excluded.size,
+                mtime_ns = excluded.mtime_ns,
+                inode = excluded.inode,
+                perceptual_hash = excluded.perceptual_hash,
+                created_at = excluded.created_at",
+            params![
+                entry.path.to_string_lossy().to_string(),
+                entry.size,
+                mtime_ns,
+                entry.inode,
+                hash.as_bytes(),
                 now,
             ],
         )?;
@@ -257,14 +331,15 @@ impl HashCache {
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare_cached(
-                "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, created_at)
-                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, created_at)
+                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                   ON CONFLICT(path) DO UPDATE SET
                      size = excluded.size,
                      mtime_ns = excluded.mtime_ns,
                      inode = excluded.inode,
                      prehash = excluded.prehash,
                      fullhash = excluded.fullhash,
+                     perceptual_hash = excluded.perceptual_hash,
                      created_at = excluded.created_at",
             )?;
 
@@ -277,6 +352,7 @@ impl HashCache {
                     entry.inode,
                     &entry.prehash[..],
                     entry.fullhash.as_ref().map(|h| &h[..]),
+                    entry.perceptual_hash.as_ref().map(|h| h.as_bytes()),
                     now,
                 ])?;
             }
@@ -426,6 +502,7 @@ mod tests {
             inode: Some(123),
             prehash: [1u8; 32],
             fullhash: None,
+            perceptual_hash: None,
         };
 
         // Test insert and get prehash
@@ -475,6 +552,7 @@ mod tests {
                 inode: None,
                 prehash: [1u8; 32],
                 fullhash: Some([11u8; 32]),
+                perceptual_hash: None,
             },
             CacheEntry {
                 path: PathBuf::from("/test/2.txt"),
@@ -483,6 +561,7 @@ mod tests {
                 inode: None,
                 prehash: [2u8; 32],
                 fullhash: None,
+                perceptual_hash: None,
             },
         ];
 
@@ -529,6 +608,7 @@ mod tests {
             inode: None,
             prehash: [1u8; 32],
             fullhash: None,
+            perceptual_hash: None,
         };
 
         cache.insert_prehash(&entry, [1u8; 32]).unwrap();
@@ -563,6 +643,7 @@ mod tests {
             inode: None,
             prehash: [1u8; 32],
             fullhash: None,
+            perceptual_hash: None,
         };
 
         let entry_fake = CacheEntry {
@@ -572,6 +653,7 @@ mod tests {
             inode: None,
             prehash: [2u8; 32],
             fullhash: None,
+            perceptual_hash: None,
         };
 
         cache.insert_prehash(&entry_real, [1u8; 32]).unwrap();
@@ -598,6 +680,7 @@ mod tests {
             inode: None,
             prehash: [1u8; 32],
             fullhash: None,
+            perceptual_hash: None,
         };
 
         cache.insert_prehash(&entry, [1u8; 32]).unwrap();
@@ -657,6 +740,7 @@ mod tests {
                 inode: Some(i as u64),
                 prehash: [i as u8; 32],
                 fullhash: Some([i as u8; 32]),
+                perceptual_hash: None,
             });
         }
 
@@ -702,6 +786,7 @@ mod tests {
             inode: None,
             prehash: [0u8; 32],
             fullhash: None,
+            perceptual_hash: None,
         };
         let res = cache.insert_prehash(&entry, [0u8; 32]);
         assert!(matches!(res, Err(CacheError::ConnectionClosed)));
@@ -721,10 +806,11 @@ mod tests {
             let lock = cache.conn.lock().unwrap();
             let conn = lock.as_ref().unwrap();
             conn.execute(
-                "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, created_at)
-                 VALUES ('/test/file.txt', 1024, ?1, NULL, x'010203', NULL, ?2)",
+                "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, created_at)
+                  VALUES ('/test/file.txt', 1024, ?1, NULL, x'010203', NULL, NULL, ?2)",
                 params![HashCache::system_time_to_ns(now), HashCache::now_secs()],
             )
+
             .unwrap();
         }
 

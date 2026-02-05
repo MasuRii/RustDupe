@@ -112,6 +112,10 @@ pub struct JsonSummary {
     pub bloom_prehash_fp: usize,
     /// Observed false positive rate for the prehash Bloom filter (%)
     pub bloom_prehash_fp_rate: f64,
+    /// Number of images processed for perceptual hashing
+    pub images_perceptual_hashed: usize,
+    /// Number of perceptual hash cache hits
+    pub images_perceptual_hash_cache_hits: usize,
 }
 
 impl JsonSummary {
@@ -134,6 +138,8 @@ impl JsonSummary {
             bloom_prehash_unique: summary.bloom_prehash_unique,
             bloom_prehash_fp: summary.bloom_prehash_fp,
             bloom_prehash_fp_rate: summary.bloom_prehash_fp_rate(),
+            images_perceptual_hashed: summary.images_perceptual_hashed,
+            images_perceptual_hash_cache_hits: summary.images_perceptual_hash_cache_hits,
         }
     }
 }
@@ -303,6 +309,8 @@ mod tests {
             bloom_size_fp: 5,
             bloom_prehash_unique: 25,
             bloom_prehash_fp: 5,
+            images_perceptual_hashed: 0,
+            images_perceptual_hash_cache_hits: 0,
         }
     }
 

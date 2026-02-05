@@ -60,6 +60,7 @@ fn test_cache_on_readonly_filesystem() {
             inode: None,
             prehash: [0u8; 32],
             fullhash: None,
+            perceptual_hash: None,
         };
         cache.insert_prehash(&entry, [0u8; 32]).unwrap();
         cache.close().unwrap();
@@ -81,6 +82,7 @@ fn test_cache_on_readonly_filesystem() {
             inode: None,
             prehash: [0u8; 32],
             fullhash: None,
+            perceptual_hash: None,
         };
         // This should fail because the database is read-only
         let res = cache.insert_prehash(&entry, [0u8; 32]);

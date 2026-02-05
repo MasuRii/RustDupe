@@ -382,7 +382,9 @@ fn handle_scan(
             .with_shutdown_flag(shutdown_flag.clone())
             .with_reference_paths(reference_paths.clone())
             .with_group_map(group_map)
-            .with_bloom_fp_rate(config.bloom_fp_rate);
+            .with_bloom_fp_rate(config.bloom_fp_rate)
+            .with_similar_images(config.similar_images)
+            .with_similarity_threshold(config.similarity_threshold);
 
         if let Some(cache) = hash_cache {
             finder_config = finder_config.with_cache(cache);
@@ -412,6 +414,7 @@ fn handle_scan(
                     file_categories: config.file_types.iter().map(|&t| t.into()).collect(),
                     io_threads: config.io_threads,
                     paranoid: config.paranoid,
+                    similar_images: config.similar_images,
                 };
                 (groups, summary, canonical_paths, settings, reference_paths)
             }

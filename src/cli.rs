@@ -438,6 +438,18 @@ pub struct ScanArgs {
     #[arg(long = "no-strict", overrides_with = "strict", hide = true)]
     pub no_strict: bool,
 
+    /// Enable similar image detection using perceptual hashing
+    #[arg(long = "similar-images", help_heading = "Scanning Options")]
+    pub similar_images: bool,
+
+    /// Disable similar image detection
+    #[arg(
+        long = "no-similar-images",
+        overrides_with = "similar_images",
+        hide = true
+    )]
+    pub no_similar_images: bool,
+
     /// False positive rate for Bloom filters (default: 0.01)
     #[arg(long, value_name = "RATE", help_heading = "Scanning Options")]
     pub bloom_fp_rate: Option<f64>,

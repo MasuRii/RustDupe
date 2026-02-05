@@ -113,6 +113,9 @@ pub struct SessionSettings {
     pub io_threads: usize,
     /// Whether byte-by-byte verification was enabled.
     pub paranoid: bool,
+    /// Whether similar image detection was enabled.
+    #[serde(default)]
+    pub similar_images: bool,
 }
 
 /// A group of duplicates within a session.

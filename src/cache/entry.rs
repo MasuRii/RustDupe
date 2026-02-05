@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::scanner::{FileEntry, Hash};
+use crate::scanner::{FileEntry, Hash, ImageHash};
 
 /// Represents a single file entry in the hash cache.
 ///
@@ -28,6 +28,13 @@ pub struct CacheEntry {
     pub prehash: Hash,
     /// Optional full hash of the file.
     pub fullhash: Option<Hash>,
+    /// Optional perceptual hash of the image.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::scanner::perceptual_hash_serde"
+    )]
+    pub perceptual_hash: Option<ImageHash>,
 }
 
 impl CacheEntry {
@@ -78,6 +85,7 @@ impl From<FileEntry> for CacheEntry {
             inode: None, // FileEntry currently doesn't store inode
             prehash: [0u8; 32],
             fullhash: None,
+            perceptual_hash: entry.perceptual_hash,
         }
     }
 }
@@ -97,6 +105,7 @@ mod tests {
             inode: Some(123),
             prehash: [0u8; 32],
             fullhash: None,
+            perceptual_hash: None,
         };
 
         assert!(entry.is_valid(100, now, Some(123)));

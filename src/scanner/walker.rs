@@ -506,6 +506,7 @@ impl Walker {
             is_symlink,
             is_hardlink: false,
             group_name: self.group_name.clone(),
+            perceptual_hash: None,
         }))
     }
 
