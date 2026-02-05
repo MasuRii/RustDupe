@@ -143,12 +143,16 @@ pub struct Cli {
     pub quiet: bool,
 
     /// Disable colored output
-    #[arg(long, global = true, env = "NO_COLOR")]
+    #[arg(long = "no-color", global = true, env = "NO_COLOR", value_parser = clap::builder::BoolishValueParser::new())]
     pub no_color: bool,
 
+    /// Enable colored output
+    #[arg(long = "color", overrides_with = "no_color", hide = true)]
+    pub color: bool,
+
     /// TUI theme (light, dark, auto)
-    #[arg(long, value_enum, default_value = "auto", global = true)]
-    pub theme: ThemeArg,
+    #[arg(long = "theme", value_enum, global = true)]
+    pub theme: Option<ThemeArg>,
 
     /// Keybinding profile for TUI navigation (universal, vim, standard, emacs)
     ///
@@ -172,8 +176,12 @@ pub struct Cli {
     /// - Disables animations and spinners
     /// - Simplifies progress output (no cursor movement)
     /// - Reduces screen refresh rate for better screen reader performance
-    #[arg(long, global = true, env = "RUSTDUPE_ACCESSIBLE")]
+    #[arg(long = "accessible", global = true)]
     pub accessible: bool,
+
+    /// Disable accessible mode
+    #[arg(long = "no-accessible", overrides_with = "accessible", hide = true)]
+    pub no_accessible: bool,
 
     /// Subcommand to execute
     #[command(subcommand)]
@@ -215,14 +223,8 @@ pub struct ScanArgs {
     pub save_session: Option<PathBuf>,
 
     /// Output format (tui for interactive, json/csv for scripting, session for persistence, html for report, script for deletion)
-    #[arg(
-        short,
-        long,
-        value_enum,
-        default_value = "tui",
-        help_heading = "Output Options"
-    )]
-    pub output: OutputFormat,
+    #[arg(short, long, value_enum, help_heading = "Output Options")]
+    pub output: Option<OutputFormat>,
 
     /// Write output to a file instead of stdout
     #[arg(long, value_name = "PATH", help_heading = "Output Options")]
@@ -296,61 +298,92 @@ pub struct ScanArgs {
     /// Follow symbolic links during scan
     ///
     /// Warning: May cause infinite loops if symlinks form cycles.
-    #[arg(long, help_heading = "Scanning Options")]
+    #[arg(long = "follow-symlinks", help_heading = "Scanning Options")]
     pub follow_symlinks: bool,
 
+    /// Do not follow symbolic links during scan
+    #[arg(
+        long = "no-follow-symlinks",
+        overrides_with = "follow_symlinks",
+        hide = true
+    )]
+    pub no_follow_symlinks: bool,
+
     /// Skip hidden files and directories (starting with .)
-    #[arg(long, help_heading = "Scanning Options")]
+    #[arg(long = "skip-hidden", help_heading = "Scanning Options")]
     pub skip_hidden: bool,
+
+    /// Do not skip hidden files and directories
+    #[arg(long = "no-skip-hidden", overrides_with = "skip_hidden", hide = true)]
+    pub no_skip_hidden: bool,
 
     /// Number of I/O threads for hashing (default: 4)
     ///
     /// Lower values reduce disk thrashing on HDDs.
     #[arg(
-        long,
+        long = "io-threads",
         value_name = "N",
-        default_value = "4",
         help_heading = "Scanning Options"
     )]
-    pub io_threads: usize,
+    pub io_threads: Option<usize>,
 
     /// Enable paranoid mode: byte-by-byte verification after hash match
     ///
     /// Slower but guarantees no hash collisions.
-    #[arg(long, help_heading = "Scanning Options")]
+    #[arg(long = "paranoid", help_heading = "Scanning Options")]
     pub paranoid: bool,
+
+    /// Disable paranoid mode
+    #[arg(long = "no-paranoid", overrides_with = "paranoid", hide = true)]
+    pub no_paranoid: bool,
 
     /// Use permanent deletion instead of moving to trash
     ///
     /// Warning: Files cannot be recovered after permanent deletion.
-    #[arg(long, help_heading = "Safety & Deletion Options")]
+    #[arg(long = "permanent", help_heading = "Safety & Deletion Options")]
     pub permanent: bool,
 
+    /// Use system trash instead of permanent deletion
+    #[arg(long = "no-permanent", overrides_with = "permanent", hide = true)]
+    pub no_permanent: bool,
+
     /// Skip confirmation prompts (required with --permanent in non-interactive mode)
-    #[arg(short = 'y', long, help_heading = "Safety & Deletion Options")]
+    #[arg(short = 'y', long = "yes", help_heading = "Safety & Deletion Options")]
     pub yes: bool,
 
     /// Path to the hash cache database
     ///
     /// If not specified, a default platform-specific path is used.
-    #[arg(long, value_name = "PATH", help_heading = "Cache Options")]
+    #[arg(long = "cache", value_name = "PATH", help_heading = "Cache Options")]
     pub cache: Option<PathBuf>,
 
     /// Disable hash caching
-    #[arg(long, conflicts_with = "cache", help_heading = "Cache Options")]
+    #[arg(
+        long = "no-cache",
+        conflicts_with = "cache",
+        help_heading = "Cache Options"
+    )]
     pub no_cache: bool,
 
+    /// Enable hash caching
+    #[arg(long = "enable-cache", overrides_with = "no_cache", hide = true)]
+    pub enable_cache: bool,
+
     /// Clear the hash cache before scanning
-    #[arg(long, help_heading = "Cache Options")]
+    #[arg(long = "clear-cache", help_heading = "Cache Options")]
     pub clear_cache: bool,
 
     /// Do not perform any deletions (read-only mode)
     #[arg(
-        long,
+        long = "dry-run",
         alias = "analyze-only",
         help_heading = "Safety & Deletion Options"
     )]
     pub dry_run: bool,
+
+    /// Disable read-only mode (allow deletions)
+    #[arg(long = "no-dry-run", overrides_with = "dry_run", hide = true)]
+    pub no_dry_run: bool,
 
     /// Reference directories (files here are never selected for deletion)
     ///
@@ -391,14 +424,8 @@ pub struct LoadArgs {
     pub path: PathBuf,
 
     /// Output format (tui for interactive, json/csv for scripting, html for report, script for deletion)
-    #[arg(
-        short,
-        long,
-        value_enum,
-        default_value = "tui",
-        help_heading = "Output Options"
-    )]
-    pub output: OutputFormat,
+    #[arg(short, long, value_enum, help_heading = "Output Options")]
+    pub output: Option<OutputFormat>,
 
     /// Write output to a file instead of stdout
     #[arg(long, value_name = "PATH", help_heading = "Output Options")]
@@ -411,12 +438,20 @@ pub struct LoadArgs {
     /// Do not perform any deletions (read-only mode)
     #[arg(long, alias = "analyze-only", help_heading = "Safety Options")]
     pub dry_run: bool,
+
+    /// Disable read-only mode (allow deletions)
+    #[arg(long = "no-dry-run", overrides_with = "dry_run", hide = true)]
+    pub no_dry_run: bool,
 }
 
 /// Output format for scan results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize, Default,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     /// Interactive terminal user interface
+    #[default]
     Tui,
     /// JSON output for scripting
     Json,
@@ -431,7 +466,8 @@ pub enum OutputFormat {
 }
 
 /// Script type for deletion script generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ScriptTypeArg {
     /// POSIX-compliant shell script (sh/bash/zsh)
     Posix,
@@ -440,7 +476,8 @@ pub enum ScriptTypeArg {
 }
 
 /// File type categories for filtering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum FileType {
     /// Image files (jpg, png, etc.)
     Images,
@@ -458,6 +495,7 @@ pub enum FileType {
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default, serde::Serialize, serde::Deserialize,
 )]
+#[serde(rename_all = "lowercase")]
 pub enum ThemeArg {
     /// Use terminal's default color scheme or detect automatically
     #[default]
@@ -634,7 +672,7 @@ mod tests {
         match cli.command {
             Commands::Scan(args) => {
                 assert_eq!(args.paths, vec![PathBuf::from("/some/path")]);
-                assert_eq!(args.output, OutputFormat::Tui);
+                assert_eq!(args.output, None); // default is None now
             }
             _ => panic!("Expected Scan command"),
         }
@@ -672,7 +710,7 @@ mod tests {
 
         match cli.command {
             Commands::Scan(args) => {
-                assert_eq!(args.output, OutputFormat::Json);
+                assert_eq!(args.output, Some(OutputFormat::Json));
                 assert_eq!(args.min_size, Some(1_000_000));
                 assert_eq!(args.max_size, Some(1_000_000_000));
                 assert!(args.newer_than.is_some());
@@ -727,7 +765,7 @@ mod tests {
         .unwrap();
         match cli.command {
             Commands::Scan(args) => {
-                assert_eq!(args.output, OutputFormat::Script);
+                assert_eq!(args.output, Some(OutputFormat::Script));
                 assert_eq!(args.script_type, Some(ScriptTypeArg::Posix));
             }
             _ => panic!("Expected Scan command"),
@@ -748,7 +786,7 @@ mod tests {
         .unwrap();
         match cli.command {
             Commands::Load(args) => {
-                assert_eq!(args.output, OutputFormat::Script);
+                assert_eq!(args.output, Some(OutputFormat::Script));
                 assert_eq!(args.script_type, Some(ScriptTypeArg::Powershell));
             }
             _ => panic!("Expected Load command"),
@@ -766,7 +804,7 @@ mod tests {
         let cli = Cli::try_parse_from(["rustdupe", "scan", "/path", "--output", "csv"]).unwrap();
         match cli.command {
             Commands::Scan(args) => {
-                assert_eq!(args.output, OutputFormat::Csv);
+                assert_eq!(args.output, Some(OutputFormat::Csv));
             }
             _ => panic!("Expected Scan command"),
         }
@@ -799,7 +837,7 @@ mod tests {
             Commands::Scan(args) => {
                 assert!(args.follow_symlinks);
                 assert!(args.skip_hidden);
-                assert_eq!(args.io_threads, 8);
+                assert_eq!(args.io_threads, Some(8));
                 assert!(args.paranoid);
                 assert!(args.permanent);
                 assert!(args.yes);
@@ -891,7 +929,7 @@ mod tests {
         match cli.command {
             Commands::Load(args) => {
                 assert_eq!(args.path, PathBuf::from("session.json"));
-                assert_eq!(args.output, OutputFormat::Json);
+                assert_eq!(args.output, Some(OutputFormat::Json));
             }
             _ => panic!("Expected Load command"),
         }
@@ -1093,7 +1131,7 @@ mod tests {
                 assert_eq!(args.paths.len(), 2);
                 assert_eq!(args.paths[0], PathBuf::from("/path/1"));
                 assert_eq!(args.paths[1], PathBuf::from("/path/2"));
-                assert_eq!(args.output, OutputFormat::Json);
+                assert_eq!(args.output, Some(OutputFormat::Json));
                 assert_eq!(args.min_size, Some(1_000_000));
             }
             _ => panic!("Expected Scan command"),

@@ -29,28 +29,20 @@ fn main() -> Result<()> {
     // Load configuration
     let mut config = Config::load();
 
-    // Update config with CLI theme if provided (not the default Auto)
-    if cli.theme != ThemeArg::Auto {
-        config.theme = cli.theme;
+    // Merge global CLI flags into config
+    config.merge_cli(&cli);
+
+    // Save config if theme was explicitly changed on CLI (legacy behavior from task 2.3.1)
+    if cli.theme.is_some() {
         if let Err(e) = config.save() {
             log::warn!("Failed to save config: {}", e);
         }
     }
 
-    // Use theme from CLI if provided, otherwise from config
-    let theme = if cli.theme != ThemeArg::Auto {
-        cli.theme
-    } else {
-        config.theme
-    };
-
-    // Determine if accessible mode should be enabled
-    // CLI flag (--accessible) OR config setting OR NO_COLOR env var
-    let accessible = cli.accessible || config.is_accessible();
-
-    // Use keybinding profile from CLI if provided, otherwise from config
-    // CLI flag (including env var) overrides config file
-    let keybinding_profile = cli.keybinding_profile.unwrap_or(config.keybinding_profile);
+    // Determine theme, accessible mode and keybindings from merged config
+    let theme = config.theme;
+    let accessible = config.is_accessible();
+    let keybinding_profile = config.keybinding_profile;
 
     // Build KeyBindings with profile and custom overrides from config
     let keybindings = if config.has_custom_keybindings() {
@@ -79,22 +71,30 @@ fn main() -> Result<()> {
 
     // Handle subcommands
     match cli.command {
-        Commands::Scan(args) => handle_scan(
-            *args,
-            shutdown_flag,
-            cli.quiet,
-            theme,
-            keybindings,
-            accessible,
-        ),
-        Commands::Load(args) => handle_load(
-            args,
-            shutdown_flag,
-            cli.quiet,
-            theme,
-            keybindings,
-            accessible,
-        ),
+        Commands::Scan(args) => {
+            config.merge_scan_args(&args);
+            handle_scan(
+                *args,
+                config,
+                shutdown_flag,
+                cli.quiet,
+                theme,
+                keybindings,
+                accessible,
+            )
+        }
+        Commands::Load(args) => {
+            config.merge_load_args(&args);
+            handle_load(
+                args,
+                config,
+                shutdown_flag,
+                cli.quiet,
+                theme,
+                keybindings,
+                accessible,
+            )
+        }
     }?;
 
     // Check if shutdown was requested and exit with appropriate code
@@ -107,6 +107,7 @@ fn main() -> Result<()> {
 
 fn handle_scan(
     args: ScanArgs,
+    config: Config,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
     quiet: bool,
     theme: ThemeArg,
@@ -161,7 +162,7 @@ fn handle_scan(
             canonical_paths.len(),
             canonical_paths
         );
-        log::debug!("Output format: {}", args.output);
+        log::debug!("Output format: {}", config.output);
 
         // Validate and canonicalize reference paths
         let mut reference_paths = Vec::new();
@@ -189,7 +190,7 @@ fn handle_scan(
         }
 
         // Resolve cache path
-        let cache_path = if let Some(path) = args.cache {
+        let cache_path = if let Some(path) = config.cache.clone() {
             path
         } else {
             let project_dirs = ProjectDirs::from("com", "rustdupe", "rustdupe")
@@ -200,7 +201,7 @@ fn handle_scan(
         };
 
         // Initialize cache
-        let hash_cache = if !args.no_cache {
+        let hash_cache = if !config.no_cache {
             log::debug!("Using cache at: {:?}", cache_path);
             let cache = match HashCache::new(&cache_path) {
                 Ok(cache) => Some(cache),
@@ -254,7 +255,7 @@ fn handle_scan(
 
         // Compile regex patterns
         let mut regex_include = Vec::new();
-        for pattern in &args.regex_include {
+        for pattern in &config.regex_include {
             match regex::Regex::new(pattern) {
                 Ok(re) => regex_include.push(re),
                 Err(e) => anyhow::bail!("Invalid include regex '{}': {}", pattern, e),
@@ -262,7 +263,7 @@ fn handle_scan(
         }
 
         let mut regex_exclude = Vec::new();
-        for pattern in &args.regex_exclude {
+        for pattern in &config.regex_exclude {
             match regex::Regex::new(pattern) {
                 Ok(re) => regex_exclude.push(re),
                 Err(e) => anyhow::bail!("Invalid exclude regex '{}': {}", pattern, e),
@@ -271,16 +272,16 @@ fn handle_scan(
 
         // Configure the walker
         let walker_config = WalkerConfig::default()
-            .with_follow_symlinks(args.follow_symlinks)
-            .with_skip_hidden(args.skip_hidden)
-            .with_min_size(args.min_size)
-            .with_max_size(args.max_size)
-            .with_newer_than(args.newer_than)
-            .with_older_than(args.older_than)
-            .with_patterns(args.ignore_patterns.clone())
+            .with_follow_symlinks(config.follow_symlinks)
+            .with_skip_hidden(config.skip_hidden)
+            .with_min_size(config.min_size)
+            .with_max_size(config.max_size)
+            .with_newer_than(config.newer_than.map(std::time::SystemTime::from))
+            .with_older_than(config.older_than.map(std::time::SystemTime::from))
+            .with_patterns(config.ignore_patterns.clone())
             .with_regex_include(regex_include)
             .with_regex_exclude(regex_exclude)
-            .with_file_categories(args.file_types.iter().map(|&t| t.into()).collect());
+            .with_file_categories(config.file_types.iter().map(|&t| t.into()).collect());
 
         // Build group map from CLI arguments
         let group_map = if !args.groups.is_empty() {
@@ -296,8 +297,8 @@ fn handle_scan(
 
         // Configure the duplicate finder
         let mut finder_config = FinderConfig::default()
-            .with_io_threads(args.io_threads)
-            .with_paranoid(args.paranoid)
+            .with_io_threads(config.io_threads)
+            .with_paranoid(config.paranoid)
             .with_walker_config(walker_config)
             .with_shutdown_flag(shutdown_flag.clone())
             .with_reference_paths(reference_paths.clone())
@@ -320,23 +321,23 @@ fn handle_scan(
         match finder.find_duplicates_in_paths(canonical_paths.clone()) {
             Ok((groups, summary)) => {
                 let settings = SessionSettings {
-                    follow_symlinks: args.follow_symlinks,
-                    skip_hidden: args.skip_hidden,
-                    min_size: args.min_size,
-                    max_size: args.max_size,
-                    newer_than: args.newer_than.map(chrono::DateTime::from),
-                    older_than: args.older_than.map(chrono::DateTime::from),
-                    ignore_patterns: args.ignore_patterns.clone(),
-                    regex_include: args.regex_include.clone(),
-                    regex_exclude: args.regex_exclude.clone(),
-                    file_categories: args.file_types.iter().map(|&t| t.into()).collect(),
-                    io_threads: args.io_threads,
-                    paranoid: args.paranoid,
+                    follow_symlinks: config.follow_symlinks,
+                    skip_hidden: config.skip_hidden,
+                    min_size: config.min_size,
+                    max_size: config.max_size,
+                    newer_than: config.newer_than,
+                    older_than: config.older_than,
+                    ignore_patterns: config.ignore_patterns.clone(),
+                    regex_include: config.regex_include.clone(),
+                    regex_exclude: config.regex_exclude.clone(),
+                    file_categories: config.file_types.iter().map(|&t| t.into()).collect(),
+                    io_threads: config.io_threads,
+                    paranoid: config.paranoid,
                 };
                 (groups, summary, canonical_paths, settings, reference_paths)
             }
             Err(e) => {
-                if args.output == OutputFormat::Json {
+                if config.output == OutputFormat::Json {
                     let error_json = serde_json::json!({
                         "error": e.to_string(),
                         "interrupted": matches!(e, rustdupe::duplicates::FinderError::Interrupted)
@@ -351,7 +352,7 @@ fn handle_scan(
     handle_results(ResultContext {
         groups,
         summary,
-        output_format: args.output,
+        output_format: config.output,
         output_file: args.output_file,
         script_type: args.script_type,
         save_session: args.save_session,
@@ -360,7 +361,7 @@ fn handle_scan(
         shutdown_flag,
         initial_session: None,
         reference_paths,
-        dry_run: args.dry_run,
+        dry_run: config.dry_run,
         theme,
         keybindings,
         accessible,
@@ -369,6 +370,7 @@ fn handle_scan(
 
 fn handle_load(
     args: LoadArgs,
+    config: Config,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
     _quiet: bool,
     theme: ThemeArg,
@@ -386,7 +388,7 @@ fn handle_load(
     handle_results(ResultContext {
         groups,
         summary,
-        output_format: args.output,
+        output_format: config.output,
         output_file: args.output_file,
         script_type: args.script_type,
         save_session: None,
@@ -395,7 +397,7 @@ fn handle_load(
         shutdown_flag,
         initial_session: Some(session),
         reference_paths,
-        dry_run: args.dry_run,
+        dry_run: config.dry_run,
         theme,
         keybindings,
         accessible,

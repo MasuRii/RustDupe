@@ -1,20 +1,24 @@
 //! Application configuration management.
 //!
 //! This module handles loading and saving application-wide configuration
-//! settings, such as the preferred TUI theme and keybinding profile.
+//! settings using a layered approach (defaults, config file, environment variables).
+//!
+//! # Configuration Hierarchy
+//!
+//! 1. CLI arguments (highest priority, handled in main.rs)
+//! 2. Environment variables (`RUSTDUPE_*`)
+//! 3. Configuration file (`config.toml`)
+//! 4. Default values (lowest priority)
 //!
 //! # Custom Keybindings
 //!
 //! Custom keybindings can be defined in the config file using the `custom_keybindings`
 //! section. Each entry maps an action name to a list of key specifications:
 //!
-//! ```json
-//! {
-//!     "custom_keybindings": {
-//!         "navigate_down": ["n", "Ctrl+n"],
-//!         "quit": ["x", "Ctrl+q"]
-//!     }
-//! }
+//! ```toml
+//! [custom_keybindings]
+//! navigate_down = ["n", "Ctrl+n"]
+//! quit = ["x", "Ctrl+q"]
 //! ```
 //!
 //! ## Action Names
@@ -43,12 +47,16 @@
 
 use anyhow::Result;
 use directories::ProjectDirs;
+use figment::{
+    providers::{Env, Format, Serialized, Toml},
+    Figment,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use crate::cli::ThemeArg;
+use crate::cli::{FileType, OutputFormat, ThemeArg};
 use crate::tui::keybindings::KeybindingProfile;
 
 /// Type alias for custom keybinding overrides.
@@ -58,20 +66,6 @@ use crate::tui::keybindings::KeybindingProfile;
 pub type CustomKeybindings = HashMap<String, Vec<String>>;
 
 /// Accessibility settings for screen reader compatibility.
-///
-/// # Example
-///
-/// ```json
-/// {
-///     "accessibility": {
-///         "enabled": true,
-///         "use_ascii_borders": true,
-///         "disable_animations": true,
-///         "simplified_progress": true,
-///         "reduce_refresh_rate": true
-///     }
-/// }
-/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessibilityConfig {
     /// Enable accessible mode (overridden by --accessible CLI flag).
@@ -134,6 +128,7 @@ impl AccessibilityConfig {
 /// Application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    // TUI & Appearance
     /// Preferred TUI theme.
     #[serde(default)]
     pub theme: ThemeArg,
@@ -143,15 +138,89 @@ pub struct Config {
     pub keybinding_profile: KeybindingProfile,
 
     /// Custom keybinding overrides.
-    ///
-    /// These bindings are merged with the selected profile's defaults.
-    /// Custom bindings add to (not replace) the profile bindings.
     #[serde(default)]
     pub custom_keybindings: CustomKeybindings,
 
-    /// Accessibility settings for screen reader compatibility.
+    /// Accessibility settings.
     #[serde(default)]
     pub accessibility: AccessibilityConfig,
+
+    // Scanning Defaults
+    /// Follow symbolic links during scan.
+    #[serde(default)]
+    pub follow_symlinks: bool,
+
+    /// Skip hidden files and directories.
+    #[serde(default)]
+    pub skip_hidden: bool,
+
+    /// Minimum file size to consider.
+    #[serde(default)]
+    pub min_size: Option<u64>,
+
+    /// Maximum file size to consider.
+    #[serde(default)]
+    pub max_size: Option<u64>,
+
+    /// Only include files modified after this date.
+    #[serde(default)]
+    pub newer_than: Option<chrono::DateTime<chrono::Utc>>,
+
+    /// Only include files modified before this date.
+    #[serde(default)]
+    pub older_than: Option<chrono::DateTime<chrono::Utc>>,
+
+    /// Number of I/O threads for hashing.
+    #[serde(default = "default_io_threads")]
+    pub io_threads: usize,
+
+    /// Enable paranoid mode (byte-by-byte verification).
+    #[serde(default)]
+    pub paranoid: bool,
+
+    // Filtering Defaults
+    /// Glob patterns to ignore.
+    #[serde(default)]
+    pub ignore_patterns: Vec<String>,
+
+    /// Regex patterns to include.
+    #[serde(default)]
+    pub regex_include: Vec<String>,
+
+    /// Regex patterns to exclude.
+    #[serde(default)]
+    pub regex_exclude: Vec<String>,
+
+    /// Filter by file type categories.
+    #[serde(default)]
+    pub file_types: Vec<FileType>,
+
+    // Cache Defaults
+    /// Disable hash caching.
+    #[serde(default)]
+    pub no_cache: bool,
+
+    /// Path to the hash cache database.
+    #[serde(default)]
+    pub cache: Option<PathBuf>,
+
+    // Safety & Deletion Defaults
+    /// Use permanent deletion instead of moving to trash.
+    #[serde(default)]
+    pub permanent: bool,
+
+    /// Do not perform any deletions (read-only mode).
+    #[serde(default)]
+    pub dry_run: bool,
+
+    // Output Defaults
+    /// Default output format.
+    #[serde(default)]
+    pub output: OutputFormat,
+}
+
+fn default_io_threads() -> usize {
+    4
 }
 
 impl Default for Config {
@@ -161,50 +230,74 @@ impl Default for Config {
             keybinding_profile: KeybindingProfile::Universal,
             custom_keybindings: CustomKeybindings::new(),
             accessibility: AccessibilityConfig::default(),
+            follow_symlinks: false,
+            skip_hidden: false,
+            min_size: None,
+            max_size: None,
+            newer_than: None,
+            older_than: None,
+            io_threads: 4,
+            paranoid: false,
+            ignore_patterns: Vec::new(),
+            regex_include: Vec::new(),
+            regex_exclude: Vec::new(),
+            file_types: Vec::new(),
+            no_cache: false,
+            cache: None,
+            permanent: false,
+            dry_run: false,
+            output: OutputFormat::Tui,
         }
     }
 }
 
 impl Config {
-    /// Load the configuration from the default platform-specific path.
+    /// Load the configuration using figment for layered support.
+    ///
+    /// Layers (from highest to lowest priority):
+    /// 1. Environment variables prefixed with `RUSTDUPE_`
+    /// 2. Configuration file (`config.toml`)
+    /// 3. Defaults
     pub fn load() -> Self {
-        match Self::load_internal() {
+        Self::load_from_path(Self::config_path().unwrap_or_default())
+    }
+
+    /// Load configuration from a specific path.
+    pub fn load_from_path(path: PathBuf) -> Self {
+        let figment = Figment::from(Serialized::defaults(Self::default()))
+            .merge(Toml::file(&path))
+            .merge(Env::prefixed("RUSTDUPE_").split("__"));
+
+        match figment.extract::<Self>() {
             Ok(config) => config,
             Err(e) => {
-                log::debug!("Failed to load config, using defaults: {}", e);
+                // If there's an error, log it and return defaults.
+                eprintln!(
+                    "Warning: Failed to load configuration: {}. Using defaults.",
+                    e
+                );
                 Self::default()
             }
         }
     }
 
-    fn load_internal() -> Result<Self> {
-        let path = Self::config_path()?;
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-
-        let content = fs::read_to_string(path)?;
-        let config = serde_json::from_str(&content)?;
-        Ok(config)
-    }
-
-    /// Save the configuration to the default platform-specific path.
+    /// Save the configuration to the default platform-specific path (TOML format).
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path()?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        let content = serde_json::to_string_pretty(self)?;
+        let content = toml::to_string_pretty(self)?;
         fs::write(path, content)?;
         Ok(())
     }
 
-    /// Get the default platform-specific configuration path.
-    fn config_path() -> Result<PathBuf> {
+    /// Get the default platform-specific configuration path (config.toml).
+    pub fn config_path() -> Result<PathBuf> {
         let project_dirs = ProjectDirs::from("com", "rustdupe", "rustdupe")
             .ok_or_else(|| anyhow::anyhow!("Failed to determine project directories"))?;
-        Ok(project_dirs.config_dir().join("config.json"))
+        Ok(project_dirs.config_dir().join("config.toml"))
     }
 
     /// Check if custom keybindings are configured.
@@ -214,10 +307,6 @@ impl Config {
     }
 
     /// Check if accessible mode is active.
-    ///
-    /// Returns true if:
-    /// - Accessibility is enabled in config
-    /// - NO_COLOR environment variable is set
     #[must_use]
     pub fn is_accessible(&self) -> bool {
         self.accessibility.is_active()
@@ -226,5 +315,133 @@ impl Config {
     /// Enable accessible mode.
     pub fn enable_accessibility(&mut self) {
         self.accessibility.enabled = true;
+    }
+
+    /// Merge global CLI arguments into the configuration.
+    pub fn merge_cli(&mut self, cli: &crate::cli::Cli) {
+        if let Some(theme) = cli.theme {
+            self.theme = theme;
+        }
+        if let Some(profile) = cli.keybinding_profile {
+            self.keybinding_profile = profile;
+        }
+        if cli.accessible {
+            self.accessibility.enabled = true;
+        }
+        if cli.no_accessible {
+            self.accessibility.enabled = false;
+        }
+        if cli.no_color {
+            std::env::set_var("NO_COLOR", "1");
+        }
+        if cli.color {
+            std::env::remove_var("NO_COLOR");
+        }
+    }
+
+    /// Merge scan arguments into the configuration.
+    pub fn merge_scan_args(&mut self, args: &crate::cli::ScanArgs) {
+        if args.follow_symlinks {
+            self.follow_symlinks = true;
+        }
+        if args.no_follow_symlinks {
+            self.follow_symlinks = false;
+        }
+        if args.skip_hidden {
+            self.skip_hidden = true;
+        }
+        if args.no_skip_hidden {
+            self.skip_hidden = false;
+        }
+        if let Some(min) = args.min_size {
+            self.min_size = Some(min);
+        }
+        if let Some(max) = args.max_size {
+            self.max_size = Some(max);
+        }
+        if let Some(newer) = args.newer_than {
+            self.newer_than = Some(chrono::DateTime::from(newer));
+        }
+        if let Some(older) = args.older_than {
+            self.older_than = Some(chrono::DateTime::from(older));
+        }
+        if let Some(threads) = args.io_threads {
+            self.io_threads = threads;
+        }
+        if args.paranoid {
+            self.paranoid = true;
+        }
+        if args.no_paranoid {
+            self.paranoid = false;
+        }
+        if !args.ignore_patterns.is_empty() {
+            self.ignore_patterns = args.ignore_patterns.clone();
+        }
+        if !args.regex_include.is_empty() {
+            self.regex_include = args.regex_include.clone();
+        }
+        if !args.regex_exclude.is_empty() {
+            self.regex_exclude = args.regex_exclude.clone();
+        }
+        if !args.file_types.is_empty() {
+            self.file_types = args.file_types.clone();
+        }
+        if args.no_cache {
+            self.no_cache = true;
+        }
+        if args.enable_cache {
+            self.no_cache = false;
+        }
+        if let Some(cache) = &args.cache {
+            self.cache = Some(cache.clone());
+        }
+        if args.permanent {
+            self.permanent = true;
+        }
+        if args.no_permanent {
+            self.permanent = false;
+        }
+        if args.dry_run {
+            self.dry_run = true;
+        }
+        if args.no_dry_run {
+            self.dry_run = false;
+        }
+        if let Some(output) = args.output {
+            self.output = output;
+        }
+    }
+
+    /// Merge load arguments into the configuration.
+    pub fn merge_load_args(&mut self, args: &crate::cli::LoadArgs) {
+        if args.dry_run {
+            self.dry_run = true;
+        }
+        if args.no_dry_run {
+            self.dry_run = false;
+        }
+        if let Some(output) = args.output {
+            self.output = output;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_default() {
+        let config = Config::default();
+        assert_eq!(config.theme, ThemeArg::Auto);
+        assert_eq!(config.io_threads, 4);
+        assert!(!config.follow_symlinks);
+    }
+
+    #[test]
+    fn test_config_path() {
+        let path = Config::config_path().unwrap();
+        assert!(path.to_string_lossy().contains("rustdupe"));
+        assert!(path.ends_with("config.toml"));
     }
 }
