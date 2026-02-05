@@ -245,8 +245,12 @@ fn run_tui_inner(
         terminal.draw(|frame| render(frame, app))?;
 
         // Poll for events with timeout
-        if let Some(action) = event_handler.poll(POLL_TIMEOUT)? {
-            handle_action(app, action, &shutdown_flag)?;
+        if let Some(crossterm::event::Event::Key(key)) = event_handler.poll_event(POLL_TIMEOUT)? {
+            if app.mode() == AppMode::Searching {
+                handle_search_key(app, key);
+            } else if let Some(action) = event_handler.translate_key(key) {
+                handle_action(app, action, &shutdown_flag)?;
+            }
         }
 
         // Frame rate limiting
@@ -318,6 +322,48 @@ fn handle_action(
     }
 
     Ok(())
+}
+
+/// Handle keyboard input when in search mode.
+fn handle_search_key(app: &mut App, key: crossterm::event::KeyEvent) {
+    use crossterm::event::KeyCode;
+
+    if key.kind != crossterm::event::KeyEventKind::Press {
+        return;
+    }
+
+    match key.code {
+        KeyCode::Char(c) => {
+            let mut query = app.search_query().to_string();
+            query.push(c);
+            app.set_search_query(query);
+        }
+        KeyCode::Backspace => {
+            let mut query = app.search_query().to_string();
+            query.pop();
+            app.set_search_query(query);
+        }
+        KeyCode::Enter => {
+            app.set_mode(AppMode::Reviewing);
+        }
+        KeyCode::Esc => {
+            app.clear_search();
+            app.set_mode(AppMode::Reviewing);
+        }
+        KeyCode::Down => {
+            app.next();
+        }
+        KeyCode::Up => {
+            app.previous();
+        }
+        KeyCode::PageDown => {
+            app.next_group();
+        }
+        KeyCode::PageUp => {
+            app.previous_group();
+        }
+        _ => {}
+    }
 }
 
 /// Perform file deletion for selected files.

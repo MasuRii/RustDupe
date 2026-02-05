@@ -703,6 +703,11 @@ impl KeyBindings {
         );
 
         bindings.insert(
+            Action::Search,
+            vec![Self::key(KeyCode::Char('/'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
             Action::Delete,
             vec![Self::key(KeyCode::Char('d'), KeyModifiers::NONE)],
         );
@@ -869,6 +874,11 @@ impl KeyBindings {
         );
 
         bindings.insert(
+            Action::Search,
+            vec![Self::key(KeyCode::Char('/'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
             Action::Delete,
             vec![Self::key(KeyCode::Char('d'), KeyModifiers::NONE)],
         );
@@ -1008,6 +1018,11 @@ impl KeyBindings {
         bindings.insert(
             Action::SelectGroup,
             vec![Self::key(KeyCode::Char('b'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::Search,
+            vec![Self::key(KeyCode::Char('/'), KeyModifiers::NONE)],
         );
 
         bindings.insert(
@@ -1166,6 +1181,11 @@ impl KeyBindings {
         bindings.insert(
             Action::SelectGroup,
             vec![Self::key(KeyCode::Char('b'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::Search,
+            vec![Self::key(KeyCode::Char('/'), KeyModifiers::NONE)],
         );
 
         bindings.insert(

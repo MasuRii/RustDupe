@@ -147,6 +147,11 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
             "rustdupe - Smart Duplicate Finder{} [Select Group]",
             dry_run_suffix
         ),
+        AppMode::Searching => format!(
+            "rustdupe - Smart Duplicate Finder{} [Searching: {}]",
+            dry_run_suffix,
+            app.search_query()
+        ),
         AppMode::ShowingHelp => {
             format!("rustdupe - Smart Duplicate Finder{} [Help]", dry_run_suffix)
         }
@@ -171,7 +176,13 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         String::new()
     };
 
-    let header_text = format!("{}{}", title, stats);
+    let search_indicator = if app.is_searching() && app.mode() != AppMode::Searching {
+        format!(" [Filter: {}]", app.search_query())
+    } else {
+        String::new()
+    };
+
+    let header_text = format!("{}{}{}", title, search_indicator, stats);
     let header = Paragraph::new(header_text)
         .style(
             Style::default()
@@ -196,6 +207,7 @@ fn render_content(frame: &mut Frame, app: &App, area: Rect) {
         | AppMode::Confirming
         | AppMode::SelectingFolder
         | AppMode::SelectingGroup
+        | AppMode::Searching
         | AppMode::ShowingHelp => render_reviewing_content(frame, app, area),
         AppMode::Quitting => render_quitting_content(frame, app, area),
     }
@@ -313,6 +325,18 @@ fn render_reviewing_content(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    if app.is_searching() && app.visible_group_count() == 0 {
+        let message = Paragraph::new(format!("No matches for filter: '{}'", app.search_query()))
+            .style(Style::default().fg(app.theme().danger))
+            .alignment(Alignment::Center)
+            .block(create_block_with_title(
+                app.is_accessible(),
+                "Filter Results",
+            ));
+        frame.render_widget(message, area);
+        return;
+    }
+
     // Split into groups list and files list
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -328,13 +352,12 @@ fn render_reviewing_content(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Render the list of duplicate groups.
 fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
-    let groups = app.groups();
+    let visible_count = app.visible_group_count();
     let selected_group = app.group_index();
 
-    let items: Vec<ListItem> = groups
-        .iter()
-        .enumerate()
-        .map(|(i, group)| {
+    let items: Vec<ListItem> = (0..visible_count)
+        .filter_map(|i| {
+            let group = app.visible_group_at(i)?;
             let size = format_size(group.size);
             let copies = group.files.len();
             let wasted = format_size(group.wasted_space());
@@ -371,7 +394,7 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(app.theme().normal)
             };
 
-            ListItem::new(text).style(style)
+            Some(ListItem::new(text).style(style))
         })
         .collect();
 
@@ -380,13 +403,17 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
 
     // Create scrollbar state
     let mut scrollbar_state =
-        ScrollbarState::new(groups.len().saturating_sub(visible_height)).position(scroll);
+        ScrollbarState::new(visible_count.saturating_sub(visible_height)).position(scroll);
 
     let list = List::new(items)
         .block(
             create_block_with_title(
                 app.is_accessible(),
-                format!("Duplicate Groups ({}/{})", selected_group + 1, groups.len()),
+                format!(
+                    "Duplicate Groups ({}/{})",
+                    selected_group + 1,
+                    visible_count
+                ),
             )
             .border_style(Style::default().fg(app.theme().primary)),
         )
@@ -406,7 +433,7 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(list, inner_chunks[0]);
 
     // Render scrollbar if needed
-    if groups.len() > visible_height {
+    if visible_count > visible_height {
         // Use ASCII symbols in accessible mode
         let (begin_sym, end_sym) = if app.is_accessible() {
             ("^", "v")
@@ -899,6 +926,7 @@ fn get_footer_commands(app: &App) -> Vec<(&'static str, &'static str)> {
         AppMode::Confirming => vec![("Enter", "Confirm"), ("Esc", "Cancel")],
         AppMode::SelectingFolder => get_folder_selection_commands(profile),
         AppMode::SelectingGroup => get_group_selection_commands(profile),
+        AppMode::Searching => vec![("Enter", "Confirm"), ("Esc", "Cancel")],
         AppMode::ShowingHelp => vec![("Esc", "Close"), ("?/F1", "Help")],
         AppMode::Quitting => vec![],
     }
@@ -952,6 +980,7 @@ fn get_reviewing_commands(
         ("o/n", "Age"),
         ("f", "Dir"),
         ("s/l", "Size"),
+        ("/", "Filter"),
     ];
     if !app.is_dry_run() {
         cmds.push(("d", "Del"));
@@ -1155,6 +1184,11 @@ fn get_help_lines_from_bindings<'a>(
     ));
     lines.push(format_help_line_single(
         app,
+        &bindings.key_hint(&Action::Search),
+        "Filter groups",
+    ));
+    lines.push(format_help_line_single(
+        app,
         &bindings.key_hint(&Action::ShowHelp),
         "Show help",
     ));
@@ -1192,6 +1226,7 @@ fn get_default_help_lines(app: &App) -> Vec<Line<'static>> {
         format_help_line_static(app, "p", "Preview file"),
         format_help_line_static(app, "d", "Delete selected"),
         format_help_line_static(app, "t", "Toggle theme"),
+        format_help_line_static(app, "/", "Filter groups"),
         format_help_line_static(app, "?/F1", "Show help"),
         format_help_line_static(app, "q", "Quit"),
     ]

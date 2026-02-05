@@ -165,11 +165,20 @@ impl EventHandler {
     /// }
     /// ```
     pub fn poll(&self, timeout: Duration) -> Result<Option<Action>, EventError> {
+        if let Some(event::Event::Key(key)) = self.poll_event(timeout)? {
+            return Ok(self.translate_key(key));
+        }
+        Ok(None)
+    }
+
+    /// Poll for a raw event with the specified timeout.
+    ///
+    /// # Errors
+    ///
+    /// Returns `EventError::Io` if there's an I/O error reading events.
+    pub fn poll_event(&self, timeout: Duration) -> Result<Option<event::Event>, EventError> {
         if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                return Ok(self.translate_key(key));
-            }
-            // Ignore non-key events (mouse, resize, etc.)
+            return Ok(Some(event::read()?));
         }
         Ok(None)
     }
@@ -224,7 +233,8 @@ impl EventHandler {
     /// Translate a key event to an action using the configured keybindings.
     ///
     /// Returns `None` if the key is not mapped to any action.
-    fn translate_key(&self, key: KeyEvent) -> Option<Action> {
+    #[must_use]
+    pub fn translate_key(&self, key: KeyEvent) -> Option<Action> {
         self.bindings.resolve(&key)
     }
 }

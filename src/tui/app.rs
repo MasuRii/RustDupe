@@ -72,6 +72,8 @@ pub enum AppMode {
     SelectingFolder,
     /// Selecting a named group for batch selection
     SelectingGroup,
+    /// Searching duplicate groups
+    Searching,
     /// Showing help overlay with keybinding reference
     ShowingHelp,
     /// Application is quitting
@@ -84,7 +86,7 @@ impl AppMode {
     pub fn is_navigable(&self) -> bool {
         matches!(
             self,
-            Self::Reviewing | Self::SelectingFolder | Self::SelectingGroup
+            Self::Reviewing | Self::SelectingFolder | Self::SelectingGroup | Self::Searching
         )
     }
 
@@ -148,6 +150,8 @@ pub enum Action {
     SelectFolder,
     /// Enter named group selection mode
     SelectGroup,
+    /// Enter search mode
+    Search,
     /// Delete selected files (to trash)
     Delete,
     /// Toggle theme
@@ -193,6 +197,7 @@ impl Action {
             Self::Preview => "preview",
             Self::SelectFolder => "select_folder",
             Self::SelectGroup => "select_group",
+            Self::Search => "search",
             Self::Delete => "delete",
             Self::ToggleTheme => "toggle_theme",
             Self::ShowHelp => "show_help",
@@ -223,6 +228,7 @@ impl Action {
             "preview",
             "select_folder",
             "select_group",
+            "search",
             "delete",
             "toggle_theme",
             "show_help",
@@ -234,7 +240,7 @@ impl Action {
 
     /// Returns all action variants.
     #[must_use]
-    pub const fn all() -> [Action; 23] {
+    pub const fn all() -> [Action; 24] {
         [
             Self::NavigateUp,
             Self::NavigateDown,
@@ -253,6 +259,7 @@ impl Action {
             Self::Preview,
             Self::SelectFolder,
             Self::SelectGroup,
+            Self::Search,
             Self::Delete,
             Self::ToggleTheme,
             Self::ShowHelp,
@@ -285,6 +292,7 @@ impl std::str::FromStr for Action {
             "preview" => Ok(Self::Preview),
             "select_folder" | "folder" => Ok(Self::SelectFolder),
             "select_group" | "group" => Ok(Self::SelectGroup),
+            "search" | "/" => Ok(Self::Search),
             "delete" => Ok(Self::Delete),
             "toggle_theme" | "theme" => Ok(Self::ToggleTheme),
             "show_help" | "help" => Ok(Self::ShowHelp),
@@ -386,6 +394,10 @@ pub struct App {
     group_name_list: Vec<String>,
     /// Currently selected group name index
     group_name_index: usize,
+    /// Search query string
+    search_query: String,
+    /// Indices of groups matching the search query (None if no search active)
+    filtered_indices: Option<Vec<usize>>,
     /// Protected reference paths
     reference_paths: Vec<PathBuf>,
     /// Total reclaimable space in bytes
@@ -438,6 +450,8 @@ impl App {
             folder_index: 0,
             group_name_list: Vec::new(),
             group_name_index: 0,
+            search_query: String::new(),
+            filtered_indices: None,
             reference_paths: Vec::new(),
             reclaimable_space: 0,
             visible_rows: 20, // Default, will be updated by UI
@@ -602,6 +616,8 @@ impl App {
             folder_index: 0,
             group_name_list: Vec::new(),
             group_name_index: 0,
+            search_query: String::new(),
+            filtered_indices: None,
             reference_paths: Vec::new(),
             reclaimable_space: reclaimable,
             visible_rows: 20,
@@ -761,7 +777,7 @@ impl App {
     /// Get the currently selected group (if any).
     #[must_use]
     pub fn current_group(&self) -> Option<&DuplicateGroup> {
-        self.groups.get(self.group_index)
+        self.visible_group_at(self.group_index)
     }
 
     /// Get the currently selected file path (if any).
@@ -783,7 +799,7 @@ impl App {
     ///
     /// If at the end of the group, stays at the last file.
     pub fn next(&mut self) {
-        if !self.mode.is_navigable() || self.groups.is_empty() {
+        if !self.mode.is_navigable() || self.visible_group_count() == 0 {
             return;
         }
 
@@ -818,7 +834,7 @@ impl App {
 
     /// Navigate to the previous file or folder.
     pub fn previous(&mut self) {
-        if !self.mode.is_navigable() || self.groups.is_empty() {
+        if !self.mode.is_navigable() || self.visible_group_count() == 0 {
             return;
         }
 
@@ -854,11 +870,11 @@ impl App {
 
     /// Navigate to the next duplicate group.
     pub fn next_group(&mut self) {
-        if !self.mode.is_navigable() || self.groups.is_empty() {
+        if !self.mode.is_navigable() || self.visible_group_count() == 0 {
             return;
         }
 
-        if self.group_index + 1 < self.groups.len() {
+        if self.group_index + 1 < self.visible_group_count() {
             self.group_index += 1;
             self.file_index = 0;
             self.file_scroll = 0;
@@ -869,7 +885,7 @@ impl App {
 
     /// Navigate to the previous duplicate group.
     pub fn previous_group(&mut self) {
-        if !self.mode.is_navigable() || self.groups.is_empty() {
+        if !self.mode.is_navigable() || self.visible_group_count() == 0 {
             return;
         }
 
@@ -1189,6 +1205,101 @@ impl App {
         self.preview_content = None;
     }
 
+    // ==================== Search Management ====================
+
+    /// Get the search query.
+    #[must_use]
+    pub fn search_query(&self) -> &str {
+        &self.search_query
+    }
+
+    /// Set the search query and update filters.
+    pub fn set_search_query(&mut self, query: String) {
+        self.search_query = query;
+        self.apply_search();
+    }
+
+    /// Check if a search is active.
+    #[must_use]
+    pub fn is_searching(&self) -> bool {
+        self.filtered_indices.is_some()
+    }
+
+    /// Clear the search query and filter.
+    pub fn clear_search(&mut self) {
+        self.search_query.clear();
+        self.filtered_indices = None;
+        self.group_index = 0;
+        self.file_index = 0;
+        self.group_scroll = 0;
+        self.file_scroll = 0;
+    }
+
+    /// Apply the current search query to the groups.
+    fn apply_search(&mut self) {
+        if self.search_query.is_empty() {
+            self.filtered_indices = None;
+        } else {
+            let query = self.search_query.to_lowercase();
+
+            // Try to compile as regex if it looks like one, or just use substring
+            // We treat it as regex if it contains special chars or if it compiles successfully
+            let re = regex::RegexBuilder::new(&self.search_query)
+                .case_insensitive(true)
+                .build()
+                .ok();
+
+            let indices: Vec<usize> = self
+                .groups
+                .iter()
+                .enumerate()
+                .filter(|(_, group)| {
+                    // Match by filename, path, or group name
+                    group.files.iter().any(|file| {
+                        let path_str = file.path.to_string_lossy();
+                        let group_name = file.group_name.as_deref().unwrap_or("");
+
+                        if let Some(ref r) = re {
+                            if r.is_match(&path_str) || r.is_match(group_name) {
+                                return true;
+                            }
+                        }
+
+                        // Fallback to substring matching if regex doesn't match or wasn't used
+                        path_str.to_lowercase().contains(&query)
+                            || group_name.to_lowercase().contains(&query)
+                    })
+                })
+                .map(|(i, _)| i)
+                .collect();
+            self.filtered_indices = Some(indices);
+        }
+
+        // Reset navigation to the first match
+        self.group_index = 0;
+        self.file_index = 0;
+        self.group_scroll = 0;
+        self.file_scroll = 0;
+    }
+
+    /// Get the number of visible groups (filtered if search active).
+    #[must_use]
+    pub fn visible_group_count(&self) -> usize {
+        self.filtered_indices
+            .as_ref()
+            .map_or(self.groups.len(), |v| v.len())
+    }
+
+    /// Get a visible group by its relative index.
+    #[must_use]
+    pub fn visible_group_at(&self, index: usize) -> Option<&DuplicateGroup> {
+        let actual_idx = match &self.filtered_indices {
+            Some(indices) => *indices.get(index)?,
+            None => index,
+        };
+        self.groups.get(actual_idx)
+    }
+
     // ==================== Folder Selection ====================
 
     /// Get the list of folders in the current group.
@@ -1401,7 +1512,7 @@ impl App {
 
     /// Navigate to the first item (top of list).
     pub fn go_to_top(&mut self) {
-        if !self.mode.is_navigable() || self.groups.is_empty() {
+        if !self.mode.is_navigable() || self.visible_group_count() == 0 {
             return;
         }
 
@@ -1425,7 +1536,7 @@ impl App {
 
     /// Navigate to the last item (bottom of list).
     pub fn go_to_bottom(&mut self) {
-        if !self.mode.is_navigable() || self.groups.is_empty() {
+        if !self.mode.is_navigable() || self.visible_group_count() == 0 {
             return;
         }
 
@@ -1554,6 +1665,14 @@ impl App {
                     false
                 }
             }
+            Action::Search => {
+                if self.mode == AppMode::Reviewing {
+                    self.set_mode(AppMode::Searching);
+                    true
+                } else {
+                    false
+                }
+            }
             Action::Delete => {
                 if self.dry_run {
                     self.set_error("Cannot delete files in dry-run mode");
@@ -1586,6 +1705,9 @@ impl App {
                 } else if self.mode == AppMode::SelectingGroup {
                     self.select_by_group_name();
                     true
+                } else if self.mode == AppMode::Searching {
+                    self.set_mode(AppMode::Reviewing);
+                    true
                 } else {
                     // Confirmation handling is done by the TUI main loop
                     true
@@ -1604,6 +1726,10 @@ impl App {
                         self.set_mode(AppMode::Reviewing);
                     }
                     AppMode::SelectingGroup => {
+                        self.set_mode(AppMode::Reviewing);
+                    }
+                    AppMode::Searching => {
+                        self.clear_search();
                         self.set_mode(AppMode::Reviewing);
                     }
                     AppMode::ShowingHelp => {
@@ -2315,6 +2441,77 @@ mod tests {
         assert_eq!(app.folder_index(), 0);
     }
 
+    #[test]
+    fn test_search_logic() {
+        let groups = vec![
+            make_group(100, vec!["/photos/cat.jpg", "/backup/cat.jpg"]),
+            make_group(200, vec!["/docs/work.pdf", "/old/work.pdf"]),
+            make_group(300, vec!["/photos/dog.png", "/temp/dog.png"]),
+        ];
+        let mut app = App::with_groups(groups);
+
+        assert_eq!(app.visible_group_count(), 3);
+
+        // Search for "cat"
+        app.set_search_query("cat".to_string());
+        assert!(app.is_searching());
+        assert_eq!(app.visible_group_count(), 1);
+        assert_eq!(app.visible_group_at(0).unwrap().size, 100);
+
+        // Search for "photos"
+        app.set_search_query("photos".to_string());
+        assert_eq!(app.visible_group_count(), 2);
+
+        // Search for something that doesn't exist
+        app.set_search_query("zebra".to_string());
+        assert_eq!(app.visible_group_count(), 0);
+
+        // Clear search
+        app.clear_search();
+        assert!(!app.is_searching());
+        assert_eq!(app.visible_group_count(), 3);
+
+        // Regex search
+        app.set_search_query(".*\\.png".to_string());
+        assert_eq!(app.visible_group_count(), 1);
+        assert_eq!(app.visible_group_at(0).unwrap().size, 300);
+    }
+
+    #[test]
+    fn test_navigation_with_search() {
+        let groups = vec![
+            make_group(100, vec!["/a/cat.jpg", "/b/cat.jpg"]),
+            make_group(200, vec!["/a/dog.jpg", "/b/dog.jpg"]),
+            make_group(300, vec!["/a/bird.jpg", "/b/bird.jpg"]),
+        ];
+        let mut app = App::with_groups(groups);
+
+        // Filter to cat and bird
+        app.set_search_query("cat".to_string());
+        // Wait, "cat" only matches one group. Let's use ".jpg" which matches all, or "a/" which matches all.
+        app.set_search_query("cat".to_string());
+        assert_eq!(app.visible_group_count(), 1);
+        assert_eq!(app.group_index(), 0);
+
+        app.set_search_query("".to_string());
+        assert_eq!(app.visible_group_count(), 3);
+
+        // Match cat and bird
+        // Since my apply_search is simple substring, I can't easily match cat OR bird with one query yet.
+        // But I can match "jpg" which matches all.
+        app.set_search_query("jpg".to_string());
+        assert_eq!(app.visible_group_count(), 3);
+
+        app.next_group();
+        assert_eq!(app.group_index(), 1);
+        assert_eq!(app.current_group().unwrap().size, 200);
+
+        app.set_search_query("bird".to_string());
+        assert_eq!(app.visible_group_count(), 1);
+        assert_eq!(app.group_index(), 0); // Reset to 0 on new search
+        assert_eq!(app.current_group().unwrap().size, 300);
+    }
+
     // =========================================================================
     // Action Parsing and Display Tests
     // =========================================================================
@@ -2385,20 +2582,22 @@ mod tests {
     #[test]
     fn test_action_all_names() {
         let names = Action::all_names();
-        assert_eq!(names.len(), 23);
+        assert_eq!(names.len(), 24);
         assert!(names.contains(&"navigate_down"));
         assert!(names.contains(&"show_help"));
         assert!(names.contains(&"select_group"));
+        assert!(names.contains(&"search"));
         assert!(names.contains(&"quit"));
     }
 
     #[test]
     fn test_action_all() {
         let actions = Action::all();
-        assert_eq!(actions.len(), 23);
+        assert_eq!(actions.len(), 24);
         assert!(actions.contains(&Action::NavigateDown));
         assert!(actions.contains(&Action::ShowHelp));
         assert!(actions.contains(&Action::SelectGroup));
+        assert!(actions.contains(&Action::Search));
         assert!(actions.contains(&Action::Quit));
     }
 }
