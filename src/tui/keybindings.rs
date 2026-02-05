@@ -30,6 +30,7 @@
 
 use std::collections::HashMap;
 
+use clap::ValueEnum;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::Action;
@@ -38,7 +39,19 @@ use super::Action;
 ///
 /// Each profile defines a complete set of keybindings tailored for
 /// different user preferences and familiarity with various navigation styles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Hash,
+    ValueEnum,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum KeybindingProfile {
     /// Universal profile: Supports BOTH vim-style AND arrow key navigation.
     ///

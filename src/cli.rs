@@ -18,10 +18,15 @@
 //!
 //! # Verbose mode for debugging
 //! rustdupe -v scan ~/Downloads
+//!
+//! # Use vim keybinding profile
+//! rustdupe --keybinding-profile vim scan ~/Downloads
 //! ```
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+
+use crate::tui::keybindings::KeybindingProfile;
 
 /// Smart duplicate file finder with interactive TUI.
 ///
@@ -47,6 +52,21 @@ pub struct Cli {
     /// TUI theme (light, dark, auto)
     #[arg(long, value_enum, default_value = "auto", global = true)]
     pub theme: ThemeArg,
+
+    /// Keybinding profile for TUI navigation (universal, vim, standard, emacs)
+    ///
+    /// - universal: Both vim-style (hjkl) AND arrow keys (default)
+    /// - vim: Vim-style navigation only (hjkl)
+    /// - standard: Arrow keys and standard shortcuts only
+    /// - emacs: Emacs-style keybindings (Ctrl-n/p)
+    #[arg(
+        long = "keybinding-profile",
+        alias = "keys",
+        value_enum,
+        global = true,
+        env = "RUSTDUPE_KEYBINDING_PROFILE"
+    )]
+    pub keybinding_profile: Option<KeybindingProfile>,
 
     /// Subcommand to execute
     #[command(subcommand)]
@@ -777,5 +797,86 @@ mod tests {
             }
             _ => panic!("Expected Scan command"),
         }
+    }
+
+    #[test]
+    fn test_cli_keybinding_profile_not_specified() {
+        let cli = Cli::try_parse_from(["rustdupe", "scan", "/path"]).unwrap();
+        // When not specified, keybinding_profile should be None
+        assert!(cli.keybinding_profile.is_none());
+    }
+
+    #[test]
+    fn test_cli_keybinding_profile_universal() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "--keybinding-profile",
+            "universal",
+            "scan",
+            "/path",
+        ])
+        .unwrap();
+        assert_eq!(cli.keybinding_profile, Some(KeybindingProfile::Universal));
+    }
+
+    #[test]
+    fn test_cli_keybinding_profile_vim() {
+        let cli = Cli::try_parse_from(["rustdupe", "--keybinding-profile", "vim", "scan", "/path"])
+            .unwrap();
+        assert_eq!(cli.keybinding_profile, Some(KeybindingProfile::Vim));
+    }
+
+    #[test]
+    fn test_cli_keybinding_profile_standard() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "--keybinding-profile",
+            "standard",
+            "scan",
+            "/path",
+        ])
+        .unwrap();
+        assert_eq!(cli.keybinding_profile, Some(KeybindingProfile::Standard));
+    }
+
+    #[test]
+    fn test_cli_keybinding_profile_emacs() {
+        let cli =
+            Cli::try_parse_from(["rustdupe", "--keybinding-profile", "emacs", "scan", "/path"])
+                .unwrap();
+        assert_eq!(cli.keybinding_profile, Some(KeybindingProfile::Emacs));
+    }
+
+    #[test]
+    fn test_cli_keybinding_profile_alias() {
+        // Test the --keys alias
+        let cli = Cli::try_parse_from(["rustdupe", "--keys", "vim", "scan", "/path"]).unwrap();
+        assert_eq!(cli.keybinding_profile, Some(KeybindingProfile::Vim));
+    }
+
+    #[test]
+    fn test_cli_keybinding_profile_invalid() {
+        let result = Cli::try_parse_from([
+            "rustdupe",
+            "--keybinding-profile",
+            "invalid",
+            "scan",
+            "/path",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_keybinding_profile_global_flag() {
+        // Test that keybinding profile works as a global flag (before subcommand)
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "--keybinding-profile",
+            "vim",
+            "load",
+            "session.json",
+        ])
+        .unwrap();
+        assert_eq!(cli.keybinding_profile, Some(KeybindingProfile::Vim));
     }
 }

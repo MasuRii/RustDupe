@@ -41,7 +41,7 @@
 //! let mut app = App::with_groups(groups);
 //!
 //! // Run the TUI
-//! run_tui(&mut app, None).unwrap();
+//! run_tui(&mut app, None, None).unwrap();
 //! ```
 
 use std::io::{self, Stdout};
@@ -61,6 +61,7 @@ use thiserror::Error;
 
 use super::app::{Action, App, AppMode};
 use super::events::EventHandler;
+use super::keybindings::KeybindingProfile;
 use super::ui::render;
 use crate::actions::delete::{delete_batch, validate_preserves_copy, DeleteConfig};
 use crate::actions::preview::preview_file_simple;
@@ -107,6 +108,7 @@ type Terminal = ratatui::Terminal<CrosstermBackend<Stdout>>;
 ///
 /// * `app` - The application state, typically pre-loaded with duplicate groups
 /// * `shutdown_flag` - Optional flag for external shutdown signaling (e.g., Ctrl+C handler)
+/// * `keybinding_profile` - Optional keybinding profile to use (defaults to Universal)
 ///
 /// # Returns
 ///
@@ -128,11 +130,15 @@ type Terminal = ratatui::Terminal<CrosstermBackend<Stdout>>;
 /// use rustdupe::tui::{run_tui, App};
 ///
 /// let mut app = App::new();
-/// if let Err(e) = run_tui(&mut app, None) {
+/// if let Err(e) = run_tui(&mut app, None, None) {
 ///     eprintln!("TUI error: {}", e);
 /// }
 /// ```
-pub fn run_tui(app: &mut App, shutdown_flag: Option<Arc<AtomicBool>>) -> TuiResult<()> {
+pub fn run_tui(
+    app: &mut App,
+    shutdown_flag: Option<Arc<AtomicBool>>,
+    keybinding_profile: Option<KeybindingProfile>,
+) -> TuiResult<()> {
     // Set up panic hook to restore terminal on panic
     let original_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
@@ -142,7 +148,7 @@ pub fn run_tui(app: &mut App, shutdown_flag: Option<Arc<AtomicBool>>) -> TuiResu
     }));
 
     // Run the TUI with proper cleanup
-    let result = run_tui_inner(app, shutdown_flag);
+    let result = run_tui_inner(app, shutdown_flag, keybinding_profile);
 
     // Restore the original panic hook
     let _ = panic::take_hook();
@@ -153,12 +159,19 @@ pub fn run_tui(app: &mut App, shutdown_flag: Option<Arc<AtomicBool>>) -> TuiResu
 /// Inner function that runs the TUI loop.
 ///
 /// This is separated from `run_tui` to ensure cleanup happens correctly.
-fn run_tui_inner(app: &mut App, shutdown_flag: Option<Arc<AtomicBool>>) -> TuiResult<()> {
+fn run_tui_inner(
+    app: &mut App,
+    shutdown_flag: Option<Arc<AtomicBool>>,
+    keybinding_profile: Option<KeybindingProfile>,
+) -> TuiResult<()> {
     // Set up the terminal
     let mut terminal = setup_terminal()?;
 
-    // Create event handler
-    let event_handler = EventHandler::new();
+    // Create event handler with the specified profile (or default to Universal)
+    let event_handler = match keybinding_profile {
+        Some(profile) => EventHandler::with_profile(profile),
+        None => EventHandler::new(),
+    };
 
     // Track frame timing for rate limiting
     let mut last_render = Instant::now();

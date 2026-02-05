@@ -41,7 +41,7 @@
 //! let mut app = App::with_groups(groups);
 //!
 //! // Run the TUI (this takes over the terminal)
-//! // run_tui(&mut app, None).unwrap();
+//! // run_tui(&mut app, None, None).unwrap();
 //! ```
 
 pub mod app;

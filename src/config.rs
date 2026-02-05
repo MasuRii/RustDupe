@@ -1,7 +1,7 @@
 //! Application configuration management.
 //!
 //! This module handles loading and saving application-wide configuration
-//! settings, such as the preferred TUI theme.
+//! settings, such as the preferred TUI theme and keybinding profile.
 
 use anyhow::Result;
 use directories::ProjectDirs;
@@ -10,6 +10,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::cli::ThemeArg;
+use crate::tui::keybindings::KeybindingProfile;
 
 /// Application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,12 +18,17 @@ pub struct Config {
     /// Preferred TUI theme.
     #[serde(default)]
     pub theme: ThemeArg,
+
+    /// Keybinding profile for the TUI.
+    #[serde(default)]
+    pub keybinding_profile: KeybindingProfile,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             theme: ThemeArg::Auto,
+            keybinding_profile: KeybindingProfile::Universal,
         }
     }
 }
