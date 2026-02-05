@@ -408,8 +408,12 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
 
             let label = truncate_string(&label, 20);
 
+            let is_expanded = app.is_expanded(&group.hash);
+            let expand_indicator = if is_expanded { "[-] " } else { "[+] " };
+
             let text = format!(
-                "[{}] {} ({} copies) {} - {}",
+                "{}[{}] {} ({} copies) {} - {}",
+                expand_indicator,
                 i + 1,
                 label,
                 copies,
@@ -488,6 +492,46 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
         Some(g) => g,
         None => return,
     };
+
+    let is_expanded = app.is_expanded(&group.hash);
+
+    if !is_expanded {
+        let message = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "Group is collapsed",
+                Style::default().fg(app.theme().dim),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Press ", Style::default().fg(app.theme().dim)),
+                Span::styled(
+                    "Enter",
+                    Style::default()
+                        .fg(app.theme().primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" or ", Style::default().fg(app.theme().dim)),
+                Span::styled(
+                    "Space",
+                    Style::default()
+                        .fg(app.theme().primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" to expand", Style::default().fg(app.theme().dim)),
+            ]),
+            Line::from(""),
+            Line::from(format!("This group contains {} files", group.files.len())),
+            Line::from(format!("Total size: {}", format_size(group.size))),
+        ])
+        .alignment(Alignment::Center)
+        .block(
+            create_block_with_title(app.is_accessible(), "Files (Collapsed)")
+                .border_style(Style::default().fg(app.theme().dim)),
+        );
+        frame.render_widget(message, area);
+        return;
+    }
 
     let selected_file = app.file_index();
     let max_path_len = area.width.saturating_sub(12) as usize;
@@ -1100,7 +1144,9 @@ fn get_reviewing_commands(
     let mut cmds = vec![
         (get_nav_hint(profile), "Nav"),
         (get_group_nav_hint(profile), "Grp"),
-        ("Space", "Sel"),
+        ("Space", "Sel/Exp"),
+        ("Enter", "Exp"),
+        ("e", "ExpAll"),
         ("a/A", "All"),
         ("o/n", "Age"),
         ("f", "Dir"),
@@ -1257,7 +1303,12 @@ fn get_help_lines_from_bindings<'a>(
     lines.push(format_help_line_single(
         app,
         &bindings.key_hint(&Action::ToggleSelect),
-        "Toggle selection",
+        "Select / Expand",
+    ));
+    lines.push(format_help_line_single(
+        app,
+        &bindings.key_hint(&Action::ToggleExpandAll),
+        "Expand/Collapse all",
     ));
     lines.push(format_help_line(
         app,
@@ -1339,7 +1390,8 @@ fn get_default_help_lines(app: &App) -> Vec<Line<'static>> {
             "─── Selection ───",
             Style::default().fg(app.theme().secondary),
         )),
-        format_help_line_static(app, "Space", "Toggle selection"),
+        format_help_line_static(app, "Space/Enter", "Select / Expand"),
+        format_help_line_static(app, "e", "Expand/Collapse all"),
         format_help_line_static(app, "a, A", "Select group/all"),
         format_help_line_static(app, "o, n", "Select oldest/newest"),
         format_help_line_static(app, "s, l", "Select smallest/largest"),

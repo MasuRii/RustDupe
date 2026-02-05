@@ -732,6 +732,11 @@ impl KeyBindings {
             vec![Self::key(KeyCode::Char('t'), KeyModifiers::NONE)],
         );
 
+        bindings.insert(
+            Action::ToggleExpandAll,
+            vec![Self::key(KeyCode::Char('e'), KeyModifiers::NONE)],
+        );
+
         // Help
         bindings.insert(
             Action::ShowHelp,
@@ -918,6 +923,11 @@ impl KeyBindings {
             vec![Self::key(KeyCode::Char('t'), KeyModifiers::NONE)],
         );
 
+        bindings.insert(
+            Action::ToggleExpandAll,
+            vec![Self::key(KeyCode::Char('e'), KeyModifiers::NONE)],
+        );
+
         // Help
         bindings.insert(
             Action::ShowHelp,
@@ -1081,6 +1091,11 @@ impl KeyBindings {
         bindings.insert(
             Action::ToggleTheme,
             vec![Self::key(KeyCode::Char('t'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::ToggleExpandAll,
+            vec![Self::key(KeyCode::Char('e'), KeyModifiers::NONE)],
         );
 
         // Help
@@ -1262,6 +1277,19 @@ impl KeyBindings {
         bindings.insert(
             Action::ToggleTheme,
             vec![Self::key(KeyCode::Char('t'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::ToggleExpand,
+            vec![
+                Self::key(KeyCode::Enter, KeyModifiers::NONE),
+                Self::key(KeyCode::Char(' '), KeyModifiers::CONTROL),
+            ],
+        );
+
+        bindings.insert(
+            Action::ToggleExpandAll,
+            vec![Self::key(KeyCode::Char('e'), KeyModifiers::NONE)],
         );
 
         // Help

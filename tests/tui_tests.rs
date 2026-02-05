@@ -67,7 +67,8 @@ fn test_render_file_list() {
         make_group(1000, vec!["file1.txt", "file1_copy.txt"]),
         make_group(2000, vec!["file2.txt", "file2_copy.txt"]),
     ];
-    let app = App::with_groups(groups);
+    let mut app = App::with_groups(groups);
+    app.handle_action(rustdupe::tui::app::Action::ToggleExpandAll);
 
     terminal
         .draw(|f| {
@@ -92,6 +93,7 @@ fn test_render_selection_highlight() {
     let mut terminal = setup_terminal(80, 24);
     let groups = vec![make_group(1000, vec!["file1.txt", "file1_copy.txt"])];
     let mut app = App::with_groups(groups);
+    app.handle_action(rustdupe::tui::app::Action::ToggleExpandAll);
 
     // Move to second file and select it
     app.next();
@@ -112,7 +114,7 @@ fn test_render_selection_highlight() {
 
 #[test]
 fn test_render_footer() {
-    let mut terminal = setup_terminal(120, 24);
+    let mut terminal = setup_terminal(150, 24);
     let app = App::with_groups(vec![make_group(100, vec!["a", "b"])]);
 
     terminal
@@ -140,7 +142,8 @@ fn test_render_truncation() {
     let long_path =
         "/very/long/path/to/some/deeply/nested/directory/structure/file_with_long_name.txt";
     let groups = vec![make_group(1000, vec![long_path, "copy.txt"])];
-    let app = App::with_groups(groups);
+    let mut app = App::with_groups(groups);
+    app.handle_action(rustdupe::tui::app::Action::ToggleExpandAll);
 
     terminal
         .draw(|f| {

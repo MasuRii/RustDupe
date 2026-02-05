@@ -36,6 +36,7 @@ fn test_reference_visual_indicator() {
 
     let mut app = App::with_groups(groups);
     app.set_reference_paths(vec![PathBuf::from("/ref")]);
+    app.handle_action(rustdupe::tui::app::Action::ToggleExpandAll);
 
     terminal
         .draw(|f| {
@@ -64,6 +65,7 @@ fn test_prevent_selecting_reference_file() {
 
     let mut app = App::with_groups(groups);
     app.set_reference_paths(vec![PathBuf::from("/ref")]);
+    app.handle_action(rustdupe::tui::app::Action::ToggleExpandAll);
 
     // Navigate to the reference file
     app.next();

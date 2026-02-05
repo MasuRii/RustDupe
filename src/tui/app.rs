@@ -40,6 +40,7 @@
 //! app.set_mode(AppMode::Reviewing);
 //!
 //! // Navigate and select
+//! app.handle_action(rustdupe::tui::Action::ExpandAll);
 //! app.next();
 //! app.toggle_select();
 //!
@@ -176,6 +177,14 @@ pub enum Action {
     Delete,
     /// Toggle theme
     ToggleTheme,
+    /// Toggle expand/collapse of current group
+    ToggleExpand,
+    /// Expand all groups
+    ExpandAll,
+    /// Collapse all groups
+    CollapseAll,
+    /// Toggle expand/collapse of all groups
+    ToggleExpandAll,
     /// Show help overlay with keybinding reference
     ShowHelp,
     /// Confirm current action
@@ -223,6 +232,10 @@ impl Action {
             Self::Search => "search",
             Self::Delete => "delete",
             Self::ToggleTheme => "toggle_theme",
+            Self::ToggleExpand => "toggle_expand",
+            Self::ExpandAll => "expand_all",
+            Self::CollapseAll => "collapse_all",
+            Self::ToggleExpandAll => "toggle_expand_all",
             Self::ShowHelp => "show_help",
             Self::Confirm => "confirm",
             Self::Cancel => "cancel",
@@ -257,6 +270,10 @@ impl Action {
             "search",
             "delete",
             "toggle_theme",
+            "toggle_expand",
+            "expand_all",
+            "collapse_all",
+            "toggle_expand_all",
             "show_help",
             "confirm",
             "cancel",
@@ -266,7 +283,7 @@ impl Action {
 
     /// Returns all action variants.
     #[must_use]
-    pub const fn all() -> [Action; 27] {
+    pub const fn all() -> [Action; 31] {
         [
             Self::NavigateUp,
             Self::NavigateDown,
@@ -291,6 +308,10 @@ impl Action {
             Self::Search,
             Self::Delete,
             Self::ToggleTheme,
+            Self::ToggleExpand,
+            Self::ExpandAll,
+            Self::CollapseAll,
+            Self::ToggleExpandAll,
             Self::ShowHelp,
             Self::Confirm,
             Self::Cancel,
@@ -327,6 +348,10 @@ impl std::str::FromStr for Action {
             "search" | "/" => Ok(Self::Search),
             "delete" => Ok(Self::Delete),
             "toggle_theme" | "theme" => Ok(Self::ToggleTheme),
+            "toggle_expand" | "expand" | "collapse" => Ok(Self::ToggleExpand),
+            "expand_all" => Ok(Self::ExpandAll),
+            "collapse_all" => Ok(Self::CollapseAll),
+            "toggle_expand_all" | "toggle_all" => Ok(Self::ToggleExpandAll),
             "show_help" | "help" => Ok(Self::ShowHelp),
             "confirm" | "enter" => Ok(Self::Confirm),
             "cancel" | "escape" | "esc" => Ok(Self::Cancel),
@@ -467,6 +492,8 @@ pub struct App {
     theme: Theme,
     /// Active keybindings for display in help
     keybindings: Option<crate::tui::keybindings::KeyBindings>,
+    /// Expanded group hashes
+    expanded_groups: HashSet<[u8; 32]>,
     /// Accessible mode for screen reader compatibility
     accessible: bool,
 }
@@ -518,6 +545,7 @@ impl App {
             theme_arg: ThemeArg::Auto,
             theme: Theme::dark(),
             keybindings: None,
+            expanded_groups: HashSet::new(),
             accessible: false,
         }
     }
@@ -640,6 +668,20 @@ impl App {
         })
     }
 
+    /// Check if a group is expanded.
+    #[must_use]
+    pub fn is_expanded(&self, group_hash: &[u8; 32]) -> bool {
+        self.expanded_groups.contains(group_hash)
+    }
+
+    /// Check if the currently selected group is expanded.
+    #[must_use]
+    pub fn is_current_group_expanded(&self) -> bool {
+        self.current_group()
+            .map(|g| self.is_expanded(&g.hash))
+            .unwrap_or(false)
+    }
+
     /// Create an App with pre-loaded duplicate groups.
     ///
     /// The app starts in Reviewing mode if groups are provided.
@@ -688,6 +730,7 @@ impl App {
             theme_arg: ThemeArg::Auto,
             theme: Theme::dark(),
             keybindings: None,
+            expanded_groups: HashSet::new(),
             accessible: false,
         }
     }
@@ -869,10 +912,14 @@ impl App {
         match self.mode {
             AppMode::Reviewing => {
                 if let Some(group) = self.current_group() {
-                    if self.file_index + 1 < group.files.len() {
+                    let is_expanded = self.is_expanded(&group.hash);
+                    if is_expanded && self.file_index + 1 < group.files.len() {
                         self.file_index += 1;
                         self.update_file_scroll();
                         log::trace!("Navigate next: file_index = {}", self.file_index);
+                    } else {
+                        // If collapsed or at end of group, move to next group
+                        self.next_group();
                     }
                 }
             }
@@ -903,10 +950,27 @@ impl App {
 
         match self.mode {
             AppMode::Reviewing => {
-                if self.file_index > 0 {
-                    self.file_index -= 1;
-                    self.update_file_scroll();
-                    log::trace!("Navigate previous: file_index = {}", self.file_index);
+                if let Some(group) = self.current_group() {
+                    let is_expanded = self.is_expanded(&group.hash);
+                    if is_expanded && self.file_index > 0 {
+                        self.file_index -= 1;
+                        self.update_file_scroll();
+                        log::trace!("Navigate previous: file_index = {}", self.file_index);
+                    } else {
+                        // If collapsed or at start of group, move to previous group
+                        let old_group_index = self.group_index;
+                        self.previous_group();
+
+                        // If we moved to a new group and it's expanded, go to its last file
+                        if self.group_index != old_group_index {
+                            if let Some(new_group) = self.current_group() {
+                                if self.is_expanded(&new_group.hash) {
+                                    self.file_index = new_group.files.len().saturating_sub(1);
+                                    self.update_file_scroll();
+                                }
+                            }
+                        }
+                    }
                 }
             }
             AppMode::SelectingFolder => {
@@ -1915,7 +1979,17 @@ impl App {
                 true
             }
             Action::ToggleSelect => {
-                self.toggle_select();
+                if let Some(group) = self.current_group() {
+                    let hash = group.hash;
+                    if !self.expanded_groups.contains(&hash) {
+                        self.expanded_groups.insert(hash);
+                    } else if self.file_index == 0 {
+                        // On first file, space collapses
+                        self.expanded_groups.remove(&hash);
+                    } else {
+                        self.toggle_select();
+                    }
+                }
                 true
             }
             Action::SelectAllInGroup => {
@@ -2017,6 +2091,37 @@ impl App {
                 self.toggle_theme();
                 true
             }
+            Action::ToggleExpand => {
+                if let Some(group) = self.current_group() {
+                    let hash = group.hash;
+                    if self.expanded_groups.contains(&hash) {
+                        self.expanded_groups.remove(&hash);
+                    } else {
+                        self.expanded_groups.insert(hash);
+                    }
+                }
+                true
+            }
+            Action::ExpandAll => {
+                for group in &self.groups {
+                    self.expanded_groups.insert(group.hash);
+                }
+                true
+            }
+            Action::CollapseAll => {
+                self.expanded_groups.clear();
+                true
+            }
+            Action::ToggleExpandAll => {
+                if self.expanded_groups.len() >= self.groups.len() {
+                    self.expanded_groups.clear();
+                } else {
+                    for group in &self.groups {
+                        self.expanded_groups.insert(group.hash);
+                    }
+                }
+                true
+            }
             Action::ShowHelp => {
                 if self.mode == AppMode::ShowingHelp {
                     // Toggle off - return to reviewing
@@ -2046,6 +2151,16 @@ impl App {
                     true
                 } else if self.mode == AppMode::Searching {
                     self.set_mode(AppMode::Reviewing);
+                    true
+                } else if self.mode == AppMode::Reviewing {
+                    if let Some(group) = self.current_group() {
+                        let hash = group.hash;
+                        if self.expanded_groups.contains(&hash) {
+                            self.expanded_groups.remove(&hash);
+                        } else {
+                            self.expanded_groups.insert(hash);
+                        }
+                    }
                     true
                 } else {
                     // Confirmation handling is done by the TUI main loop
@@ -2164,13 +2279,20 @@ mod tests {
 
         assert_eq!(app.file_index(), 0);
 
+        // Initially collapsed, next() should move to next group (but there is none)
+        app.next();
+        assert_eq!(app.file_index(), 0);
+
+        // Expand group to navigate files
+        app.handle_action(Action::ToggleExpandAll);
+
         app.next();
         assert_eq!(app.file_index(), 1);
 
         app.next();
         assert_eq!(app.file_index(), 2);
 
-        // At end, should stay at last
+        // At end, should stay at last (or move to next group if exists)
         app.next();
         assert_eq!(app.file_index(), 2);
 
@@ -2180,7 +2302,7 @@ mod tests {
         app.previous();
         assert_eq!(app.file_index(), 0);
 
-        // At start, should stay at first
+        // At start, should stay at first (or move to prev group)
         app.previous();
         assert_eq!(app.file_index(), 0);
     }
@@ -2477,6 +2599,7 @@ mod tests {
     fn test_current_file() {
         let groups = vec![make_group(100, vec!["/a.txt", "/b.txt"])];
         let mut app = App::with_groups(groups);
+        app.handle_action(Action::ToggleExpandAll);
 
         assert_eq!(app.current_file(), Some(&PathBuf::from("/a.txt")));
 
@@ -2597,6 +2720,7 @@ mod tests {
     fn test_handle_action_navigate() {
         let groups = vec![make_group(100, vec!["/a.txt", "/b.txt", "/c.txt"])];
         let mut app = App::with_groups(groups);
+        app.handle_action(Action::ToggleExpandAll);
 
         assert!(app.handle_action(Action::NavigateDown));
         assert_eq!(app.file_index(), 1);
@@ -2609,6 +2733,23 @@ mod tests {
     fn test_handle_action_toggle_select() {
         let groups = vec![make_group(100, vec!["/a.txt", "/b.txt"])];
         let mut app = App::with_groups(groups);
+
+        // Initially collapsed
+        assert!(!app.is_current_group_expanded());
+
+        assert!(app.handle_action(Action::ToggleSelect));
+        // First press should expand
+        assert!(app.is_current_group_expanded());
+        assert!(!app.is_current_selected());
+
+        // Pressing space on first file (index 0) should collapse
+        assert!(app.handle_action(Action::ToggleSelect));
+        assert!(!app.is_current_group_expanded());
+
+        // Expand again and move to second file
+        app.handle_action(Action::ToggleExpandAll);
+        app.next();
+        assert_eq!(app.file_index(), 1);
 
         assert!(app.handle_action(Action::ToggleSelect));
         assert!(app.is_current_selected());
@@ -2798,6 +2939,7 @@ mod tests {
             vec!["/a.txt", "/b.txt", "/c.txt", "/d.txt"],
         )];
         let mut app = App::with_groups(groups);
+        app.handle_action(Action::ToggleExpandAll);
 
         // Move to the middle
         app.next();
@@ -3004,7 +3146,7 @@ mod tests {
     #[test]
     fn test_action_all_names() {
         let names = Action::all_names();
-        assert_eq!(names.len(), 27);
+        assert_eq!(names.len(), 31);
         assert!(names.contains(&"navigate_down"));
         assert!(names.contains(&"show_help"));
         assert!(names.contains(&"select_group"));
@@ -3015,7 +3157,7 @@ mod tests {
     #[test]
     fn test_action_all() {
         let actions = Action::all();
-        assert_eq!(actions.len(), 27);
+        assert_eq!(actions.len(), 31);
         assert!(actions.contains(&Action::NavigateDown));
         assert!(actions.contains(&Action::ShowHelp));
         assert!(actions.contains(&Action::SelectGroup));
