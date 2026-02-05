@@ -38,6 +38,7 @@
 pub mod hardlink;
 pub mod hasher;
 pub mod path_utils;
+pub mod perceptual;
 pub mod walker;
 
 use serde::{Deserialize, Serialize};
@@ -51,6 +52,7 @@ pub use path_utils::{
     is_nfc, normalize_path_str, normalize_path_str_cow, normalize_pathbuf, path_key, paths_equal,
     paths_equal_normalized,
 };
+pub use perceptual::{PerceptualAlgorithm, PerceptualError, PerceptualHasher};
 use regex::Regex;
 pub use walker::{MultiWalker, Walker};
 
