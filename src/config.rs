@@ -55,6 +55,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use strsim::levenshtein;
 
 use crate::cli::{FileType, OutputFormat, ThemeArg};
 use crate::tui::keybindings::KeybindingProfile;
@@ -272,6 +273,17 @@ impl Config {
 
     /// Load configuration from a specific path with an optional profile.
     pub fn load_from_path(path: PathBuf, profile: Option<&str>) -> Self {
+        // First, read the raw TOML for validation (unknown fields, typos)
+        if path.exists() {
+            if let Ok(content) = fs::read_to_string(&path) {
+                // Parse with toml_edit to get spans for line numbers
+                // Using toml_edit for validation because it preserves spans/line numbers
+                if let Ok(doc) = content.parse::<toml_edit::DocumentMut>() {
+                    validate_config_keys(&doc, path.to_string_lossy().as_ref(), &content);
+                }
+            }
+        }
+
         let mut figment =
             Figment::from(Serialized::defaults(Self::default())).merge(Toml::file(&path));
 
@@ -301,10 +313,18 @@ impl Config {
             }
             Err(e) => {
                 // If there's an error, log it and return defaults.
-                eprintln!(
-                    "Warning: Failed to load configuration: {}. Using defaults.",
-                    e
-                );
+                eprintln!("\nError loading configuration from {}:", path.display());
+                for error in e {
+                    match &error.kind {
+                        figment::error::Kind::Message(msg) => {
+                            eprintln!("  - {}", msg);
+                        }
+                        _ => {
+                            eprintln!("  - {}", error);
+                        }
+                    }
+                }
+                eprintln!("Using default configuration.\n");
                 Self::default()
             }
         }
@@ -455,7 +475,189 @@ impl Config {
     }
 }
 
+/// Validate configuration keys and suggest corrections for typos.
+fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str) {
+    let valid_keys = [
+        "theme",
+        "keybinding_profile",
+        "custom_keybindings",
+        "accessibility",
+        "follow_symlinks",
+        "skip_hidden",
+        "min_size",
+        "max_size",
+        "newer_than",
+        "older_than",
+        "io_threads",
+        "paranoid",
+        "ignore_patterns",
+        "regex_include",
+        "regex_exclude",
+        "file_types",
+        "no_cache",
+        "cache",
+        "permanent",
+        "dry_run",
+        "output",
+        "profile",
+    ];
+
+    for (key, item) in doc.iter() {
+        if !valid_keys.contains(&key) {
+            let line = get_line_number(doc, key, content);
+            let suggestion = find_best_match(key, &valid_keys);
+            if let Some(s) = suggestion {
+                eprintln!(
+                    "Warning: Unknown configuration field '{}' at line {} in {}. Did you mean '{}'?",
+                    key, line, path, s
+                );
+            } else {
+                eprintln!(
+                    "Warning: Unknown configuration field '{}' at line {} in {}.",
+                    key, line, path
+                );
+            }
+        }
+
+        // Recursively validate nested sections
+        if key == "accessibility" {
+            if let Some(table) = item.as_table() {
+                validate_accessibility_keys(table, path, content);
+            }
+        } else if key == "profile" {
+            if let Some(profiles) = item.as_table() {
+                for (profile_name, profile_item) in profiles.iter() {
+                    if let Some(profile_table) = profile_item.as_table() {
+                        validate_profile_keys(
+                            profile_table,
+                            &format!("{} [profile.{}]", path, profile_name),
+                            content,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Validate accessibility configuration keys.
+fn validate_accessibility_keys(table: &toml_edit::Table, path: &str, content: &str) {
+    let valid_keys = [
+        "enabled",
+        "use_ascii_borders",
+        "disable_animations",
+        "simplified_progress",
+        "reduce_refresh_rate",
+    ];
+
+    for (key, _) in table.iter() {
+        if !valid_keys.contains(&key) {
+            let line = get_line_number_in_table(table, key, content);
+            let suggestion = find_best_match(key, &valid_keys);
+            if let Some(s) = suggestion {
+                eprintln!(
+                    "Warning: Unknown accessibility field '{}' at line {} in {}. Did you mean '{}'?",
+                    key, line, path, s
+                );
+            } else {
+                eprintln!(
+                    "Warning: Unknown accessibility field '{}' at line {} in {}.",
+                    key, line, path
+                );
+            }
+        }
+    }
+}
+
+/// Validate keys within a profile section.
+fn validate_profile_keys(table: &toml_edit::Table, path: &str, content: &str) {
+    let valid_keys = [
+        "theme",
+        "keybinding_profile",
+        "custom_keybindings",
+        "accessibility",
+        "follow_symlinks",
+        "skip_hidden",
+        "min_size",
+        "max_size",
+        "newer_than",
+        "older_than",
+        "io_threads",
+        "paranoid",
+        "ignore_patterns",
+        "regex_include",
+        "regex_exclude",
+        "file_types",
+        "no_cache",
+        "cache",
+        "permanent",
+        "dry_run",
+        "output",
+    ];
+
+    for (key, _) in table.iter() {
+        if !valid_keys.contains(&key) {
+            let line = get_line_number_in_table(table, key, content);
+            let suggestion = find_best_match(key, &valid_keys);
+            if let Some(s) = suggestion {
+                eprintln!(
+                    "Warning: Unknown profile field '{}' at line {} in {}. Did you mean '{}'?",
+                    key, line, path, s
+                );
+            } else {
+                eprintln!(
+                    "Warning: Unknown profile field '{}' at line {} in {}.",
+                    key, line, path
+                );
+            }
+        }
+    }
+}
+
+/// Get the line number of a key in the document.
+fn get_line_number(doc: &toml_edit::DocumentMut, key: &str, content: &str) -> usize {
+    if let Some((k, _)) = doc.get_key_value(key) {
+        if let Some(span) = k.span() {
+            return content[..span.start].lines().count() + 1;
+        }
+    }
+
+    // Fallback to naive search if span is not available
+    content
+        .lines()
+        .position(|l| l.trim().starts_with(key))
+        .map(|l| l + 1)
+        .unwrap_or(0)
+}
+
+/// Get the line number of a key in a table.
+fn get_line_number_in_table(table: &toml_edit::Table, key: &str, content: &str) -> usize {
+    if let Some((k, _)) = table.get_key_value(key) {
+        if let Some(span) = k.span() {
+            return content[..span.start].lines().count() + 1;
+        }
+    }
+
+    // Fallback to naive search if span is not available
+    content
+        .lines()
+        .position(|l| l.trim().starts_with(key))
+        .map(|l| l + 1)
+        .unwrap_or(0)
+}
+
+/// Find the best match for a typo among valid candidates.
+fn find_best_match<'a>(input: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    candidates
+        .iter()
+        .map(|&c| (c, levenshtein(input, c)))
+        .filter(|&(_, distance)| distance <= 3) // Only suggest if fairly close
+        .min_by_key(|&(_, distance)| distance)
+        .map(|(c, _)| c)
+}
+
 #[cfg(test)]
+
 mod tests {
     use super::*;
 

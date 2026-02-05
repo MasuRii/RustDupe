@@ -79,6 +79,7 @@ directories = "5"
 # Configuration File Parsing - TOML is the Rust ecosystem standard
 # Used with figment for layered config (defaults < file < env < CLI)
 toml = "0.8"
+toml_edit = "0.22"
 
 # Layered Configuration - figment enables hierarchical config merging
 # Supports: defaults < config file < environment variables < CLI flags
@@ -86,6 +87,9 @@ figment = { version = "0.10", features = ["toml", "env"] }
 
 # Unicode Path Normalization - Critical for macOS NFD vs NFC issues
 unicode-normalization = "0.1"
+
+# Fuzzy string matching for config suggestions
+strsim = "0.11"
 
 # Serialization for JSON/CSV output
 serde = { version = "1", features = ["derive"] }
