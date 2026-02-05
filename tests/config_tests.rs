@@ -9,11 +9,14 @@ use rustdupe::cli::{Cli, Commands, OutputFormat, ThemeArg};
 use rustdupe::config::Config;
 use rustdupe::tui::keybindings::KeybindingProfile;
 use std::fs;
+use std::sync::Mutex;
 use tempfile::tempdir;
 
 // =============================================================================
 // Helper Functions
 // =============================================================================
+
+static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 /// Clear all RUSTDUPE_* environment variables to avoid interference.
 fn clear_env() {
@@ -32,6 +35,7 @@ fn clear_env() {
 
 #[test]
 fn test_config_load_defaults() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let config = Config::default();
     assert_eq!(config.theme, ThemeArg::Auto);
@@ -43,6 +47,7 @@ fn test_config_load_defaults() {
 
 #[test]
 fn test_config_load_from_toml() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -78,6 +83,7 @@ use_ascii_borders = true
 
 #[test]
 fn test_config_save_toml() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -100,6 +106,7 @@ fn test_config_save_toml() {
 
 #[test]
 fn test_config_missing_file_uses_defaults() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let nonexistent_path = temp_dir.path().join("nonexistent.toml");
@@ -115,6 +122,7 @@ fn test_config_missing_file_uses_defaults() {
 
 #[test]
 fn test_config_hierarchy_defaults_config_env_cli() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -156,6 +164,7 @@ io_threads = 8
 
 #[test]
 fn test_boolean_overrides() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -184,6 +193,7 @@ fn test_boolean_overrides() {
 
 #[test]
 fn test_output_override() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -207,6 +217,7 @@ fn test_output_override() {
 
 #[test]
 fn test_config_load_profile() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -242,6 +253,7 @@ skip_hidden = true
 
 #[test]
 fn test_config_profile_not_found() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -260,6 +272,7 @@ theme = "dark"
 
 #[test]
 fn test_config_list_profiles() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -285,6 +298,7 @@ theme = "light"
 
 #[test]
 fn test_config_unknown_field_warning_with_suggestion() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -303,6 +317,7 @@ folow_symlinks = true
 
 #[test]
 fn test_config_invalid_type_error_message() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -315,15 +330,13 @@ io_threads = "eight"
 
     // Figment should return an error. In our load_from_path it might panic or
     // return default depending on implementation.
-    // Let's check the current implementation of load_from_path.
-
-    // Since load_from_path handles errors internally and might exit/panic for invalid types,
-    // we can test the result if we use Figment directly or if load_from_path is changed to return Result.
-    // Current implementation seems to print error and exit(1) or return default.
+    let config = Config::load_from_path(config_path, None);
+    assert_eq!(config.io_threads, 4); // Falls back to default on error
 }
 
 #[test]
 fn test_accessibility_config_validation() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
@@ -341,6 +354,7 @@ enabled = true
 
 #[test]
 fn test_profile_validation() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     clear_env();
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
