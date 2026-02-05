@@ -68,6 +68,8 @@ use std::time::SystemTime;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use jwalk::WalkDir;
 
+use crate::progress::ProgressCallback;
+
 use super::hardlink::HardlinkTracker;
 use super::{FileEntry, ScanError, WalkerConfig};
 
@@ -75,7 +77,7 @@ use super::{FileEntry, ScanError, WalkerConfig};
 ///
 /// Uses jwalk for efficient parallel traversal of directory trees.
 /// Supports filtering by size, patterns, and various file attributes.
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct Walker {
     /// Root path to walk
     root: PathBuf,
@@ -85,6 +87,23 @@ pub struct Walker {
     shutdown_flag: Option<Arc<AtomicBool>>,
     /// Optional group name for files discovered by this walker
     group_name: Option<String>,
+    /// Optional progress callback for reporting
+    progress_callback: Option<Arc<dyn ProgressCallback>>,
+}
+
+impl std::fmt::Debug for Walker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Walker")
+            .field("root", &self.root)
+            .field("config", &self.config)
+            .field("shutdown_flag", &self.shutdown_flag)
+            .field("group_name", &self.group_name)
+            .field(
+                "progress_callback",
+                &self.progress_callback.as_ref().map(|_| "<callback>"),
+            )
+            .finish()
+    }
 }
 
 impl Walker {
@@ -110,6 +129,7 @@ impl Walker {
             config,
             shutdown_flag: None,
             group_name: None,
+            progress_callback: None,
         }
     }
 
@@ -134,6 +154,13 @@ impl Walker {
     #[must_use]
     pub fn with_group_name(mut self, name: String) -> Self {
         self.group_name = Some(name);
+        self
+    }
+
+    /// Set the progress callback.
+    #[must_use]
+    pub fn with_progress_callback(mut self, callback: Arc<dyn ProgressCallback>) -> Self {
+        self.progress_callback = Some(callback);
         self
     }
 
@@ -312,6 +339,7 @@ impl Walker {
     pub fn walk(&self) -> impl Iterator<Item = Result<FileEntry, ScanError>> + '_ {
         let gitignore = self.build_gitignore();
         let mut hardlink_tracker = HardlinkTracker::new();
+        let mut count = 0;
 
         // Configure jwalk
         let walk_dir = WalkDir::new(&self.root)
@@ -388,13 +416,23 @@ impl Walker {
                     }
 
                     // Process the file entry
-                    self.process_file_entry(
+                    let result = self.process_file_entry(
                         path,
                         metadata,
                         is_symlink,
                         &mut hardlink_tracker,
                         &gitignore,
-                    )
+                    );
+
+                    // Report progress if we found a valid file
+                    if let Some(Ok(ref entry)) = result {
+                        count += 1;
+                        if let Some(ref callback) = self.progress_callback {
+                            callback.on_progress(count, entry.path.to_string_lossy().as_ref());
+                        }
+                    }
+
+                    result
                 }
                 Err(e) => {
                     // Convert jwalk error to ScanError
@@ -522,6 +560,7 @@ impl Walker {
 /// - Canonical path normalization for consistent comparison
 /// - Aggregated results from all directories
 /// - Optional named directory groups for batch selection
+/// - Optional progress reporting across all directories
 ///
 /// # Path Overlap Detection
 ///
@@ -557,7 +596,6 @@ impl Walker {
 /// let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
 /// println!("Found {} files across all directories", files.len());
 /// ```
-#[derive(Debug)]
 pub struct MultiWalker {
     /// Root paths to walk (canonicalized, overlaps removed)
     roots: Vec<PathBuf>,
@@ -567,6 +605,23 @@ pub struct MultiWalker {
     shutdown_flag: Option<Arc<AtomicBool>>,
     /// Mapping from canonical root paths to group names
     group_map: HashMap<PathBuf, String>,
+    /// Optional progress callback for reporting
+    progress_callback: Option<Arc<dyn ProgressCallback>>,
+}
+
+impl std::fmt::Debug for MultiWalker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MultiWalker")
+            .field("roots", &self.roots)
+            .field("config", &self.config)
+            .field("shutdown_flag", &self.shutdown_flag)
+            .field("group_map", &self.group_map)
+            .field(
+                "progress_callback",
+                &self.progress_callback.as_ref().map(|_| "<callback>"),
+            )
+            .finish()
+    }
 }
 
 impl MultiWalker {
@@ -604,6 +659,7 @@ impl MultiWalker {
             config,
             shutdown_flag: None,
             group_map: HashMap::new(),
+            progress_callback: None,
         }
     }
 
@@ -653,6 +709,13 @@ impl MultiWalker {
     #[must_use]
     pub fn with_group_map(mut self, map: HashMap<PathBuf, String>) -> Self {
         self.group_map = map;
+        self
+    }
+
+    /// Set the progress callback.
+    #[must_use]
+    pub fn with_progress_callback(mut self, callback: Arc<dyn ProgressCallback>) -> Self {
+        self.progress_callback = Some(callback);
         self
     }
 
@@ -772,6 +835,7 @@ impl MultiWalker {
     pub fn walk(&self) -> impl Iterator<Item = Result<FileEntry, ScanError>> + '_ {
         use rayon::prelude::*;
         use std::collections::HashSet;
+        use std::sync::atomic::AtomicUsize;
         use std::sync::Mutex;
 
         // Early return for empty roots
@@ -780,9 +844,10 @@ impl MultiWalker {
         }
 
         // Use a mutex-protected HashSet to track seen canonical paths across all walkers
-        // This prevents duplicates when files might be accessible via different paths
-        // (e.g., symlinks that weren't followed but point to files in another scanned dir)
         let seen_paths: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+
+        // Shared counter for progress reporting across all directories
+        let total_count = Arc::new(AtomicUsize::new(0));
 
         // Walk all directories in parallel and collect results
         let all_results: Vec<Result<FileEntry, ScanError>> = self
@@ -807,6 +872,17 @@ impl MultiWalker {
                 if let Some(name) = group_name {
                     walker = walker.with_group_name(name);
                 }
+
+                // If we have a progress callback, wrap it to use the global counter
+                let walker = if let Some(ref callback) = self.progress_callback {
+                    let shared_callback = SharedProgressCallback {
+                        inner: Arc::clone(callback),
+                        count: Arc::clone(&total_count),
+                    };
+                    walker.with_progress_callback(Arc::new(shared_callback))
+                } else {
+                    walker
+                };
 
                 // Collect results from this walker
                 let results: Vec<Result<FileEntry, ScanError>> = walker
@@ -848,6 +924,35 @@ impl MultiWalker {
             .collect();
 
         all_results.into_iter()
+    }
+}
+
+/// A wrapper for ProgressCallback that uses a shared atomic counter.
+struct SharedProgressCallback {
+    inner: Arc<dyn ProgressCallback>,
+    count: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ProgressCallback for SharedProgressCallback {
+    fn on_phase_start(&self, phase: &str, total: usize) {
+        self.inner.on_phase_start(phase, total);
+    }
+
+    fn on_progress(&self, _current: usize, path: &str) {
+        let current = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+        self.inner.on_progress(current, path);
+    }
+
+    fn on_item_completed(&self, bytes: u64) {
+        self.inner.on_item_completed(bytes);
+    }
+
+    fn on_phase_end(&self, phase: &str) {
+        self.inner.on_phase_end(phase);
+    }
+
+    fn on_message(&self, message: &str) {
+        self.inner.on_message(message);
     }
 }
 
@@ -1490,6 +1595,50 @@ mod tests {
         // Should only find the normal file
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path.file_name().unwrap(), "normal.txt");
+    }
+
+    #[test]
+    fn test_multi_walker_progress_reporting() {
+        use std::sync::Mutex;
+
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+
+        let mut f = File::create(dir1.path().join("a.txt")).unwrap();
+        writeln!(f, "content a").unwrap();
+        let mut f = File::create(dir2.path().join("b.txt")).unwrap();
+        writeln!(f, "content b").unwrap();
+
+        let paths = vec![dir1.path().to_path_buf(), dir2.path().to_path_buf()];
+
+        struct TestCallback {
+            counts: Mutex<Vec<usize>>,
+        }
+        impl ProgressCallback for TestCallback {
+            fn on_phase_start(&self, _: &str, _: usize) {}
+            fn on_progress(&self, current: usize, _: &str) {
+                self.counts.lock().unwrap().push(current);
+            }
+            fn on_phase_end(&self, _: &str) {}
+            fn on_message(&self, _: &str) {}
+        }
+
+        let callback = Arc::new(TestCallback {
+            counts: Mutex::new(Vec::new()),
+        });
+
+        let walker = MultiWalker::new(paths, WalkerConfig::default())
+            .with_progress_callback(Arc::clone(&callback) as Arc<dyn ProgressCallback>);
+
+        let _files: Vec<_> = walker.walk().collect();
+
+        let mut counts = callback.counts.lock().unwrap().clone();
+        counts.sort();
+
+        // Should have called on_progress twice, once for each file
+        assert_eq!(counts.len(), 2);
+        // The counts should be 1 and 2 (because of SharedProgressCallback)
+        assert_eq!(counts, vec![1, 2]);
     }
 
     #[test]

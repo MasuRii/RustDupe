@@ -15,7 +15,50 @@ use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
-use crate::duplicates::ProgressCallback;
+/// Progress callback for duplicate finding phases.
+///
+/// Implement this trait to receive progress updates during
+/// the duplicate detection pipeline.
+pub trait ProgressCallback: Send + Sync {
+    /// Called when a phase starts.
+    ///
+    /// # Arguments
+    ///
+    /// * `phase` - Name of the phase (e.g., "prehash", "fullhash")
+    /// * `total` - Total number of items to process
+    fn on_phase_start(&self, phase: &str, total: usize);
+
+    /// Called for each item processed.
+    ///
+    /// # Arguments
+    ///
+    /// * `current` - Current item number (1-based)
+    /// * `path` - Path being processed
+    fn on_progress(&self, current: usize, path: &str);
+
+    /// Called when an item has been processed, providing its size.
+    ///
+    /// This can be used to track byte-based throughput.
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes` - Size of the item in bytes
+    fn on_item_completed(&self, _bytes: u64) {}
+
+    /// Called when a phase completes.
+    ///
+    /// # Arguments
+    ///
+    /// * `phase` - Name of the phase
+    fn on_phase_end(&self, phase: &str);
+
+    /// Called to update the progress message.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The new message to display
+    fn on_message(&self, _message: &str) {}
+}
 
 /// Progress reporter using indicatif.
 ///
@@ -26,6 +69,7 @@ pub struct Progress {
     walking: Mutex<Option<ProgressBar>>,
     prehash: Mutex<Option<ProgressBar>>,
     fullhash: Mutex<Option<ProgressBar>>,
+    prefix: Mutex<String>,
     quiet: bool,
     accessible: bool,
 }
@@ -50,6 +94,7 @@ impl Progress {
             walking: Mutex::new(None),
             prehash: Mutex::new(None),
             fullhash: Mutex::new(None),
+            prefix: Mutex::new(String::new()),
             quiet,
             accessible: false,
         }
@@ -76,6 +121,7 @@ impl Progress {
             walking: Mutex::new(None),
             prehash: Mutex::new(None),
             fullhash: Mutex::new(None),
+            prefix: Mutex::new(String::new()),
             quiet,
             accessible,
         }
@@ -183,19 +229,23 @@ impl ProgressCallback for Progress {
             return;
         }
 
-        // Update the active progress bar
-        // We check which one is active. Usually only one is active at a time
-        // in the current DuplicateFinder implementation.
+        let prefix = self.prefix.lock().unwrap();
+        let display_msg = if prefix.is_empty() {
+            truncate_path(path, 30)
+        } else {
+            format!("{}: {}", *prefix, truncate_path(path, 30))
+        };
 
+        // Update the active progress bar
         if let Some(ref pb) = *self.fullhash.lock().unwrap() {
             pb.set_position(current as u64);
-            pb.set_message(truncate_path(path, 30));
+            pb.set_message(display_msg);
         } else if let Some(ref pb) = *self.prehash.lock().unwrap() {
             pb.set_position(current as u64);
-            pb.set_message(truncate_path(path, 30));
+            pb.set_message(display_msg);
         } else if let Some(ref pb) = *self.walking.lock().unwrap() {
             pb.set_position(current as u64);
-            pb.set_message(truncate_path(path, 30));
+            pb.set_message(display_msg);
         }
     }
 
@@ -226,6 +276,22 @@ impl ProgressCallback for Progress {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn on_message(&self, message: &str) {
+        if self.quiet {
+            return;
+        }
+
+        *self.prefix.lock().unwrap() = message.to_string();
+
+        if let Some(ref pb) = *self.fullhash.lock().unwrap() {
+            pb.set_message(message.to_string());
+        } else if let Some(ref pb) = *self.prehash.lock().unwrap() {
+            pb.set_message(message.to_string());
+        } else if let Some(ref pb) = *self.walking.lock().unwrap() {
+            pb.set_message(message.to_string());
         }
     }
 }

@@ -289,14 +289,10 @@ fn handle_scan(
             std::collections::HashMap::new()
         };
 
-        // Configure progress reporting for non-TUI modes
-        let progress = if args.output != OutputFormat::Tui {
-            Some(Arc::new(rustdupe::progress::Progress::with_accessible(
-                quiet, accessible,
-            )))
-        } else {
-            None
-        };
+        // Configure progress reporting
+        let progress = Some(Arc::new(rustdupe::progress::Progress::with_accessible(
+            quiet, accessible,
+        )));
 
         // Configure the duplicate finder
         let mut finder_config = FinderConfig::default()

@@ -37,6 +37,7 @@ use std::sync::Arc;
 use rayon::prelude::*;
 
 use crate::cache::{CacheEntry, HashCache};
+use crate::progress::ProgressCallback;
 use crate::scanner::{FileEntry, Hash, Hasher};
 
 /// Configuration for prehash phase.
@@ -124,44 +125,6 @@ impl PrehashConfig {
             .as_ref()
             .is_some_and(|f| f.load(Ordering::SeqCst))
     }
-}
-
-/// Progress callback for duplicate finding phases.
-///
-/// Implement this trait to receive progress updates during
-/// the duplicate detection pipeline.
-pub trait ProgressCallback: Send + Sync {
-    /// Called when a phase starts.
-    ///
-    /// # Arguments
-    ///
-    /// * `phase` - Name of the phase (e.g., "prehash", "fullhash")
-    /// * `total` - Total number of items to process
-    fn on_phase_start(&self, phase: &str, total: usize);
-
-    /// Called for each item processed.
-    ///
-    /// # Arguments
-    ///
-    /// * `current` - Current item number (1-based)
-    /// * `path` - Path being processed
-    fn on_progress(&self, current: usize, path: &str);
-
-    /// Called when an item has been processed, providing its size.
-    ///
-    /// This can be used to track byte-based throughput.
-    ///
-    /// # Arguments
-    ///
-    /// * `bytes` - Size of the item in bytes
-    fn on_item_completed(&self, _bytes: u64) {}
-
-    /// Called when a phase completes.
-    ///
-    /// # Arguments
-    ///
-    /// * `phase` - Name of the phase
-    fn on_phase_end(&self, phase: &str);
 }
 
 /// Statistics from prehash phase.
@@ -1190,19 +1153,22 @@ impl DuplicateFinder {
         }
 
         // Phase 0: Walk directory and collect files
-        log::info!("Phase 0: Walking directory...");
         if let Some(ref callback) = self.config.progress_callback {
-            callback.on_phase_start("walking", 0); // Unknown total
+            callback.on_phase_start("walking", 0);
+            callback.on_message(&format!("Walking {}", path.display()));
         }
 
-        let walker = crate::scanner::Walker::new(path, self.config.walker_config.clone());
+        let mut walker = crate::scanner::Walker::new(path, self.config.walker_config.clone());
 
         // Set shutdown flag on walker if available
-        let walker = if let Some(ref flag) = self.config.shutdown_flag {
-            walker.with_shutdown_flag(flag.clone())
-        } else {
-            walker
-        };
+        if let Some(ref flag) = self.config.shutdown_flag {
+            walker = walker.with_shutdown_flag(flag.clone());
+        }
+
+        // Set progress callback on walker if available
+        if let Some(ref callback) = self.config.progress_callback {
+            walker = walker.with_progress_callback(callback.clone());
+        }
 
         let files: Vec<FileEntry> = walker.walk().filter_map(|r| r.ok()).collect();
 
@@ -1490,12 +1456,12 @@ impl DuplicateFinder {
         log::info!("Starting multi-directory scan of {} path(s)", paths.len());
 
         // Phase 0: Walk all directories and collect files
-        log::info!("Phase 0: Walking directories...");
         if let Some(ref callback) = self.config.progress_callback {
-            callback.on_phase_start("walking", 0); // Unknown total
+            callback.on_phase_start("walking", 0);
+            callback.on_message(&format!("Walking {} directories", paths.len()));
         }
 
-        let multi_walker =
+        let mut multi_walker =
             crate::scanner::MultiWalker::new(paths, self.config.walker_config.clone());
 
         // Log the actual roots being scanned (after dedup/overlap detection)
@@ -1512,19 +1478,20 @@ impl DuplicateFinder {
             roots.iter().map(|p| p.display()).collect::<Vec<_>>()
         );
 
-        // Set shutdown flag on walker if available
-        let multi_walker = if let Some(ref flag) = self.config.shutdown_flag {
-            multi_walker.with_shutdown_flag(flag.clone())
-        } else {
-            multi_walker
-        };
+        // Set shutdown flag on multi_walker if available
+        if let Some(ref flag) = self.config.shutdown_flag {
+            multi_walker = multi_walker.with_shutdown_flag(flag.clone());
+        }
 
         // Set group map for named directory groups
-        let multi_walker = if !self.config.group_map.is_empty() {
-            multi_walker.with_group_map(self.config.group_map.clone())
-        } else {
-            multi_walker
-        };
+        if !self.config.group_map.is_empty() {
+            multi_walker = multi_walker.with_group_map(self.config.group_map.clone());
+        }
+
+        // Set progress callback on multi_walker if available
+        if let Some(ref callback) = self.config.progress_callback {
+            multi_walker = multi_walker.with_progress_callback(callback.clone());
+        }
 
         let files: Vec<FileEntry> = multi_walker.walk().filter_map(|r| r.ok()).collect();
 
