@@ -737,6 +737,16 @@ impl KeyBindings {
             vec![Self::key(KeyCode::Char('e'), KeyModifiers::NONE)],
         );
 
+        bindings.insert(
+            Action::CycleSortColumn,
+            vec![Self::key(KeyCode::Tab, KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::ReverseSortDirection,
+            vec![Self::key(KeyCode::BackTab, KeyModifiers::SHIFT)],
+        );
+
         // Help
         bindings.insert(
             Action::ShowHelp,
@@ -928,6 +938,16 @@ impl KeyBindings {
             vec![Self::key(KeyCode::Char('e'), KeyModifiers::NONE)],
         );
 
+        bindings.insert(
+            Action::CycleSortColumn,
+            vec![Self::key(KeyCode::Tab, KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::ReverseSortDirection,
+            vec![Self::key(KeyCode::BackTab, KeyModifiers::SHIFT)],
+        );
+
         // Help
         bindings.insert(
             Action::ShowHelp,
@@ -1096,6 +1116,16 @@ impl KeyBindings {
         bindings.insert(
             Action::ToggleExpandAll,
             vec![Self::key(KeyCode::Char('e'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::CycleSortColumn,
+            vec![Self::key(KeyCode::Tab, KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::ReverseSortDirection,
+            vec![Self::key(KeyCode::BackTab, KeyModifiers::SHIFT)],
         );
 
         // Help
@@ -1290,6 +1320,16 @@ impl KeyBindings {
         bindings.insert(
             Action::ToggleExpandAll,
             vec![Self::key(KeyCode::Char('e'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::CycleSortColumn,
+            vec![Self::key(KeyCode::Tab, KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::ReverseSortDirection,
+            vec![Self::key(KeyCode::BackTab, KeyModifiers::SHIFT)],
         );
 
         // Help

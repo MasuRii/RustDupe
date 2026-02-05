@@ -185,6 +185,10 @@ pub enum Action {
     CollapseAll,
     /// Toggle expand/collapse of all groups
     ToggleExpandAll,
+    /// Cycle sort column
+    CycleSortColumn,
+    /// Reverse sort direction
+    ReverseSortDirection,
     /// Show help overlay with keybinding reference
     ShowHelp,
     /// Confirm current action
@@ -236,6 +240,8 @@ impl Action {
             Self::ExpandAll => "expand_all",
             Self::CollapseAll => "collapse_all",
             Self::ToggleExpandAll => "toggle_expand_all",
+            Self::CycleSortColumn => "cycle_sort_column",
+            Self::ReverseSortDirection => "reverse_sort_direction",
             Self::ShowHelp => "show_help",
             Self::Confirm => "confirm",
             Self::Cancel => "cancel",
@@ -274,6 +280,8 @@ impl Action {
             "expand_all",
             "collapse_all",
             "toggle_expand_all",
+            "cycle_sort_column",
+            "reverse_sort_direction",
             "show_help",
             "confirm",
             "cancel",
@@ -283,7 +291,7 @@ impl Action {
 
     /// Returns all action variants.
     #[must_use]
-    pub const fn all() -> [Action; 31] {
+    pub const fn all() -> [Action; 33] {
         [
             Self::NavigateUp,
             Self::NavigateDown,
@@ -312,6 +320,8 @@ impl Action {
             Self::ExpandAll,
             Self::CollapseAll,
             Self::ToggleExpandAll,
+            Self::CycleSortColumn,
+            Self::ReverseSortDirection,
             Self::ShowHelp,
             Self::Confirm,
             Self::Cancel,
@@ -352,6 +362,10 @@ impl std::str::FromStr for Action {
             "expand_all" => Ok(Self::ExpandAll),
             "collapse_all" => Ok(Self::CollapseAll),
             "toggle_expand_all" | "toggle_all" => Ok(Self::ToggleExpandAll),
+            "cycle_sort_column" | "sort" | "tab" => Ok(Self::CycleSortColumn),
+            "reverse_sort_direction" | "reverse_sort" | "shift_tab" => {
+                Ok(Self::ReverseSortDirection)
+            }
             "show_help" | "help" => Ok(Self::ShowHelp),
             "confirm" | "enter" => Ok(Self::Confirm),
             "cancel" | "escape" | "esc" => Ok(Self::Cancel),
@@ -424,6 +438,76 @@ pub enum BulkSelectionType {
     InNamedGroup,
 }
 
+/// Column used for sorting duplicate groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SortColumn {
+    /// Sort by file size (largest groups first)
+    #[default]
+    Size,
+    /// Sort by file path of the first file in group
+    Path,
+    /// Sort by modification date of the first file in group
+    Date,
+    /// Sort by number of duplicates in group
+    Count,
+}
+
+impl SortColumn {
+    /// Get the next column in rotation.
+    #[must_use]
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Size => Self::Path,
+            Self::Path => Self::Date,
+            Self::Date => Self::Count,
+            Self::Count => Self::Size,
+        }
+    }
+
+    /// Get the display name of the column.
+    #[must_use]
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Size => "Size",
+            Self::Path => "Path",
+            Self::Date => "Date",
+            Self::Count => "Count",
+        }
+    }
+}
+
+/// Direction for sorting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SortDirection {
+    /// Sort in descending order (largest/newest/last first)
+    #[default]
+    Descending,
+    /// Sort in ascending order (smallest/oldest/first first)
+    Ascending,
+}
+
+impl SortDirection {
+    /// Reverse the direction.
+    #[must_use]
+    pub fn reverse(&self) -> Self {
+        match self {
+            Self::Descending => Self::Ascending,
+            Self::Ascending => Self::Descending,
+        }
+    }
+
+    /// Get the display indicator.
+    #[must_use]
+    pub fn indicator(&self) -> &'static str {
+        match self {
+            Self::Descending => "▼",
+            Self::Ascending => "▲",
+        }
+    }
+}
+
 /// TUI application state.
 ///
 /// The central state container for the TUI application. Manages:
@@ -494,6 +578,10 @@ pub struct App {
     keybindings: Option<crate::tui::keybindings::KeyBindings>,
     /// Expanded group hashes
     expanded_groups: HashSet<[u8; 32]>,
+    /// Column to sort groups by
+    sort_column: SortColumn,
+    /// Direction to sort groups
+    sort_direction: SortDirection,
     /// Accessible mode for screen reader compatibility
     accessible: bool,
 }
@@ -546,6 +634,8 @@ impl App {
             theme: Theme::dark(),
             keybindings: None,
             expanded_groups: HashSet::new(),
+            sort_column: SortColumn::default(),
+            sort_direction: SortDirection::default(),
             accessible: false,
         }
     }
@@ -702,7 +792,7 @@ impl App {
             AppMode::Reviewing
         };
 
-        Self {
+        let mut app = Self {
             mode,
             groups,
             group_index: 0,
@@ -731,8 +821,21 @@ impl App {
             theme: Theme::dark(),
             keybindings: None,
             expanded_groups: HashSet::new(),
+            sort_column: SortColumn::default(),
+            sort_direction: SortDirection::default(),
             accessible: false,
+        };
+
+        if app.has_groups() {
+            app.sort_groups();
+            // Reset navigation to top after initial sort
+            app.group_index = 0;
+            app.file_index = 0;
+            app.group_scroll = 0;
+            app.file_scroll = 0;
         }
+
+        app
     }
 
     /// Set selections and navigation state from a session.
@@ -806,11 +909,17 @@ impl App {
     pub fn set_groups(&mut self, groups: Vec<DuplicateGroup>) {
         self.reclaimable_space = groups.iter().map(DuplicateGroup::wasted_space).sum();
         self.groups = groups;
+        self.selected_files.clear();
+
+        if !self.groups.is_empty() {
+            self.sort_groups();
+        }
+
+        // Reset navigation to top after loading new groups
         self.group_index = 0;
         self.file_index = 0;
         self.group_scroll = 0;
         self.file_scroll = 0;
-        self.selected_files.clear();
 
         log::info!(
             "Loaded {} duplicate groups, {} bytes reclaimable",
@@ -1411,6 +1520,154 @@ impl App {
     /// Clear the input query.
     pub fn clear_input_query(&mut self) {
         self.input_query.clear();
+    }
+
+    // ==================== Sorting ====================
+
+    /// Sort the duplicate groups based on current sort settings.
+    pub fn sort_groups(&mut self) {
+        if self.groups.is_empty() {
+            return;
+        }
+
+        // Store current selection if possible to restore position
+        let current_hash = self.current_group().map(|g| g.hash);
+
+        match self.sort_column {
+            SortColumn::Size => match self.sort_direction {
+                SortDirection::Descending => self.groups.sort_by(|a, b| b.size.cmp(&a.size)),
+                SortDirection::Ascending => self.groups.sort_by(|a, b| a.size.cmp(&b.size)),
+            },
+            SortColumn::Path => {
+                self.groups.sort_by(|a, b| {
+                    let path_a = a
+                        .files
+                        .first()
+                        .map(|f| f.path.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
+                    let path_b = b
+                        .files
+                        .first()
+                        .map(|f| f.path.to_string_lossy().to_lowercase())
+                        .unwrap_or_default();
+                    match self.sort_direction {
+                        SortDirection::Descending => path_b.cmp(&path_a),
+                        SortDirection::Ascending => path_a.cmp(&path_b),
+                    }
+                });
+            }
+            SortColumn::Date => {
+                self.groups.sort_by(|a, b| {
+                    let date_a = a
+                        .files
+                        .first()
+                        .map(|f| f.modified)
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    let date_b = b
+                        .files
+                        .first()
+                        .map(|f| f.modified)
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    match self.sort_direction {
+                        SortDirection::Descending => date_b.cmp(&date_a),
+                        SortDirection::Ascending => date_a.cmp(&date_b),
+                    }
+                });
+            }
+            SortColumn::Count => match self.sort_direction {
+                SortDirection::Descending => self
+                    .groups
+                    .sort_by(|a, b| b.files.len().cmp(&a.files.len())),
+                SortDirection::Ascending => self
+                    .groups
+                    .sort_by(|a, b| a.files.len().cmp(&b.files.len())),
+            },
+        }
+
+        // If search is active, we MUST re-apply it because the original indices have changed
+        if self.search_query.is_empty() {
+            self.filtered_indices = None;
+        } else {
+            // Re-apply search logic without resetting navigation (yet)
+            let query = self.search_query.to_lowercase();
+            let re = regex::RegexBuilder::new(&self.search_query)
+                .case_insensitive(true)
+                .build()
+                .ok();
+
+            let indices: Vec<usize> = self
+                .groups
+                .iter()
+                .enumerate()
+                .filter(|(_, group)| {
+                    group.files.iter().any(|file| {
+                        let path_str = file.path.to_string_lossy();
+                        let group_name = file.group_name.as_deref().unwrap_or("");
+                        if let Some(ref r) = re {
+                            if r.is_match(&path_str) || r.is_match(group_name) {
+                                return true;
+                            }
+                        }
+                        path_str.to_lowercase().contains(&query)
+                            || group_name.to_lowercase().contains(&query)
+                    })
+                })
+                .map(|(i, _)| i)
+                .collect();
+            self.filtered_indices = Some(indices);
+        }
+
+        // Restore position or reset
+        if let Some(hash) = current_hash {
+            if let Some(new_idx) = self.groups.iter().position(|g| g.hash == hash) {
+                if let Some(ref filtered) = self.filtered_indices {
+                    if let Some(filtered_idx) =
+                        filtered.iter().position(|&orig_idx| orig_idx == new_idx)
+                    {
+                        self.group_index = filtered_idx;
+                    } else {
+                        self.group_index = 0;
+                    }
+                } else {
+                    self.group_index = new_idx;
+                }
+            } else {
+                self.group_index = 0;
+            }
+        } else {
+            self.group_index = 0;
+        }
+
+        self.update_group_scroll();
+        log::debug!(
+            "Groups sorted by {:?} {:?}",
+            self.sort_column,
+            self.sort_direction
+        );
+    }
+
+    /// Cycle to the next sort column.
+    pub fn cycle_sort_column(&mut self) {
+        self.sort_column = self.sort_column.next();
+        self.sort_groups();
+    }
+
+    /// Reverse the current sort direction.
+    pub fn reverse_sort_direction(&mut self) {
+        self.sort_direction = self.sort_direction.reverse();
+        self.sort_groups();
+    }
+
+    /// Get the current sort column.
+    #[must_use]
+    pub fn sort_column(&self) -> SortColumn {
+        self.sort_column
+    }
+
+    /// Get the current sort direction.
+    #[must_use]
+    pub fn sort_direction(&self) -> SortDirection {
+        self.sort_direction
     }
 
     /// Get the pending bulk selection count.
@@ -2122,6 +2379,14 @@ impl App {
                 }
                 true
             }
+            Action::CycleSortColumn => {
+                self.cycle_sort_column();
+                true
+            }
+            Action::ReverseSortDirection => {
+                self.reverse_sort_direction();
+                true
+            }
             Action::ShowHelp => {
                 if self.mode == AppMode::ShowingHelp {
                     // Toggle off - return to reviewing
@@ -2213,8 +2478,12 @@ mod tests {
     use super::*;
 
     fn make_group(size: u64, paths: Vec<&str>) -> DuplicateGroup {
+        let mut hash = [0u8; 32];
+        let size_bytes = size.to_be_bytes();
+        hash[..8].copy_from_slice(&size_bytes);
+
         DuplicateGroup::new(
-            [0u8; 32],
+            hash,
             size,
             paths
                 .into_iter()
@@ -2615,12 +2884,13 @@ mod tests {
         ];
         let mut app = App::with_groups(groups);
 
+        // App::with_groups sorts by size descending by default, so 200 is first
         let group = app.current_group().unwrap();
-        assert_eq!(group.size, 100);
+        assert_eq!(group.size, 200);
 
         app.next_group();
         let group = app.current_group().unwrap();
-        assert_eq!(group.size, 200);
+        assert_eq!(group.size, 100);
     }
 
     #[test]
@@ -3076,6 +3346,70 @@ mod tests {
         assert_eq!(app.current_group().unwrap().size, 300);
     }
 
+    #[test]
+    fn test_sorting_groups() {
+        let groups = vec![
+            make_group(100, vec!["/z.txt", "/z2.txt"]),
+            make_group(300, vec!["/a.txt", "/a2.txt"]),
+            make_group(200, vec!["/m.txt", "/m2.txt", "/m3.txt"]),
+        ];
+        let mut app = App::with_groups(groups);
+
+        // Default sort is Size Descending
+        assert_eq!(app.sort_column(), SortColumn::Size);
+        assert_eq!(app.sort_direction(), SortDirection::Descending);
+        assert_eq!(app.groups()[0].size, 300);
+        assert_eq!(app.groups()[1].size, 200);
+        assert_eq!(app.groups()[2].size, 100);
+
+        // Reverse to Ascending
+        app.handle_action(Action::ReverseSortDirection);
+        assert_eq!(app.sort_direction(), SortDirection::Ascending);
+        assert_eq!(app.groups()[0].size, 100);
+        assert_eq!(app.groups()[1].size, 200);
+        assert_eq!(app.groups()[2].size, 300);
+
+        // Cycle to Path
+        app.handle_action(Action::CycleSortColumn);
+        assert_eq!(app.sort_column(), SortColumn::Path);
+        // path sort uses Descending by default (Wait, no, it uses whatever was current)
+        // Let's reset to Ascending for path
+        if app.sort_direction() == SortDirection::Descending {
+            app.handle_action(Action::ReverseSortDirection);
+        }
+        assert_eq!(app.groups()[0].files[0].path, PathBuf::from("/a.txt"));
+        assert_eq!(app.groups()[1].files[0].path, PathBuf::from("/m.txt"));
+        assert_eq!(app.groups()[2].files[0].path, PathBuf::from("/z.txt"));
+
+        // Cycle to Count
+        app.handle_action(Action::CycleSortColumn); // Date
+        app.handle_action(Action::CycleSortColumn); // Count
+        assert_eq!(app.sort_column(), SortColumn::Count);
+        app.handle_action(Action::ReverseSortDirection); // Descending
+        assert_eq!(app.groups()[0].files.len(), 3); // 3 copies
+        assert_eq!(app.groups()[1].files.len(), 2);
+    }
+
+    #[test]
+    fn test_sorting_maintains_selection() {
+        let groups = vec![
+            make_group(100, vec!["/z.txt", "/z2.txt"]),
+            make_group(300, vec!["/a.txt", "/a2.txt"]),
+        ];
+        let mut app = App::with_groups(groups);
+
+        // Initial sort: 300, 100. Select group 0 (size 300)
+        assert_eq!(app.current_group().unwrap().size, 300);
+        assert_eq!(app.group_index(), 0);
+
+        // Change sort to size ascending: 100, 300. Group 300 should now be at index 1
+        app.handle_action(Action::ReverseSortDirection);
+        assert_eq!(app.groups()[0].size, 100);
+        assert_eq!(app.groups()[1].size, 300);
+        assert_eq!(app.group_index(), 1);
+        assert_eq!(app.current_group().unwrap().size, 300);
+    }
+
     // =========================================================================
     // Action Parsing and Display Tests
     // =========================================================================
@@ -3146,7 +3480,7 @@ mod tests {
     #[test]
     fn test_action_all_names() {
         let names = Action::all_names();
-        assert_eq!(names.len(), 31);
+        assert_eq!(names.len(), 33);
         assert!(names.contains(&"navigate_down"));
         assert!(names.contains(&"show_help"));
         assert!(names.contains(&"select_group"));
@@ -3157,7 +3491,7 @@ mod tests {
     #[test]
     fn test_action_all() {
         let actions = Action::all();
-        assert_eq!(actions.len(), 31);
+        assert_eq!(actions.len(), 33);
         assert!(actions.contains(&Action::NavigateDown));
         assert!(actions.contains(&Action::ShowHelp));
         assert!(actions.contains(&Action::SelectGroup));

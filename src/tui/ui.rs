@@ -446,9 +446,11 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
             create_block_with_title(
                 app.is_accessible(),
                 format!(
-                    "Duplicate Groups ({}/{})",
+                    "Duplicate Groups ({}/{}) - Sort: {} {}",
                     selected_group + 1,
-                    visible_count
+                    visible_count,
+                    app.sort_column().display_name(),
+                    app.sort_direction().indicator()
                 ),
             )
             .border_style(Style::default().fg(app.theme().primary)),
@@ -1147,6 +1149,7 @@ fn get_reviewing_commands(
         ("Space", "Sel/Exp"),
         ("Enter", "Exp"),
         ("e", "ExpAll"),
+        ("Tab", "Sort"),
         ("a/A", "All"),
         ("o/n", "Age"),
         ("f", "Dir"),
@@ -1345,6 +1348,12 @@ fn get_help_lines_from_bindings<'a>(
         Style::default().fg(app.theme().secondary),
     )));
 
+    lines.push(format_help_line(
+        app,
+        bindings.key_hint(&Action::CycleSortColumn),
+        bindings.key_hint(&Action::ReverseSortDirection),
+        "Cycle sort / Reverse",
+    ));
     lines.push(format_help_line_single(
         app,
         &bindings.key_hint(&Action::Preview),
@@ -1402,6 +1411,7 @@ fn get_default_help_lines(app: &App) -> Vec<Line<'static>> {
             "─── Actions ───",
             Style::default().fg(app.theme().secondary),
         )),
+        format_help_line_static(app, "Tab, S-Tab", "Cycle sort / Reverse"),
         format_help_line_static(app, "p", "Preview file"),
         format_help_line_static(app, "d", "Delete selected"),
         format_help_line_static(app, "t", "Toggle theme"),
