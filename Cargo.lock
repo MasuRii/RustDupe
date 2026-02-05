@@ -1447,6 +1447,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
+ "toml",
  "trash",
  "unicode-normalization",
  "walkdir",

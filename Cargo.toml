@@ -76,6 +76,10 @@ ctrlc = { version = "3.4", features = ["termination"] }
 # Config/Cache Directory Discovery - XDG on Linux, AppData on Windows
 directories = "5"
 
+# Configuration File Parsing - TOML is the Rust ecosystem standard
+# Used with figment for layered config (defaults < file < env < CLI)
+toml = "0.8"
+
 # Unicode Path Normalization - Critical for macOS NFD vs NFC issues
 unicode-normalization = "0.1"
 
