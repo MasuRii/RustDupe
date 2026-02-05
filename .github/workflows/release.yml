@@ -97,14 +97,35 @@ jobs:
           ASSET_NAME="${PROJECT_NAME}-${VERSION}-${{ matrix.name }}"
           BINARY_PATH="target/${{ matrix.target }}/release/${BIN_NAME}${{ matrix.suffix }}"
           
-          mkdir dist
+          mkdir -p dist staging
+          
+          # Copy binary to staging area
+          cp "$BINARY_PATH" "staging/${BIN_NAME}${{ matrix.suffix }}"
+          
+          # Also copy raw binary to dist (some users prefer this)
           cp "$BINARY_PATH" "dist/${ASSET_NAME}${{ matrix.suffix }}"
-          cd dist
+          
+          # Create archive
+          cd staging
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            sha256sum "${ASSET_NAME}${{ matrix.suffix }}" > "${ASSET_NAME}${{ matrix.suffix }}.sha256"
+            # Windows: create .zip
+            7z a -tzip "../dist/${ASSET_NAME}.zip" "${BIN_NAME}${{ matrix.suffix }}"
           else
-            shasum -a 256 "${ASSET_NAME}${{ matrix.suffix }}" > "${ASSET_NAME}${{ matrix.suffix }}.sha256"
+            # Unix: create .tar.gz
+            tar -czvf "../dist/${ASSET_NAME}.tar.gz" "${BIN_NAME}${{ matrix.suffix }}"
           fi
+          cd ../dist
+          
+          # Generate checksums for all files
+          for file in *; do
+            if [[ ! "$file" == *.sha256 ]]; then
+              if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+                sha256sum "$file" > "${file}.sha256"
+              else
+                shasum -a 256 "$file" > "${file}.sha256"
+              fi
+            fi
+          done
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -132,8 +153,53 @@ jobs:
         id: release_body
         shell: bash
         run: |
+          VERSION="${{ needs.prepare.outputs.clean_version }}"
+          
           # Create a nice header
           echo "## Release ${{ needs.prepare.outputs.version }}" > release_notes.md
+          echo "" >> release_notes.md
+          
+          # Add Installation section
+          echo "### Installation" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "#### Linux" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo "# Download (choose glibc or musl version)" >> release_notes.md
+          echo "curl -LO https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.version }}/rustdupe-${VERSION}-linux-x86_64.tar.gz" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Extract and make executable" >> release_notes.md
+          echo "tar -xzf rustdupe-${VERSION}-linux-x86_64.tar.gz" >> release_notes.md
+          echo "chmod +x rustdupe" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Run" >> release_notes.md
+          echo "./rustdupe --help" >> release_notes.md
+          echo '```' >> release_notes.md
+          echo "" >> release_notes.md
+          echo "#### macOS" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo "# Download (use macos-arm64 for Apple Silicon, macos-x86_64 for Intel)" >> release_notes.md
+          echo "curl -LO https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.version }}/rustdupe-${VERSION}-macos-arm64.tar.gz" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Extract and make executable" >> release_notes.md
+          echo "tar -xzf rustdupe-${VERSION}-macos-arm64.tar.gz" >> release_notes.md
+          echo "chmod +x rustdupe" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Remove quarantine attribute (required for unsigned binaries)" >> release_notes.md
+          echo "xattr -d com.apple.quarantine rustdupe" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Run" >> release_notes.md
+          echo "./rustdupe --help" >> release_notes.md
+          echo '```' >> release_notes.md
+          echo "" >> release_notes.md
+          echo "#### Windows" >> release_notes.md
+          echo '```powershell' >> release_notes.md
+          echo "# Download and extract" >> release_notes.md
+          echo "Invoke-WebRequest -Uri https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.version }}/rustdupe-${VERSION}-windows-x86_64.zip -OutFile rustdupe.zip" >> release_notes.md
+          echo "Expand-Archive rustdupe.zip -DestinationPath ." >> release_notes.md
+          echo "" >> release_notes.md
+          echo "# Run" >> release_notes.md
+          echo ".\\rustdupe.exe --help" >> release_notes.md
+          echo '```' >> release_notes.md
           echo "" >> release_notes.md
           
           # Add "What's Changed" section
@@ -159,8 +225,12 @@ jobs:
               echo "| $filename | Checksum |" >> release_notes.md
             elif [[ "$filename" == *.exe ]]; then
               echo "| **$filename** | Windows Binary |" >> release_notes.md
+            elif [[ "$filename" == *.zip ]]; then
+              echo "| **$filename** | Windows Archive |" >> release_notes.md
+            elif [[ "$filename" == *.tar.gz ]]; then
+              echo "| **$filename** | Unix Archive |" >> release_notes.md
             else
-              echo "| **$filename** | Unix Binary |" >> release_notes.md
+              echo "| **$filename** | Binary |" >> release_notes.md
             fi
           done
           
