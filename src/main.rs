@@ -129,9 +129,28 @@ fn handle_scan(
             reference_paths,
         )
     } else {
-        let raw_path = args.path.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("A path is required for scanning unless --load-session is used")
-        })?;
+        // For now, we only support single-path scanning until task 2.2.2 implements multi-directory
+        // When multiple paths are specified, we use only the first path and log a warning
+        if args.paths.is_empty() {
+            anyhow::bail!(
+                "At least one path is required for scanning unless --load-session is used"
+            );
+        }
+
+        let raw_path = &args.paths[0];
+        if args.paths.len() > 1 {
+            log::warn!(
+                "Multi-directory scanning not yet implemented. Only scanning first path: {}",
+                raw_path.display()
+            );
+            log::warn!(
+                "Additional paths will be ignored: {:?}",
+                args.paths[1..]
+                    .iter()
+                    .map(|p| p.display())
+                    .collect::<Vec<_>>()
+            );
+        }
 
         // Canonicalize the scan path to ensure consistent path matching (especially on Windows)
         let path = raw_path.canonicalize()?;

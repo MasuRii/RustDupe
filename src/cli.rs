@@ -95,15 +95,20 @@ pub enum Commands {
 /// Arguments for the scan subcommand.
 #[derive(Debug, Args)]
 pub struct ScanArgs {
-    /// Directory path to scan for duplicates
-    #[arg(value_name = "PATH", required_unless_present = "load_session")]
-    pub path: Option<PathBuf>,
+    /// Directory paths to scan for duplicates
+    ///
+    /// Multiple directories can be specified and will be scanned together.
+    /// Duplicates will be found across all specified directories.
+    ///
+    /// Example: rustdupe scan /path/1 /path/2 /path/3
+    #[arg(value_name = "PATH", num_args = 1.., required_unless_present = "load_session")]
+    pub paths: Vec<PathBuf>,
 
     /// Load a previously saved session instead of scanning
     #[arg(
         long,
         value_name = "SESSION_FILE",
-        conflicts_with = "path",
+        conflicts_with = "paths",
         help_heading = "Scanning Options"
     )]
     pub load_session: Option<PathBuf>,
@@ -514,7 +519,7 @@ mod tests {
         assert_eq!(cli.verbose, 0);
         match cli.command {
             Commands::Scan(args) => {
-                assert_eq!(args.path, Some(PathBuf::from("/some/path")));
+                assert_eq!(args.paths, vec![PathBuf::from("/some/path")]);
                 assert_eq!(args.output, OutputFormat::Tui);
             }
             _ => panic!("Expected Scan command"),
@@ -735,7 +740,7 @@ mod tests {
 
         match cli.command {
             Commands::Scan(args) => {
-                assert_eq!(args.path, Some(PathBuf::from("/path")));
+                assert_eq!(args.paths, vec![PathBuf::from("/path")]);
                 assert_eq!(args.save_session, Some(PathBuf::from("session.json")));
                 assert_eq!(
                     args.reference_paths,
@@ -758,7 +763,7 @@ mod tests {
             Cli::try_parse_from(["rustdupe", "scan", "--load-session", "session.json"]).unwrap();
         match cli.command {
             Commands::Scan(args) => {
-                assert_eq!(args.path, None);
+                assert!(args.paths.is_empty());
                 assert_eq!(args.load_session, Some(PathBuf::from("session.json")));
             }
             _ => panic!("Expected Scan command"),
@@ -923,5 +928,84 @@ mod tests {
         assert!(cli.accessible);
         assert!(cli.no_color);
         assert_eq!(cli.verbose, 1);
+    }
+
+    #[test]
+    fn test_cli_parse_scan_multiple_paths() {
+        let cli =
+            Cli::try_parse_from(["rustdupe", "scan", "/path/1", "/path/2", "/path/3"]).unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.paths.len(), 3);
+                assert_eq!(args.paths[0], PathBuf::from("/path/1"));
+                assert_eq!(args.paths[1], PathBuf::from("/path/2"));
+                assert_eq!(args.paths[2], PathBuf::from("/path/3"));
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_scan_two_paths() {
+        let cli = Cli::try_parse_from(["rustdupe", "scan", "/downloads", "/documents"]).unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(
+                    args.paths,
+                    vec![PathBuf::from("/downloads"), PathBuf::from("/documents"),]
+                );
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_scan_multiple_paths_with_options() {
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "-v",
+            "scan",
+            "/path/1",
+            "/path/2",
+            "--output",
+            "json",
+            "--min-size",
+            "1MB",
+        ])
+        .unwrap();
+        assert_eq!(cli.verbose, 1);
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.paths.len(), 2);
+                assert_eq!(args.paths[0], PathBuf::from("/path/1"));
+                assert_eq!(args.paths[1], PathBuf::from("/path/2"));
+                assert_eq!(args.output, OutputFormat::Json);
+                assert_eq!(args.min_size, Some(1_000_000));
+            }
+            _ => panic!("Expected Scan command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_scan_zero_paths_error() {
+        // Zero paths without --load-session should fail
+        let result = Cli::try_parse_from(["rustdupe", "scan"]);
+        assert!(result.is_err());
+        let err_str = result.unwrap_err().to_string();
+        // The error should mention the required argument
+        assert!(err_str.contains("PATH") || err_str.contains("required"));
+    }
+
+    #[test]
+    fn test_cli_parse_scan_single_path_backward_compat() {
+        // Single path should still work (backward compatibility)
+        let cli = Cli::try_parse_from(["rustdupe", "scan", "/single/path"]).unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.paths.len(), 1);
+                assert_eq!(args.paths[0], PathBuf::from("/single/path"));
+            }
+            _ => panic!("Expected Scan command"),
+        }
     }
 }
