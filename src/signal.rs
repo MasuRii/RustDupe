@@ -149,10 +149,16 @@ pub enum SignalError {
     InstallFailed(#[from] ctrlc::Error),
 }
 
+use std::sync::OnceLock;
+
+static GLOBAL_HANDLER: OnceLock<ShutdownHandler> = OnceLock::new();
+
 /// Install a Ctrl+C handler that sets the shutdown flag on interrupt.
 ///
 /// This function should be called once, early in the application startup,
 /// before any long-running operations begin.
+///
+/// If a handler is already installed (e.g. in tests), it returns the existing one.
 ///
 /// When Ctrl+C is pressed:
 /// 1. The shutdown flag is set to `true`
@@ -166,35 +172,18 @@ pub enum SignalError {
 ///
 /// # Errors
 ///
-/// Returns `SignalError::InstallFailed` if the ctrlc handler cannot be installed.
-/// This can happen if a handler is already installed.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use rustdupe::signal::{install_handler, EXIT_CODE_INTERRUPTED};
-///
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let handler = install_handler()?;
-///
-///     // Pass the flag to workers
-///     let shutdown_flag = handler.get_flag();
-///
-///     // Do work...
-///
-///     // Check for shutdown
-///     if handler.is_shutdown_requested() {
-///         std::process::exit(EXIT_CODE_INTERRUPTED);
-///     }
-///
-///     Ok(())
-/// }
-/// ```
+/// Returns `SignalError::InstallFailed` if the ctrlc handler cannot be installed
+/// and it wasn't previously installed by this function.
 pub fn install_handler() -> Result<ShutdownHandler, SignalError> {
+    if let Some(handler) = GLOBAL_HANDLER.get() {
+        handler.reset();
+        return Ok(handler.clone());
+    }
+
     let handler = ShutdownHandler::new();
     let flag = handler.get_flag();
 
-    ctrlc::set_handler(move || {
+    match ctrlc::set_handler(move || {
         // Set the shutdown flag
         flag.store(true, Ordering::SeqCst);
 
@@ -203,11 +192,21 @@ pub fn install_handler() -> Result<ShutdownHandler, SignalError> {
         let _ = std::io::stderr().flush();
 
         log::info!("Shutdown signal received");
-    })?;
-
-    log::debug!("Ctrl+C signal handler installed");
-
-    Ok(handler)
+    }) {
+        Ok(_) => {
+            let _ = GLOBAL_HANDLER.set(handler.clone());
+            Ok(handler)
+        }
+        Err(e) => {
+            // If it failed because it was already set, try to get the one we set (or someone else set)
+            if let Some(handler) = GLOBAL_HANDLER.get() {
+                handler.reset();
+                Ok(handler.clone())
+            } else {
+                Err(SignalError::InstallFailed(e))
+            }
+        }
+    }
 }
 
 /// Create a handler without installing any signal hooks.

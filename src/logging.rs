@@ -94,7 +94,7 @@ pub fn init_logging(verbose: u8, quiet: bool) {
     configure_format(&mut builder, verbose);
 
     // Initialize the logger
-    builder.init();
+    let _ = builder.try_init();
 
     // Log initialization message (only if not using RUST_LOG, as we already logged above)
     if !use_env {
