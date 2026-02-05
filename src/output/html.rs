@@ -24,8 +24,12 @@ use std::io::Write;
 use std::time::SystemTime;
 
 use askama::Template;
+use base64::Engine;
 use bytesize::ByteSize;
 use chrono::{DateTime, Local};
+use image::ImageFormat;
+use std::io::Cursor;
+use std::path::Path;
 
 use crate::duplicates::{DuplicateGroup, ScanSummary};
 
@@ -49,6 +53,8 @@ pub struct HtmlOutput {
     pub total_duration: String,
     /// Formatted phase durations
     pub phases: Vec<HtmlPhaseDuration>,
+    /// Whether thumbnails are enabled
+    pub html_thumbnails: bool,
     /// List of duplicate groups formatted for HTML
     pub groups: Vec<HtmlDuplicateGroup>,
 }
@@ -79,6 +85,8 @@ pub struct HtmlFileEntry {
     pub modified_formatted: String,
     /// Whether this file is in a protected reference directory
     pub is_reference: bool,
+    /// Optional URI for the thumbnail or original image
+    pub thumbnail_uri: Option<String>,
 }
 
 impl HtmlOutput {
@@ -88,8 +96,13 @@ impl HtmlOutput {
     ///
     /// * `groups` - The duplicate groups found during scanning
     /// * `summary` - The scan summary statistics
+    /// * `config` - The application configuration
     #[must_use]
-    pub fn new(groups: &[DuplicateGroup], summary: &ScanSummary) -> Self {
+    pub fn new(
+        groups: &[DuplicateGroup],
+        summary: &ScanSummary,
+        config: &crate::config::Config,
+    ) -> Self {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let version = env!("CARGO_PKG_VERSION").to_string();
 
@@ -131,10 +144,26 @@ impl HtmlOutput {
                 files: g
                     .files
                     .iter()
-                    .map(|f| HtmlFileEntry {
-                        path_display: f.path.to_string_lossy().into_owned(),
-                        modified_formatted: format_time(f.modified),
-                        is_reference: g.is_in_reference_dir(&f.path),
+                    .map(|f| {
+                        let thumbnail_uri = if config.html_thumbnails && f.is_image() {
+                            if config.html_thumbnail_embed {
+                                generate_thumbnail(&f.path, config.html_thumbnail_size)
+                            } else {
+                                Some(format!(
+                                    "file:///{}",
+                                    f.path.to_string_lossy().replace('\\', "/")
+                                ))
+                            }
+                        } else {
+                            None
+                        };
+
+                        HtmlFileEntry {
+                            path_display: f.path.to_string_lossy().into_owned(),
+                            modified_formatted: format_time(f.modified),
+                            is_reference: g.is_in_reference_dir(&f.path),
+                            thumbnail_uri,
+                        }
                     })
                     .collect(),
             })
@@ -149,9 +178,28 @@ impl HtmlOutput {
             reclaimable_space: ByteSize::b(summary.reclaimable_space).to_string(),
             total_duration: format_duration(summary.scan_duration),
             phases,
+            html_thumbnails: config.html_thumbnails,
             groups: html_groups,
         }
     }
+}
+
+/// Generate a base64-encoded thumbnail for an image file.
+fn generate_thumbnail(path: &Path, max_size: u32) -> Option<String> {
+    // 1. Open the image
+    let img = image::open(path).ok()?;
+
+    // 2. Resize while preserving aspect ratio
+    let thumbnail = img.thumbnail(max_size, max_size);
+
+    // 3. Encode as JPEG to a memory buffer
+    let mut buffer = Vec::new();
+    let mut cursor = Cursor::new(&mut buffer);
+    thumbnail.write_to(&mut cursor, ImageFormat::Jpeg).ok()?;
+
+    // 4. Encode to base64
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&buffer);
+    Some(format!("data:image/jpeg;base64,{}", b64))
 }
 
 /// Format a duration as a human-readable string.
@@ -240,8 +288,9 @@ mod tests {
             scan_duration: Duration::from_secs(1),
             ..Default::default()
         };
+        let config = crate::config::Config::default();
 
-        let output = HtmlOutput::new(&groups, &summary);
+        let output = HtmlOutput::new(&groups, &summary, &config);
         assert_eq!(output.summary.total_files, 2);
         assert_eq!(output.groups.len(), 1);
         assert_eq!(output.groups[0].files.len(), 2);
@@ -270,8 +319,9 @@ mod tests {
             scan_duration: Duration::from_secs(1),
             ..Default::default()
         };
+        let config = crate::config::Config::default();
 
-        let output = HtmlOutput::new(&groups, &summary);
+        let output = HtmlOutput::new(&groups, &summary, &config);
         let html = output.to_html().expect("Failed to render HTML");
 
         assert!(html.contains("<!DOCTYPE html>"));
@@ -298,8 +348,9 @@ mod tests {
             Vec::new(),
         )];
         let summary = ScanSummary::default();
+        let config = crate::config::Config::default();
 
-        let output = HtmlOutput::new(&groups, &summary);
+        let output = HtmlOutput::new(&groups, &summary, &config);
         let html = output.to_html().expect("Failed to render HTML");
 
         // Check that the tricky characters are escaped
@@ -314,8 +365,9 @@ mod tests {
     fn test_empty_report() {
         let groups = Vec::new();
         let summary = ScanSummary::default();
+        let config = crate::config::Config::default();
 
-        let output = HtmlOutput::new(&groups, &summary);
+        let output = HtmlOutput::new(&groups, &summary, &config);
         let html = output.to_html().expect("Failed to render HTML");
 
         assert!(html.contains("Duplicate Report"));
@@ -336,8 +388,9 @@ mod tests {
             scan_duration: Duration::from_secs(42),
             ..Default::default()
         };
+        let config = crate::config::Config::default();
 
-        let output = HtmlOutput::new(&[], &summary);
+        let output = HtmlOutput::new(&[], &summary, &config);
         let html = output.to_html().expect("Failed to render HTML");
 
         assert!(html.contains("1234 files"));
@@ -360,11 +413,31 @@ mod tests {
             vec![ref_path],
         )];
         let summary = ScanSummary::default();
+        let config = crate::config::Config::default();
 
-        let output = HtmlOutput::new(&groups, &summary);
+        let output = HtmlOutput::new(&groups, &summary, &config);
         let html = output.to_html().expect("Failed to render HTML");
 
         assert!(html.contains("badge-ref"));
         assert!(html.contains("Reference"));
+    }
+
+    #[test]
+    fn test_thumbnail_generation() {
+        use image::{Rgb, RgbImage};
+        let temp_dir = tempfile::tempdir().unwrap();
+        let img_path = temp_dir.path().join("test.png");
+
+        // Create a simple red 100x100 image
+        let mut img = RgbImage::new(100, 100);
+        for pixel in img.pixels_mut() {
+            *pixel = Rgb([255, 0, 0]);
+        }
+        img.save(&img_path).unwrap();
+
+        let thumb = generate_thumbnail(&img_path, 50);
+        assert!(thumb.is_some());
+        let thumb_str = thumb.unwrap();
+        assert!(thumb_str.starts_with("data:image/jpeg;base64,"));
     }
 }

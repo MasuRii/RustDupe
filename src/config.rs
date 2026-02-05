@@ -239,6 +239,19 @@ pub struct Config {
     #[serde(default = "default_min_group_size")]
     pub min_group_size: usize,
 
+    // HTML Report Defaults
+    /// Enable image thumbnails in HTML reports.
+    #[serde(default)]
+    pub html_thumbnails: bool,
+
+    /// Maximum dimension for HTML report thumbnails (in pixels).
+    #[serde(default = "default_thumbnail_size")]
+    pub html_thumbnail_size: u32,
+
+    /// Embed thumbnails as base64 in the HTML report.
+    #[serde(default = "default_true")]
+    pub html_thumbnail_embed: bool,
+
     // Named Profiles
     /// Named configuration profiles.
     ///
@@ -257,6 +270,10 @@ fn default_bloom_fp_rate() -> f64 {
 
 fn default_min_group_size() -> usize {
     2
+}
+
+fn default_thumbnail_size() -> u32 {
+    100
 }
 
 impl Default for Config {
@@ -288,6 +305,9 @@ impl Default for Config {
             similarity_threshold: None,
             bloom_fp_rate: 0.01,
             min_group_size: 2,
+            html_thumbnails: false,
+            html_thumbnail_size: 100,
+            html_thumbnail_embed: true,
             profile: HashMap::new(),
         }
     }
@@ -513,6 +533,18 @@ impl Config {
         if let Some(min_group) = args.min_group_size {
             self.min_group_size = min_group;
         }
+        if args.html_thumbnails {
+            self.html_thumbnails = true;
+        }
+        if args.no_html_thumbnails {
+            self.html_thumbnails = false;
+        }
+        if let Some(size) = args.html_thumbnail_size {
+            self.html_thumbnail_size = size;
+        }
+        if args.html_thumbnail_link {
+            self.html_thumbnail_embed = false;
+        }
     }
 
     /// Merge load arguments into the configuration.
@@ -558,6 +590,9 @@ fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str)
         "similarity_threshold",
         "bloom_fp_rate",
         "min_group_size",
+        "html_thumbnails",
+        "html_thumbnail_size",
+        "html_thumbnail_embed",
         "profile",
     ];
 
@@ -656,6 +691,9 @@ fn validate_profile_keys(table: &toml_edit::Table, path: &str, content: &str) {
         "output",
         "similarity_threshold",
         "bloom_fp_rate",
+        "html_thumbnails",
+        "html_thumbnail_size",
+        "html_thumbnail_embed",
     ];
 
     for (key, _) in table.iter() {

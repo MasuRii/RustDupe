@@ -12,11 +12,13 @@
 //! use rustdupe::error::ExitCode;
 //! use std::path::Path;
 //!
+//! use rustdupe::config::Config;
+//!
 //! let finder = DuplicateFinder::with_defaults();
 //! let (groups, summary) = finder.find_duplicates(Path::new(".")).unwrap();
 //!
 //! // Output as JSON to stdout
-//! let output = JsonOutput::new(&groups, &summary, ExitCode::Success);
+//! let output = JsonOutput::new(&groups, &summary, ExitCode::Success, &Config::default());
 //! println!("{}", output.to_json_pretty().unwrap());
 //! ```
 

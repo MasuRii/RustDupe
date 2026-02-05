@@ -466,6 +466,22 @@ pub struct ScanArgs {
     /// Minimum number of files in a group to be considered a duplicate (default: 2)
     #[arg(long, value_name = "N", help_heading = "Scanning Options")]
     pub min_group_size: Option<usize>,
+
+    /// Enable image thumbnails in HTML reports
+    #[arg(long, help_heading = "Output Options")]
+    pub html_thumbnails: bool,
+
+    /// Disable image thumbnails in HTML reports
+    #[arg(long, overrides_with = "html_thumbnails", hide = true)]
+    pub no_html_thumbnails: bool,
+
+    /// Maximum dimension for HTML report thumbnails (default: 100)
+    #[arg(long, value_name = "PIXELS", help_heading = "Output Options")]
+    pub html_thumbnail_size: Option<u32>,
+
+    /// Link to original images instead of embedding thumbnails as base64
+    #[arg(long, help_heading = "Output Options")]
+    pub html_thumbnail_link: bool,
 }
 
 /// Arguments for the load subcommand.

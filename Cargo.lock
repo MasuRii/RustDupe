@@ -2248,6 +2248,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "askama",
+ "base64",
  "bk-tree",
  "blake3",
  "bytesize",

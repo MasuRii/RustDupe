@@ -426,10 +426,14 @@ fn handle_scan(
         }
     };
 
+    let config_output = config.output;
+    let config_dry_run = config.dry_run;
+
     handle_results(ResultContext {
         groups,
         summary,
-        output_format: config.output,
+        config,
+        output_format: config_output,
         output_file: args.output_file,
         script_type: args.script_type,
         save_session: args.save_session,
@@ -438,7 +442,7 @@ fn handle_scan(
         shutdown_flag,
         initial_session: None,
         reference_paths,
-        dry_run: config.dry_run,
+        dry_run: config_dry_run,
         quiet,
         theme,
         keybindings,
@@ -463,10 +467,14 @@ fn handle_load(
         .map(|g| g.reference_paths.clone())
         .unwrap_or_default();
 
+    let config_output = config.output;
+    let config_dry_run = config.dry_run;
+
     handle_results(ResultContext {
         groups,
         summary,
-        output_format: config.output,
+        config,
+        output_format: config_output,
         output_file: args.output_file,
         script_type: args.script_type,
         save_session: None,
@@ -475,7 +483,7 @@ fn handle_load(
         shutdown_flag,
         initial_session: Some(session),
         reference_paths,
-        dry_run: config.dry_run,
+        dry_run: config_dry_run,
         quiet,
         theme,
         keybindings,
@@ -486,6 +494,7 @@ fn handle_load(
 struct ResultContext {
     groups: Vec<crate::duplicates::DuplicateGroup>,
     summary: crate::duplicates::ScanSummary,
+    config: Config,
     output_format: OutputFormat,
     output_file: Option<std::path::PathBuf>,
     script_type: Option<ScriptTypeArg>,
@@ -506,6 +515,7 @@ fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
     let ResultContext {
         groups,
         summary,
+        config,
         output_format,
         output_file,
         script_type,
@@ -618,7 +628,7 @@ fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
             }
         }
         OutputFormat::Json => {
-            let json_output = crate::output::JsonOutput::new(&groups, &summary, exit_code);
+            let json_output = crate::output::JsonOutput::new(&groups, &summary, exit_code, &config);
             if let Some(path) = output_file {
                 let mut file = fs::File::create(&path)
                     .with_context(|| format!("Failed to create output file: {}", path.display()))?;
@@ -653,7 +663,7 @@ fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
             }
         }
         OutputFormat::Html => {
-            let html_output = crate::output::HtmlOutput::new(&groups, &summary);
+            let html_output = crate::output::HtmlOutput::new(&groups, &summary, &config);
             if let Some(path) = output_file {
                 let mut file = fs::File::create(&path)
                     .with_context(|| format!("Failed to create output file: {}", path.display()))?;

@@ -112,6 +112,7 @@ sha2 = "0.10"
 
 # Templating for HTML reports
 askama = "0.12"
+base64 = "0.22.1"
 
 [build-dependencies]
 # Windows manifest embedding for long path support (>260 chars)

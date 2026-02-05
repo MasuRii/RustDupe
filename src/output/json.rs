@@ -37,7 +37,7 @@
 //! let (groups, summary) = finder.find_duplicates(Path::new(".")).unwrap();
 //!
 //! // Compact JSON
-//! let output = JsonOutput::new(&groups, &summary, ExitCode::Success);
+//! let output = JsonOutput::new(&groups, &summary, ExitCode::Success, &Config::default());
 //! println!("{}", output.to_json().unwrap());
 //!
 //! // Pretty-printed JSON
@@ -46,9 +46,24 @@
 
 use std::io::Write;
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use crate::config::Config;
 use crate::duplicates::{DuplicateGroup, ScanSummary};
+
+/// Metadata about the scan in JSON format.
+#[derive(Debug, Clone, Serialize)]
+pub struct JsonMetadata {
+    /// Application version
+    pub version: String,
+    /// Timestamp of the scan completion (RFC3339)
+    pub timestamp: DateTime<Utc>,
+    /// Schema version for the JSON output
+    pub schema_version: String,
+    /// Configuration used for the scan
+    pub config: Config,
+}
 
 /// A single duplicate group in JSON format.
 #[derive(Debug, Clone, Serialize)]
@@ -168,6 +183,8 @@ impl JsonSummary {
 /// Complete JSON output structure.
 #[derive(Debug, Clone, Serialize)]
 pub struct JsonOutput {
+    /// Metadata about the scan
+    pub metadata: JsonMetadata,
     /// List of duplicate groups
     pub duplicates: Vec<JsonDuplicateGroup>,
     /// Scan summary statistics
@@ -175,13 +192,14 @@ pub struct JsonOutput {
 }
 
 impl JsonOutput {
-    /// Create a new JSON output from duplicate groups, summary and exit code.
+    /// Create a new JSON output from duplicate groups, summary, exit code and config.
     ///
     /// # Arguments
     ///
     /// * `groups` - The duplicate groups found during scanning
     /// * `summary` - The scan summary statistics
     /// * `exit_code` - The exit code for this run
+    /// * `config` - The configuration used for the scan
     ///
     /// # Example
     ///
@@ -189,6 +207,7 @@ impl JsonOutput {
     /// use rustdupe::duplicates::{DuplicateGroup, ScanSummary};
     /// use rustdupe::output::json::JsonOutput;
     /// use rustdupe::error::ExitCode;
+    /// use rustdupe::config::Config;
     /// use std::path::PathBuf;
     ///
     /// let groups = vec![
@@ -198,17 +217,26 @@ impl JsonOutput {
     ///     ], Vec::new()),
     /// ];
     /// let summary = ScanSummary::default();
+    /// let config = Config::default();
     ///
-    /// let output = JsonOutput::new(&groups, &summary, ExitCode::Success);
+    /// let output = JsonOutput::new(&groups, &summary, ExitCode::Success, &config);
     /// assert_eq!(output.duplicates.len(), 1);
+    /// assert_eq!(output.metadata.version, env!("CARGO_PKG_VERSION"));
     /// ```
     #[must_use]
     pub fn new(
         groups: &[DuplicateGroup],
         summary: &ScanSummary,
         exit_code: crate::error::ExitCode,
+        config: &Config,
     ) -> Self {
         Self {
+            metadata: JsonMetadata {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                timestamp: Utc::now(),
+                schema_version: "1.0".to_string(),
+                config: config.clone(),
+            },
             duplicates: groups
                 .iter()
                 .map(JsonDuplicateGroup::from_duplicate_group)
@@ -222,18 +250,6 @@ impl JsonOutput {
     /// # Errors
     ///
     /// Returns an error if serialization fails (unlikely for valid data).
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rustdupe::duplicates::{DuplicateGroup, ScanSummary};
-    /// use rustdupe::output::json::JsonOutput;
-    /// use rustdupe::error::ExitCode;
-    ///
-    /// let output = JsonOutput::new(&[], &ScanSummary::default(), ExitCode::Success);
-    /// let json = output.to_json().unwrap();
-    /// assert!(json.starts_with("{"));
-    /// ```
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
     }
@@ -243,39 +259,28 @@ impl JsonOutput {
     /// # Errors
     ///
     /// Returns an error if serialization fails (unlikely for valid data).
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use rustdupe::duplicates::{DuplicateGroup, ScanSummary};
-    /// use rustdupe::output::json::JsonOutput;
-    /// use rustdupe::error::ExitCode;
-    ///
-    /// let output = JsonOutput::new(&[], &ScanSummary::default(), ExitCode::Success);
-    /// let json = output.to_json_pretty().unwrap();
-    /// assert!(json.contains('\n'));  // Pretty-printed has newlines
-    /// ```
     pub fn to_json_pretty(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
 
     /// Write JSON to a writer.
     ///
+    /// This method uses `serde_json::to_writer` for efficient streaming to the writer.
+    ///
     /// # Arguments
     ///
-    /// * `writer` - The writer to output to (e.g., stdout)
+    /// * `writer` - The writer to output to (e.g., stdout or a file)
     /// * `pretty` - Whether to pretty-print the output
     ///
     /// # Errors
     ///
-    /// Returns an error if writing fails.
+    /// Returns an error if writing or serialization fails.
     pub fn write_to<W: Write>(&self, writer: &mut W, pretty: bool) -> Result<(), JsonOutputError> {
-        let json = if pretty {
-            self.to_json_pretty()?
+        if pretty {
+            serde_json::to_writer_pretty(&mut *writer, self)?;
         } else {
-            self.to_json()?
-        };
-        writer.write_all(json.as_bytes())?;
+            serde_json::to_writer(&mut *writer, self)?;
+        }
         writer.write_all(b"\n")?;
         Ok(())
     }
@@ -373,6 +378,7 @@ mod tests {
             &[],
             &ScanSummary::default(),
             crate::error::ExitCode::Success,
+            &Config::default(),
         );
         assert!(output.duplicates.is_empty());
         assert_eq!(output.summary.total_files, 0);
@@ -382,7 +388,12 @@ mod tests {
     fn test_json_output_with_groups() {
         let groups = create_test_groups();
         let summary = create_test_summary();
-        let output = JsonOutput::new(&groups, &summary, crate::error::ExitCode::Success);
+        let output = JsonOutput::new(
+            &groups,
+            &summary,
+            crate::error::ExitCode::Success,
+            &Config::default(),
+        );
 
         assert_eq!(output.duplicates.len(), 2);
         assert_eq!(output.duplicates[0].files.len(), 2);
@@ -397,6 +408,7 @@ mod tests {
             &[],
             &ScanSummary::default(),
             crate::error::ExitCode::Success,
+            &Config::default(),
         );
         let json = output.to_json().unwrap();
 
@@ -412,6 +424,7 @@ mod tests {
             &[],
             &ScanSummary::default(),
             crate::error::ExitCode::Success,
+            &Config::default(),
         );
         let json = output.to_json_pretty().unwrap();
 
@@ -424,7 +437,12 @@ mod tests {
     fn test_json_is_valid() {
         let groups = create_test_groups();
         let summary = create_test_summary();
-        let output = JsonOutput::new(&groups, &summary, crate::error::ExitCode::Success);
+        let output = JsonOutput::new(
+            &groups,
+            &summary,
+            crate::error::ExitCode::Success,
+            &Config::default(),
+        );
         let json = output.to_json().unwrap();
 
         // Parse it back to verify it's valid JSON
@@ -432,6 +450,7 @@ mod tests {
 
         assert!(parsed.get("duplicates").is_some());
         assert!(parsed.get("summary").is_some());
+        assert!(parsed.get("metadata").is_some());
 
         let duplicates = parsed.get("duplicates").unwrap().as_array().unwrap();
         assert_eq!(duplicates.len(), 2);
@@ -457,6 +476,7 @@ mod tests {
             &groups,
             &ScanSummary::default(),
             crate::error::ExitCode::Success,
+            &Config::default(),
         );
 
         // Hash should be 64 hex characters
@@ -473,6 +493,7 @@ mod tests {
             &[],
             &ScanSummary::default(),
             crate::error::ExitCode::Success,
+            &Config::default(),
         );
         let mut buffer = Vec::new();
 
@@ -500,8 +521,24 @@ mod tests {
             interrupted: true,
             ..Default::default()
         };
-        let output = JsonOutput::new(&[], &summary, crate::error::ExitCode::Interrupted);
+        let output = JsonOutput::new(
+            &[],
+            &summary,
+            crate::error::ExitCode::Interrupted,
+            &Config::default(),
+        );
         assert!(output.summary.interrupted);
         assert_eq!(output.summary.exit_code, 130);
+    }
+
+    #[test]
+    fn test_metadata_fields() {
+        let config = Config::default();
+        let summary = ScanSummary::default();
+        let output = JsonOutput::new(&[], &summary, crate::error::ExitCode::Success, &config);
+
+        assert_eq!(output.metadata.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(output.metadata.schema_version, "1.0");
+        assert!(output.metadata.timestamp <= Utc::now());
     }
 }

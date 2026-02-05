@@ -219,6 +219,19 @@
             color: var(--text-color);
         }
 
+        .thumbnail-cell {
+            width: 100px;
+            padding: 10px;
+        }
+
+        .thumbnail {
+            max-width: 100px;
+            max-height: 100px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            display: block;
+        }
+
         .meta-cell {
             color: var(--secondary-color);
             font-size: 0.85rem;
@@ -342,6 +355,9 @@
                     <table>
                         <thead>
                             <tr>
+                                {% if html_thumbnails %}
+                                <th class="thumbnail-cell">Preview</th>
+                                {% endif %}
                                 <th>Path</th>
                                 <th>Modified</th>
                                 <th>Status</th>
@@ -350,6 +366,13 @@
                         <tbody>
                             {% for file in group.files %}
                             <tr>
+                                {% if html_thumbnails %}
+                                <td class="thumbnail-cell" data-label="Preview">
+                                    {% if let Some(uri) = file.thumbnail_uri %}
+                                    <img src="{{ uri }}" class="thumbnail" alt="Preview">
+                                    {% endif %}
+                                </td>
+                                {% endif %}
                                 <td class="path-cell" data-label="Path">{{ file.path_display }}</td>
                                 <td class="meta-cell" data-label="Modified">{{ file.modified_formatted }}</td>
                                 <td data-label="Status">
