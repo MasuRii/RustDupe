@@ -169,6 +169,17 @@ pub struct Cli {
     )]
     pub keybinding_profile: Option<KeybindingProfile>,
 
+    /// Load a named configuration profile from the config file
+    ///
+    /// Profiles are defined in the config file under [profile.NAME] sections.
+    /// Profile settings override base configuration but are overridden by CLI flags.
+    #[arg(long, value_name = "NAME", global = true)]
+    pub profile: Option<String>,
+
+    /// List all available configuration profiles and exit
+    #[arg(long, global = true)]
+    pub list_profiles: bool,
+
     /// Enable accessible mode for screen reader compatibility
     ///
     /// When enabled:
@@ -1281,6 +1292,19 @@ mod tests {
             }
             _ => panic!("Expected Scan command"),
         }
+    }
+
+    #[test]
+    fn test_cli_parse_profile_flag() {
+        let cli =
+            Cli::try_parse_from(["rustdupe", "--profile", "photos", "scan", "/path"]).unwrap();
+        assert_eq!(cli.profile, Some("photos".to_string()));
+    }
+
+    #[test]
+    fn test_cli_parse_list_profiles_flag() {
+        let cli = Cli::try_parse_from(["rustdupe", "--list-profiles", "scan", "/path"]).unwrap();
+        assert!(cli.list_profiles);
     }
 
     #[test]

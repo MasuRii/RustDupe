@@ -217,6 +217,13 @@ pub struct Config {
     /// Default output format.
     #[serde(default)]
     pub output: OutputFormat,
+
+    // Named Profiles
+    /// Named configuration profiles.
+    ///
+    /// Profiles are defined in the config file under [profile.NAME] sections.
+    #[serde(default, skip_serializing)]
+    pub profile: HashMap<String, serde_json::Value>,
 }
 
 fn default_io_threads() -> usize {
@@ -247,29 +254,51 @@ impl Default for Config {
             permanent: false,
             dry_run: false,
             output: OutputFormat::Tui,
+            profile: HashMap::new(),
         }
     }
 }
 
 impl Config {
     /// Load the configuration using figment for layered support.
-    ///
-    /// Layers (from highest to lowest priority):
-    /// 1. Environment variables prefixed with `RUSTDUPE_`
-    /// 2. Configuration file (`config.toml`)
-    /// 3. Defaults
     pub fn load() -> Self {
-        Self::load_from_path(Self::config_path().unwrap_or_default())
+        Self::load_with_profile(None)
     }
 
-    /// Load configuration from a specific path.
-    pub fn load_from_path(path: PathBuf) -> Self {
-        let figment = Figment::from(Serialized::defaults(Self::default()))
-            .merge(Toml::file(&path))
-            .merge(Env::prefixed("RUSTDUPE_").split("__"));
+    /// Load the configuration with an optional named profile.
+    pub fn load_with_profile(profile: Option<&str>) -> Self {
+        Self::load_from_path(Self::config_path().unwrap_or_default(), profile)
+    }
+
+    /// Load configuration from a specific path with an optional profile.
+    pub fn load_from_path(path: PathBuf, profile: Option<&str>) -> Self {
+        let mut figment =
+            Figment::from(Serialized::defaults(Self::default())).merge(Toml::file(&path));
+
+        if let Some(p) = profile {
+            // Merge the profile settings. We extract the profile section from the TOML
+            // and merge it as a Serialized provider.
+            if let Ok(profile_value) = Figment::from(Toml::file(&path))
+                .extract_inner::<figment::value::Value>(&format!("profile.{}", p))
+            {
+                figment = figment.merge(Serialized::defaults(profile_value));
+            }
+        }
+
+        figment = figment.merge(Env::prefixed("RUSTDUPE_").split("__"));
 
         match figment.extract::<Self>() {
-            Ok(config) => config,
+            Ok(config) => {
+                // If a profile was specified, we should check if it actually existed
+                // in the config file. Since figment.merge() is silent if the key
+                // doesn't exist, we check our extracted profiles map.
+                if let Some(p) = profile {
+                    if !config.profile.contains_key(p) {
+                        eprintln!("Warning: Profile '{}' not found in configuration file.", p);
+                    }
+                }
+                config
+            }
             Err(e) => {
                 // If there's an error, log it and return defaults.
                 eprintln!(

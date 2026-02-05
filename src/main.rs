@@ -26,8 +26,23 @@ fn main() -> Result<()> {
     // Parse command-line arguments
     let cli = Cli::parse();
 
-    // Load configuration
-    let mut config = Config::load();
+    // Load configuration with optional profile
+    let mut config = Config::load_with_profile(cli.profile.as_deref());
+
+    // Handle --list-profiles
+    if cli.list_profiles {
+        if config.profile.is_empty() {
+            println!("No configuration profiles defined.");
+        } else {
+            println!("Available configuration profiles:");
+            let mut profiles: Vec<_> = config.profile.keys().collect();
+            profiles.sort();
+            for profile in profiles {
+                println!("  - {}", profile);
+            }
+        }
+        return Ok(());
+    }
 
     // Merge global CLI flags into config
     config.merge_cli(&cli);

@@ -22,14 +22,14 @@ io_threads = 8
 "#;
     fs::write(&config_path, toml_content).unwrap();
 
-    config = Config::load_from_path(config_path.clone());
+    config = Config::load_from_path(config_path.clone(), None);
     assert_eq!(config.theme, ThemeArg::Light);
     assert_eq!(config.io_threads, 8);
     assert!(!config.follow_symlinks); // still false
 
     // 3. Environment variables override config file: theme=dark
     std::env::set_var("RUSTDUPE_THEME", "dark");
-    config = Config::load_from_path(config_path.clone());
+    config = Config::load_from_path(config_path.clone(), None);
     assert_eq!(config.theme, ThemeArg::Dark);
     assert_eq!(config.io_threads, 8); // still from config file
 
@@ -65,7 +65,7 @@ fn test_boolean_overrides() {
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
     fs::write(&config_path, "follow_symlinks = true").unwrap();
-    config = Config::load_from_path(config_path);
+    config = Config::load_from_path(config_path, None);
     assert!(config.follow_symlinks);
 
     // CLI: --no-follow-symlinks should override config
@@ -94,7 +94,7 @@ fn test_output_override() {
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
     fs::write(&config_path, "output = \"json\"").unwrap();
-    config = Config::load_from_path(config_path);
+    config = Config::load_from_path(config_path, None);
     assert_eq!(config.output, OutputFormat::Json);
 
     // CLI: no output specified, should stay json
