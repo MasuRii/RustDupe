@@ -10,10 +10,70 @@
 //! - Plain text updates without cursor movement
 //! - Reduced update frequency for screen reader compatibility
 
+use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{HumanDuration, MultiProgress, ProgressBar, ProgressStyle};
+
+/// State for exponential moving average ETA calculation.
+#[derive(Debug)]
+struct EtaState {
+    ema_rate: f64,
+    last_pos: u64,
+    last_update: Instant,
+    initialized: bool,
+    alpha: f64,
+}
+
+impl EtaState {
+    fn new() -> Self {
+        Self {
+            ema_rate: 0.0,
+            last_pos: 0,
+            last_update: Instant::now(),
+            initialized: false,
+            alpha: 0.1, // Smoothing factor (0.1 = more stable, 0.2 = more responsive)
+        }
+    }
+
+    fn update(&mut self, pos: u64) {
+        let now = Instant::now();
+        let delta_t = now.duration_since(self.last_update).as_secs_f64();
+        let delta_pos = pos.saturating_sub(self.last_pos);
+
+        // Update at most every 100ms and only if there's progress
+        if delta_pos == 0 || delta_t < 0.1 {
+            return;
+        }
+
+        let instant_rate = delta_pos as f64 / delta_t;
+
+        if !self.initialized {
+            self.ema_rate = instant_rate;
+            self.initialized = true;
+        } else {
+            self.ema_rate = self.alpha * instant_rate + (1.0 - self.alpha) * self.ema_rate;
+        }
+
+        self.last_pos = pos;
+        self.last_update = now;
+    }
+
+    fn estimate(&self, remaining: u64) -> Option<Duration> {
+        if !self.initialized || self.ema_rate <= 0.0 {
+            return None;
+        }
+
+        let secs = remaining as f64 / self.ema_rate;
+        // Don't show ETA if it's unreasonably large (e.g., > 1 week)
+        if secs > 3600.0 * 24.0 * 7.0 {
+            return None;
+        }
+
+        Some(Duration::from_secs_f64(secs))
+    }
+}
 
 /// Progress callback for duplicate finding phases.
 ///
@@ -70,6 +130,8 @@ pub struct Progress {
     prehash: Mutex<Option<ProgressBar>>,
     fullhash: Mutex<Option<ProgressBar>>,
     prefix: Mutex<String>,
+    active_phase: Mutex<Option<String>>,
+    etas: Mutex<HashMap<String, EtaState>>,
     quiet: bool,
     accessible: bool,
 }
@@ -95,6 +157,8 @@ impl Progress {
             prehash: Mutex::new(None),
             fullhash: Mutex::new(None),
             prefix: Mutex::new(String::new()),
+            active_phase: Mutex::new(None),
+            etas: Mutex::new(HashMap::new()),
             quiet,
             accessible: false,
         }
@@ -122,6 +186,8 @@ impl Progress {
             prehash: Mutex::new(None),
             fullhash: Mutex::new(None),
             prefix: Mutex::new(String::new()),
+            active_phase: Mutex::new(None),
+            etas: Mutex::new(HashMap::new()),
             quiet,
             accessible,
         }
@@ -151,13 +217,13 @@ impl Progress {
         if self.accessible {
             // Accessible: ASCII progress bar, no Unicode
             ProgressStyle::with_template(
-                "[{elapsed_precise}] [{bar:40}] {pos}/{len} ({percent}%) {msg} (ETA: {eta})",
+                "[{elapsed_precise}] [{bar:40}] {pos}/{len} ({percent}%) {msg}",
             )
             .unwrap_or_else(|_| ProgressStyle::default_bar())
             .progress_chars("#>-")
         } else {
             ProgressStyle::with_template(
-                "[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg} (ETA: {eta})",
+                "[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}",
             )
             .unwrap_or_else(|_| ProgressStyle::default_bar())
             .progress_chars("█>-")
@@ -169,13 +235,13 @@ impl Progress {
         if self.accessible {
             // Accessible: ASCII progress bar, no Unicode
             ProgressStyle::with_template(
-                "[{elapsed_precise}] [{bar:40}] {pos}/{len} ({percent}%) {msg} {per_sec} (ETA: {eta})",
+                "[{elapsed_precise}] [{bar:40}] {pos}/{len} ({percent}%) {msg} {per_sec}",
             )
             .unwrap_or_else(|_| ProgressStyle::default_bar())
             .progress_chars("#>-")
         } else {
             ProgressStyle::with_template(
-                "[{elapsed_precise}] [{bar:40.green/blue}] {pos}/{len} ({percent}%) {msg} {per_sec} (ETA: {eta})",
+                "[{elapsed_precise}] [{bar:40.green/blue}] {pos}/{len} ({percent}%) {msg} {per_sec}",
             )
             .unwrap_or_else(|_| ProgressStyle::default_bar())
             .progress_chars("█>-")
@@ -188,6 +254,12 @@ impl ProgressCallback for Progress {
         if self.quiet {
             return;
         }
+
+        *self.active_phase.lock().unwrap() = Some(phase.to_string());
+        self.etas
+            .lock()
+            .unwrap()
+            .insert(phase.to_string(), EtaState::new());
 
         match phase {
             "walking" => {
@@ -236,16 +308,53 @@ impl ProgressCallback for Progress {
             format!("{}: {}", *prefix, truncate_path(path, 30))
         };
 
+        // Update ETA
+        let mut eta_display = String::new();
+        let active_phase = self.active_phase.lock().unwrap();
+        if let Some(ref phase) = *active_phase {
+            let mut etas = self.etas.lock().unwrap();
+            if let Some(eta) = etas.get_mut(phase) {
+                eta.update(current as u64);
+
+                // Only show ETA if we have a total length
+                let total = match phase.as_str() {
+                    "fullhash" => self
+                        .fullhash
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .and_then(|pb| pb.length()),
+                    "prehash" => self
+                        .prehash
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .and_then(|pb| pb.length()),
+                    _ => None,
+                }
+                .unwrap_or(0);
+
+                if total > 0 {
+                    let remaining = total.saturating_sub(current as u64);
+                    if let Some(est) = eta.estimate(remaining) {
+                        eta_display = format!(" (ETA: {})", HumanDuration(est));
+                    }
+                }
+            }
+        }
+
+        let final_msg = format!("{}{}", display_msg, eta_display);
+
         // Update the active progress bar
         if let Some(ref pb) = *self.fullhash.lock().unwrap() {
             pb.set_position(current as u64);
-            pb.set_message(display_msg);
+            pb.set_message(final_msg);
         } else if let Some(ref pb) = *self.prehash.lock().unwrap() {
             pb.set_position(current as u64);
-            pb.set_message(display_msg);
+            pb.set_message(final_msg);
         } else if let Some(ref pb) = *self.walking.lock().unwrap() {
             pb.set_position(current as u64);
-            pb.set_message(display_msg);
+            pb.set_message(final_msg);
         }
     }
 
@@ -258,6 +367,8 @@ impl ProgressCallback for Progress {
         if self.quiet {
             return;
         }
+
+        *self.active_phase.lock().unwrap() = None;
 
         match phase {
             "walking" => {

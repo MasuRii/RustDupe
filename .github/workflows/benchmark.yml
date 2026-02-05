@@ -1,0 +1,56 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmark:
+    name: Performance Regression Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run benchmarks
+        run: |
+          cargo bench -- --output-format bencher | tee benchmark_output.txt
+
+      - name: Store and compare benchmark results
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: RustDupe Benchmarks
+          tool: 'cargo'
+          output-file-path: benchmark_output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          # Alert on >10% regression
+          alert-threshold: '110%'
+          comment-on-alert: true
+          fail-on-alert: true
+          # Store history in gh-pages
+          gh-pages-branch: 'gh-pages'
+          # Customize report
+          benchmark-data-dir-path: 'benchmarks'
+
+      - name: Upload Criterion Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-report
+          path: target/criterion
+          retention-days: 30
