@@ -92,7 +92,7 @@ impl AppMode {
 ///
 /// Actions are the result of key event processing and represent
 /// user intentions that modify application state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
     /// Navigate up in the list
     NavigateUp,

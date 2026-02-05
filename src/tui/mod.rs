@@ -46,6 +46,7 @@
 
 pub mod app;
 pub mod events;
+pub mod keybindings;
 mod run;
 pub mod theme;
 pub mod ui;
@@ -53,5 +54,6 @@ pub mod ui;
 // Re-export commonly used types
 pub use app::{Action, App, AppMode, ScanProgress};
 pub use events::{EventError, EventHandler};
+pub use keybindings::{KeyBindings, KeybindingError, KeybindingProfile};
 pub use run::{run_tui, TuiError};
 pub use ui::{format_size, render, truncate_path, truncate_string};
