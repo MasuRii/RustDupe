@@ -497,6 +497,13 @@ impl KeyBindings {
             for key_spec in key_specs {
                 let key_event = Self::parse_key(key_spec)?;
 
+                // Ensure this key is removed from any other actions to ensure the override wins
+                for (other_action, other_keys) in &mut self.action_keys {
+                    if *other_action != action {
+                        other_keys.retain(|k| !Self::key_matches(k, &key_event));
+                    }
+                }
+
                 // Add to existing bindings (merge, not replace)
                 self.action_keys.entry(action).or_default().push(key_event);
             }

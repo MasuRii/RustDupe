@@ -64,8 +64,8 @@ fn test_render_empty_state() {
 fn test_render_file_list() {
     let mut terminal = setup_terminal(80, 24);
     let groups = vec![
-        make_group(1000, vec!["file1.txt", "file1_copy.txt"]),
-        make_group(2000, vec!["file2.txt", "file2_copy.txt"]),
+        make_group(2000, vec!["file1.txt", "file1_copy.txt"]),
+        make_group(1000, vec!["file2.txt", "file2_copy.txt"]),
     ];
     let mut app = App::with_groups(groups);
     app.handle_action(rustdupe::tui::app::Action::ToggleExpandAll);

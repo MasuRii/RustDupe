@@ -496,7 +496,7 @@ mod tests {
 
         // Tab
         let key = make_key(KeyCode::Tab, KeyModifiers::NONE);
-        assert_eq!(handler.translate_key(key), None);
+        assert_eq!(handler.translate_key(key), Some(Action::CycleSortColumn));
     }
 
     #[test]
