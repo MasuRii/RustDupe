@@ -4,6 +4,7 @@
 //! for images that remain stable under common transformations like
 //! resizing, rotation (slight), and compression.
 
+use bk_tree::{BKTree, Metric};
 use image_hasher::{HashAlg, HasherConfig, ImageHash};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -20,6 +21,17 @@ pub enum PerceptualAlgorithm {
     Dhash,
     /// aHash (Average Hash) - Mean-based, fast but less resilient.
     Ahash,
+}
+
+impl PerceptualAlgorithm {
+    /// Get the default similarity threshold (Hamming distance) for this algorithm.
+    pub fn default_threshold(&self) -> u32 {
+        match self {
+            Self::Phash => 10,
+            Self::Dhash => 2,
+            Self::Ahash => 5,
+        }
+    }
 }
 
 impl std::fmt::Display for PerceptualAlgorithm {
@@ -94,6 +106,72 @@ impl Default for PerceptualHasher {
     }
 }
 
+/// Metric for comparing `ImageHash` values using Hamming distance.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct ImageHashMetric;
+
+impl Metric<ImageHash> for ImageHashMetric {
+    fn distance(&self, a: &ImageHash, b: &ImageHash) -> u32 {
+        a.dist(b)
+    }
+
+    fn threshold_distance(&self, a: &ImageHash, b: &ImageHash, threshold: u32) -> Option<u32> {
+        let d = self.distance(a, b);
+        if d <= threshold {
+            Some(d)
+        } else {
+            None
+        }
+    }
+}
+
+/// A similarity index for perceptual hashes using a BK-tree.
+///
+/// Enables efficient similarity search with O(log n) complexity.
+pub struct SimilarityIndex {
+    tree: BKTree<ImageHash, ImageHashMetric>,
+    count: usize,
+}
+
+impl SimilarityIndex {
+    /// Create a new empty similarity index.
+    pub fn new() -> Self {
+        Self {
+            tree: BKTree::new(ImageHashMetric),
+            count: 0,
+        }
+    }
+
+    /// Add an image hash to the index.
+    pub fn insert(&mut self, hash: ImageHash) {
+        self.tree.add(hash);
+        self.count += 1;
+    }
+
+    /// Find all hashes in the index within the given Hamming distance.
+    ///
+    /// Returns a list of (distance, hash) pairs.
+    pub fn find(&self, hash: &ImageHash, max_distance: u32) -> Vec<(u32, &ImageHash)> {
+        self.tree.find(hash, max_distance).collect()
+    }
+
+    /// Returns the number of items in the index.
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    /// Returns true if the index is empty.
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+}
+
+impl Default for SimilarityIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +196,13 @@ mod tests {
 
         let hasher = PerceptualHasher::new(PerceptualAlgorithm::Ahash);
         assert_eq!(hasher.algorithm(), PerceptualAlgorithm::Ahash);
+    }
+
+    #[test]
+    fn test_perceptual_algorithm_thresholds() {
+        assert_eq!(PerceptualAlgorithm::Phash.default_threshold(), 10);
+        assert_eq!(PerceptualAlgorithm::Dhash.default_threshold(), 2);
+        assert_eq!(PerceptualAlgorithm::Ahash.default_threshold(), 5);
     }
 
     #[test]
@@ -146,5 +231,32 @@ mod tests {
 
         // A 10x10 black image should have a stable hash
         assert!(hash.as_bytes().len() > 0);
+    }
+
+    #[test]
+    fn test_similarity_index_basic() {
+        let mut index = SimilarityIndex::new();
+        assert!(index.is_empty());
+
+        // Create some dummy hashes
+        let h1 = ImageHash::from_bytes(&[0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+        let h2 = ImageHash::from_bytes(&[0, 0, 0, 0, 0, 0, 0, 1]).unwrap(); // distance 1
+        let h3 = ImageHash::from_bytes(&[1, 1, 1, 1, 1, 1, 1, 1]).unwrap(); // distance 8
+
+        index.insert(h1.clone());
+        index.insert(h2.clone());
+        index.insert(h3.clone());
+
+        assert_eq!(index.len(), 3);
+
+        // Find matches for h1 with distance 1
+        let matches = index.find(&h1, 1);
+        assert_eq!(matches.len(), 2);
+        assert!(matches.iter().any(|(d, h)| *d == 0 && **h == h1));
+        assert!(matches.iter().any(|(d, h)| *d == 1 && **h == h2));
+
+        // Find matches for h1 with distance 10
+        let matches = index.find(&h1, 10);
+        assert_eq!(matches.len(), 3);
     }
 }

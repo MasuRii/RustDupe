@@ -223,6 +223,10 @@ pub struct Config {
     #[serde(default)]
     pub output: OutputFormat,
 
+    /// Threshold for similarity matching (Hamming distance).
+    #[serde(default)]
+    pub similarity_threshold: Option<u32>,
+
     /// False positive rate for Bloom filters.
     #[serde(default = "default_bloom_fp_rate")]
     pub bloom_fp_rate: f64,
@@ -268,6 +272,7 @@ impl Default for Config {
             permanent: false,
             dry_run: false,
             output: OutputFormat::Tui,
+            similarity_threshold: None,
             bloom_fp_rate: 0.01,
             profile: HashMap::new(),
         }
@@ -482,6 +487,9 @@ impl Config {
         if let Some(rate) = args.bloom_fp_rate {
             self.bloom_fp_rate = rate;
         }
+        if let Some(threshold) = args.similarity_threshold {
+            self.similarity_threshold = Some(threshold);
+        }
     }
 
     /// Merge load arguments into the configuration.
@@ -523,6 +531,7 @@ fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str)
         "permanent",
         "dry_run",
         "output",
+        "similarity_threshold",
         "bloom_fp_rate",
         "profile",
     ];
@@ -619,6 +628,7 @@ fn validate_profile_keys(table: &toml_edit::Table, path: &str, content: &str) {
         "permanent",
         "dry_run",
         "output",
+        "similarity_threshold",
         "bloom_fp_rate",
     ];
 

@@ -441,6 +441,15 @@ pub struct ScanArgs {
     /// False positive rate for Bloom filters (default: 0.01)
     #[arg(long, value_name = "RATE", help_heading = "Scanning Options")]
     pub bloom_fp_rate: Option<f64>,
+
+    /// Threshold for similarity matching (Hamming distance)
+    ///
+    /// Default depends on the perceptual algorithm:
+    /// - pHash: 10
+    /// - dHash: 2
+    /// - aHash: 5
+    #[arg(long, value_name = "N", help_heading = "Scanning Options")]
+    pub similarity_threshold: Option<u32>,
 }
 
 /// Arguments for the load subcommand.
@@ -1321,6 +1330,19 @@ mod tests {
     fn test_cli_parse_list_profiles_flag() {
         let cli = Cli::try_parse_from(["rustdupe", "--list-profiles", "scan", "/path"]).unwrap();
         assert!(cli.list_profiles);
+    }
+
+    #[test]
+    fn test_cli_parse_scan_similarity_threshold() {
+        let cli =
+            Cli::try_parse_from(["rustdupe", "scan", "/path", "--similarity-threshold", "15"])
+                .unwrap();
+        match cli.command {
+            Commands::Scan(args) => {
+                assert_eq!(args.similarity_threshold, Some(15));
+            }
+            _ => panic!("Expected Scan command"),
+        }
     }
 
     #[test]
