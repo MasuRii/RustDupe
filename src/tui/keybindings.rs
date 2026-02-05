@@ -665,6 +665,21 @@ impl KeyBindings {
         );
 
         bindings.insert(
+            Action::SelectByExtension,
+            vec![Self::key(KeyCode::Char('E'), KeyModifiers::SHIFT)],
+        );
+
+        bindings.insert(
+            Action::SelectByDirectory,
+            vec![Self::key(KeyCode::Char('D'), KeyModifiers::SHIFT)],
+        );
+
+        bindings.insert(
+            Action::UndoSelection,
+            vec![Self::key(KeyCode::Char('U'), KeyModifiers::SHIFT)],
+        );
+
+        bindings.insert(
             Action::DeselectAll,
             vec![Self::key(KeyCode::Char('u'), KeyModifiers::NONE)],
         );
@@ -836,6 +851,21 @@ impl KeyBindings {
         );
 
         bindings.insert(
+            Action::SelectByExtension,
+            vec![Self::key(KeyCode::Char('E'), KeyModifiers::SHIFT)],
+        );
+
+        bindings.insert(
+            Action::SelectByDirectory,
+            vec![Self::key(KeyCode::Char('D'), KeyModifiers::SHIFT)],
+        );
+
+        bindings.insert(
+            Action::UndoSelection,
+            vec![Self::key(KeyCode::Char('U'), KeyModifiers::SHIFT)],
+        );
+
+        bindings.insert(
             Action::DeselectAll,
             vec![Self::key(KeyCode::Char('u'), KeyModifiers::NONE)],
         );
@@ -986,6 +1016,24 @@ impl KeyBindings {
         bindings.insert(
             Action::SelectLargest,
             vec![Self::key(KeyCode::Char('l'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::SelectByExtension,
+            vec![Self::key(KeyCode::Char('E'), KeyModifiers::SHIFT)],
+        );
+
+        bindings.insert(
+            Action::SelectByDirectory,
+            vec![Self::key(KeyCode::Char('D'), KeyModifiers::SHIFT)],
+        );
+
+        bindings.insert(
+            Action::UndoSelection,
+            vec![
+                Self::key(KeyCode::Char('z'), KeyModifiers::CONTROL),
+                Self::key(KeyCode::Char('U'), KeyModifiers::SHIFT),
+            ],
         );
 
         bindings.insert(
@@ -1146,6 +1194,24 @@ impl KeyBindings {
         bindings.insert(
             Action::SelectLargest,
             vec![Self::key(KeyCode::Char('l'), KeyModifiers::NONE)],
+        );
+
+        bindings.insert(
+            Action::SelectByExtension,
+            vec![Self::key(KeyCode::Char('E'), KeyModifiers::SHIFT)],
+        );
+
+        bindings.insert(
+            Action::SelectByDirectory,
+            vec![Self::key(KeyCode::Char('D'), KeyModifiers::SHIFT)],
+        );
+
+        bindings.insert(
+            Action::UndoSelection,
+            vec![
+                Self::key(KeyCode::Char('_'), KeyModifiers::CONTROL),
+                Self::key(KeyCode::Char('U'), KeyModifiers::SHIFT),
+            ],
         );
 
         bindings.insert(

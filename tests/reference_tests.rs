@@ -216,6 +216,7 @@ fn test_batch_selection_respects_references() {
 
     // Test Select All Duplicates
     app.select_all_duplicates();
+    app.apply_bulk_selection();
     // Should NOT select /ref/oldest.txt
     assert!(!app.is_file_selected(&file2.path));
     // Should select /data/middle.txt (file3)
@@ -227,6 +228,7 @@ fn test_batch_selection_respects_references() {
 
     // Test Select Oldest (Keep Newest)
     app.select_oldest();
+    app.apply_bulk_selection();
     // newest is file1. file2 is oldest but it's in ref, so it should be skipped.
     // file3 is middle, should be selected.
     assert!(!app.is_file_selected(&file2.path));
@@ -240,6 +242,7 @@ fn test_batch_selection_respects_references() {
     // Yes, keeping a file is just NOT selecting it.
     // If we select newest (file1), file2 is oldest (keep). file3 is middle (select).
     app.select_newest();
+    app.apply_bulk_selection();
     assert!(app.is_file_selected(&file1.path));
     assert!(app.is_file_selected(&file3.path));
     assert!(!app.is_file_selected(&file2.path));

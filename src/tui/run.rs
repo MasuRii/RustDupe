@@ -248,6 +248,10 @@ fn run_tui_inner(
         if let Some(crossterm::event::Event::Key(key)) = event_handler.poll_event(POLL_TIMEOUT)? {
             if app.mode() == AppMode::Searching {
                 handle_search_key(app, key);
+            } else if app.mode() == AppMode::InputtingExtension
+                || app.mode() == AppMode::InputtingDirectory
+            {
+                handle_input_key(app, key);
             } else if let Some(action) = event_handler.translate_key(key) {
                 handle_action(app, action, &shutdown_flag)?;
             }
@@ -322,6 +326,40 @@ fn handle_action(
     }
 
     Ok(())
+}
+
+/// Handle keyboard input when in input mode (extension or directory).
+fn handle_input_key(app: &mut App, key: crossterm::event::KeyEvent) {
+    use crossterm::event::KeyCode;
+
+    if key.kind != crossterm::event::KeyEventKind::Press {
+        return;
+    }
+
+    match key.code {
+        KeyCode::Char(c) => {
+            let mut query = app.input_query().to_string();
+            query.push(c);
+            app.set_input_query(query);
+        }
+        KeyCode::Backspace => {
+            let mut query = app.input_query().to_string();
+            query.pop();
+            app.set_input_query(query);
+        }
+        KeyCode::Enter => {
+            if app.mode() == AppMode::InputtingExtension {
+                app.prepare_select_by_extension();
+            } else if app.mode() == AppMode::InputtingDirectory {
+                app.prepare_select_by_directory();
+            }
+        }
+        KeyCode::Esc => {
+            app.clear_input_query();
+            app.set_mode(AppMode::Reviewing);
+        }
+        _ => {}
+    }
 }
 
 /// Handle keyboard input when in search mode.

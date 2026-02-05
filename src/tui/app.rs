@@ -68,10 +68,16 @@ pub enum AppMode {
     Previewing,
     /// Confirming a deletion operation
     Confirming,
+    /// Confirming a bulk selection operation
+    ConfirmingBulkSelection,
     /// Selecting a folder for batch selection
     SelectingFolder,
     /// Selecting a named group for batch selection
     SelectingGroup,
+    /// Inputting an extension for bulk selection
+    InputtingExtension,
+    /// Inputting a directory for bulk selection
+    InputtingDirectory,
     /// Searching duplicate groups
     Searching,
     /// Showing help overlay with keybinding reference
@@ -86,7 +92,12 @@ impl AppMode {
     pub fn is_navigable(&self) -> bool {
         matches!(
             self,
-            Self::Reviewing | Self::SelectingFolder | Self::SelectingGroup | Self::Searching
+            Self::Reviewing
+                | Self::SelectingFolder
+                | Self::SelectingGroup
+                | Self::Searching
+                | Self::InputtingExtension
+                | Self::InputtingDirectory
         )
     }
 
@@ -103,8 +114,11 @@ impl AppMode {
             self,
             Self::Previewing
                 | Self::Confirming
+                | Self::ConfirmingBulkSelection
                 | Self::SelectingFolder
                 | Self::SelectingGroup
+                | Self::InputtingExtension
+                | Self::InputtingDirectory
                 | Self::ShowingHelp
         )
     }
@@ -142,6 +156,12 @@ pub enum Action {
     SelectSmallest,
     /// Select largest file in each group (actually selects all but first since they match)
     SelectLargest,
+    /// Select files by extension (global)
+    SelectByExtension,
+    /// Select files by directory (global)
+    SelectByDirectory,
+    /// Undo last bulk selection action
+    UndoSelection,
     /// Deselect all files
     DeselectAll,
     /// Preview the selected file
@@ -193,6 +213,9 @@ impl Action {
             Self::SelectNewest => "select_newest",
             Self::SelectSmallest => "select_smallest",
             Self::SelectLargest => "select_largest",
+            Self::SelectByExtension => "select_by_extension",
+            Self::SelectByDirectory => "select_by_directory",
+            Self::UndoSelection => "undo_selection",
             Self::DeselectAll => "deselect_all",
             Self::Preview => "preview",
             Self::SelectFolder => "select_folder",
@@ -224,6 +247,9 @@ impl Action {
             "select_newest",
             "select_smallest",
             "select_largest",
+            "select_by_extension",
+            "select_by_directory",
+            "undo_selection",
             "deselect_all",
             "preview",
             "select_folder",
@@ -240,7 +266,7 @@ impl Action {
 
     /// Returns all action variants.
     #[must_use]
-    pub const fn all() -> [Action; 24] {
+    pub const fn all() -> [Action; 27] {
         [
             Self::NavigateUp,
             Self::NavigateDown,
@@ -255,6 +281,9 @@ impl Action {
             Self::SelectNewest,
             Self::SelectSmallest,
             Self::SelectLargest,
+            Self::SelectByExtension,
+            Self::SelectByDirectory,
+            Self::UndoSelection,
             Self::DeselectAll,
             Self::Preview,
             Self::SelectFolder,
@@ -288,6 +317,9 @@ impl std::str::FromStr for Action {
             "select_newest" | "newest" => Ok(Self::SelectNewest),
             "select_smallest" | "smallest" => Ok(Self::SelectSmallest),
             "select_largest" | "largest" => Ok(Self::SelectLargest),
+            "select_by_extension" | "extension" => Ok(Self::SelectByExtension),
+            "select_by_directory" | "directory" => Ok(Self::SelectByDirectory),
+            "undo_selection" | "undo" => Ok(Self::UndoSelection),
             "deselect_all" | "deselect" => Ok(Self::DeselectAll),
             "preview" => Ok(Self::Preview),
             "select_folder" | "folder" => Ok(Self::SelectFolder),
@@ -352,6 +384,21 @@ impl ScanProgress {
     }
 }
 
+/// Types of bulk selection actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BulkSelectionType {
+    AllDuplicates,
+    Oldest,
+    Newest,
+    Smallest,
+    Largest,
+    ByExtension,
+    ByDirectory,
+    InGroup,
+    InFolder,
+    InNamedGroup,
+}
+
 /// TUI application state.
 ///
 /// The central state container for the TUI application. Manages:
@@ -396,10 +443,18 @@ pub struct App {
     group_name_index: usize,
     /// Search query string
     search_query: String,
+    /// Input query for bulk selection
+    input_query: String,
     /// Indices of groups matching the search query (None if no search active)
     filtered_indices: Option<Vec<usize>>,
     /// Protected reference paths
     reference_paths: Vec<PathBuf>,
+    /// History of selections for undo
+    selection_history: Vec<HashSet<PathBuf>>,
+    /// Pending selections for preview
+    pending_selections: HashSet<PathBuf>,
+    /// Type of pending bulk selection
+    pending_bulk_action: Option<BulkSelectionType>,
     /// Total reclaimable space in bytes
     reclaimable_space: u64,
     /// Number of visible rows in the UI (for scroll calculation)
@@ -451,8 +506,12 @@ impl App {
             group_name_list: Vec::new(),
             group_name_index: 0,
             search_query: String::new(),
+            input_query: String::new(),
             filtered_indices: None,
             reference_paths: Vec::new(),
+            selection_history: Vec::new(),
+            pending_selections: HashSet::new(),
+            pending_bulk_action: None,
             reclaimable_space: 0,
             visible_rows: 20, // Default, will be updated by UI
             dry_run: false,
@@ -617,8 +676,12 @@ impl App {
             group_name_list: Vec::new(),
             group_name_index: 0,
             search_query: String::new(),
+            input_query: String::new(),
             filtered_indices: None,
             reference_paths: Vec::new(),
+            selection_history: Vec::new(),
+            pending_selections: HashSet::new(),
+            pending_bulk_action: None,
             reclaimable_space: reclaimable,
             visible_rows: 20,
             dry_run: false,
@@ -1010,6 +1073,7 @@ impl App {
     /// The first file is preserved as the "original" that should be kept.
     /// Files in protected reference directories are skipped.
     pub fn select_all_in_group(&mut self) {
+        self.push_selection_history();
         // Clone files to avoid borrow conflict
         let files_to_select: Vec<PathBuf> = self
             .current_group()
@@ -1038,67 +1102,125 @@ impl App {
 
     /// Select all duplicates across ALL groups (keeping first in each).
     pub fn select_all_duplicates(&mut self) {
-        let mut count = 0;
+        let mut pending = HashSet::new();
         for group in &self.groups {
             for file in group.files.iter().skip(1) {
                 if !self.is_in_reference_dir(&file.path)
-                    && self.selected_files.insert(file.path.clone())
+                    && !self.selected_files.contains(&file.path)
                 {
-                    count += 1;
+                    pending.insert(file.path.clone());
                 }
             }
         }
-        log::info!("Selected {} duplicates across ALL groups", count);
+
+        if pending.is_empty() {
+            log::debug!("No new duplicates to select");
+            return;
+        }
+
+        self.pending_selections = pending;
+        self.pending_bulk_action = Some(BulkSelectionType::AllDuplicates);
+        self.set_mode(AppMode::ConfirmingBulkSelection);
     }
 
     /// Select the oldest file in each group (keeping the newest).
     pub fn select_oldest(&mut self) {
-        let mut count = 0;
+        let mut pending = HashSet::new();
         for group in &self.groups {
             // Find the newest file to keep
             if let Some(newest) = group.files.iter().max_by_key(|f| f.modified) {
                 for file in &group.files {
                     if file.path != newest.path
                         && !self.is_in_reference_dir(&file.path)
-                        && self.selected_files.insert(file.path.clone())
+                        && !self.selected_files.contains(&file.path)
                     {
-                        count += 1;
+                        pending.insert(file.path.clone());
                     }
                 }
             }
         }
-        log::info!("Selected {} oldest files (kept newest)", count);
+
+        if pending.is_empty() {
+            log::debug!("No new oldest files to select");
+            return;
+        }
+
+        self.pending_selections = pending;
+        self.pending_bulk_action = Some(BulkSelectionType::Oldest);
+        self.set_mode(AppMode::ConfirmingBulkSelection);
     }
 
     /// Select the newest file in each group (keeping the oldest).
     pub fn select_newest(&mut self) {
-        let mut count = 0;
+        let mut pending = HashSet::new();
         for group in &self.groups {
             // Find the oldest file to keep
             if let Some(oldest) = group.files.iter().min_by_key(|f| f.modified) {
                 for file in &group.files {
                     if file.path != oldest.path
                         && !self.is_in_reference_dir(&file.path)
-                        && self.selected_files.insert(file.path.clone())
+                        && !self.selected_files.contains(&file.path)
                     {
-                        count += 1;
+                        pending.insert(file.path.clone());
                     }
                 }
             }
         }
-        log::info!("Selected {} newest files (kept oldest)", count);
+
+        if pending.is_empty() {
+            log::debug!("No new newest files to select");
+            return;
+        }
+
+        self.pending_selections = pending;
+        self.pending_bulk_action = Some(BulkSelectionType::Newest);
+        self.set_mode(AppMode::ConfirmingBulkSelection);
     }
 
     /// Select all but the first file in each group (same size, so "smallest" is arbitrary).
     pub fn select_smallest(&mut self) {
-        // Since all files in a group have the same size, we just pick the first to keep.
-        self.select_all_duplicates();
+        let mut pending = HashSet::new();
+        for group in &self.groups {
+            for file in group.files.iter().skip(1) {
+                if !self.is_in_reference_dir(&file.path)
+                    && !self.selected_files.contains(&file.path)
+                {
+                    pending.insert(file.path.clone());
+                }
+            }
+        }
+
+        if pending.is_empty() {
+            log::debug!("No new duplicates to select (smallest)");
+            return;
+        }
+
+        self.pending_selections = pending;
+        self.pending_bulk_action = Some(BulkSelectionType::Smallest);
+        self.set_mode(AppMode::ConfirmingBulkSelection);
     }
 
     /// Select all but the first file in each group (same size, so "largest" is arbitrary).
     pub fn select_largest(&mut self) {
-        // Since all files in a group have the same size, we just pick the first to keep.
-        self.select_all_duplicates();
+        let mut pending = HashSet::new();
+        for group in &self.groups {
+            for file in group.files.iter().skip(1) {
+                if !self.is_in_reference_dir(&file.path)
+                    && !self.selected_files.contains(&file.path)
+                {
+                    pending.insert(file.path.clone());
+                }
+            }
+        }
+
+        if pending.is_empty() {
+            log::debug!("No new duplicates to select (largest)");
+            return;
+        }
+
+        self.pending_selections = pending;
+        self.pending_bulk_action = Some(BulkSelectionType::Largest);
+        self.set_mode(AppMode::ConfirmingBulkSelection);
     }
 
     /// Deselect all files.
@@ -1185,6 +1307,188 @@ impl App {
     /// Clear the error message.
     pub fn clear_error(&mut self) {
         self.error_message = None;
+    }
+
+    // ==================== Bulk Selection ====================
+
+    /// Save the current selection state to history for undo.
+    fn push_selection_history(&mut self) {
+        self.selection_history.push(self.selected_files.clone());
+        // Limit history size
+        if self.selection_history.len() > 50 {
+            self.selection_history.remove(0);
+        }
+    }
+
+    /// Undo the last bulk selection action.
+    pub fn undo_selection(&mut self) {
+        if let Some(previous) = self.selection_history.pop() {
+            self.selected_files = previous;
+            log::info!(
+                "Undid last selection action. {} files selected",
+                self.selected_files.len()
+            );
+        } else {
+            self.set_error("Nothing to undo");
+        }
+    }
+
+    /// Get the input query (for extension/directory input).
+    #[must_use]
+    pub fn input_query(&self) -> &str {
+        &self.input_query
+    }
+
+    /// Set the input query.
+    pub fn set_input_query(&mut self, query: String) {
+        self.input_query = query;
+    }
+
+    /// Clear the input query.
+    pub fn clear_input_query(&mut self) {
+        self.input_query.clear();
+    }
+
+    /// Get the pending bulk selection count.
+    #[must_use]
+    pub fn pending_selection_count(&self) -> usize {
+        self.pending_selections.len()
+    }
+
+    /// Get the type of pending bulk selection.
+    #[must_use]
+    pub fn pending_bulk_action(&self) -> Option<BulkSelectionType> {
+        self.pending_bulk_action
+    }
+
+    /// Prepare a bulk selection by extension.
+    pub fn prepare_select_by_extension(&mut self) {
+        let ext = self.input_query.trim();
+        if ext.is_empty() {
+            self.set_mode(AppMode::Reviewing);
+            return;
+        }
+
+        // Normalize extension: ensure it starts with dot if not empty
+        let normalized_ext = if ext.starts_with('.') {
+            ext.to_lowercase()
+        } else {
+            format!(".{}", ext.to_lowercase())
+        };
+
+        let mut pending = HashSet::new();
+        for group in &self.groups {
+            // Find files with extension
+            let matching: Vec<_> = group
+                .files
+                .iter()
+                .filter(|f| {
+                    f.path.extension().is_some_and(|e| {
+                        format!(".{}", e.to_string_lossy().to_lowercase()) == normalized_ext
+                    })
+                })
+                .collect();
+
+            if matching.is_empty() {
+                continue;
+            }
+
+            // If ALL files in group match extension, we must keep at least one
+            let skip_one = matching.len() >= group.files.len();
+
+            for (i, file) in matching.into_iter().enumerate() {
+                if skip_one && i == 0 {
+                    continue;
+                }
+                if !self.is_in_reference_dir(&file.path) {
+                    pending.insert(file.path.clone());
+                }
+            }
+        }
+
+        if pending.is_empty() {
+            self.set_error(&format!(
+                "No duplicates found with extension '{normalized_ext}'"
+            ));
+            self.set_mode(AppMode::Reviewing);
+        } else {
+            self.pending_selections = pending;
+            self.pending_bulk_action = Some(BulkSelectionType::ByExtension);
+            self.set_mode(AppMode::ConfirmingBulkSelection);
+        }
+    }
+
+    /// Prepare a bulk selection by directory.
+    pub fn prepare_select_by_directory(&mut self) {
+        let dir_str = self.input_query.trim();
+        if dir_str.is_empty() {
+            self.set_mode(AppMode::Reviewing);
+            return;
+        }
+
+        let dir_path = PathBuf::from(dir_str);
+
+        let mut pending = HashSet::new();
+        for group in &self.groups {
+            let matching: Vec<_> = group
+                .files
+                .iter()
+                .filter(|f| f.path.starts_with(&dir_path))
+                .collect();
+
+            if matching.is_empty() {
+                continue;
+            }
+
+            // If ALL files in group match directory, we must keep at least one
+            let skip_one = matching.len() >= group.files.len();
+
+            for (i, file) in matching.into_iter().enumerate() {
+                if skip_one && i == 0 {
+                    continue;
+                }
+                if !self.is_in_reference_dir(&file.path) {
+                    pending.insert(file.path.clone());
+                }
+            }
+        }
+
+        if pending.is_empty() {
+            self.set_error(&format!(
+                "No duplicates found in directory '{}'",
+                dir_path.display()
+            ));
+            self.set_mode(AppMode::Reviewing);
+        } else {
+            self.pending_selections = pending;
+            self.pending_bulk_action = Some(BulkSelectionType::ByDirectory);
+            self.set_mode(AppMode::ConfirmingBulkSelection);
+        }
+    }
+
+    /// Apply the pending bulk selection.
+    pub fn apply_bulk_selection(&mut self) {
+        if self.pending_selections.is_empty() {
+            self.set_mode(AppMode::Reviewing);
+            return;
+        }
+
+        self.push_selection_history();
+        let count = self.pending_selections.len();
+        for path in self.pending_selections.drain() {
+            self.selected_files.insert(path);
+        }
+
+        log::info!("Applied bulk selection: {} files selected", count);
+        self.pending_bulk_action = None;
+        self.set_mode(AppMode::Reviewing);
+    }
+
+    /// Cancel the pending bulk selection.
+    pub fn cancel_bulk_selection(&mut self) {
+        self.pending_selections.clear();
+        self.pending_bulk_action = None;
+        self.set_mode(AppMode::Reviewing);
     }
 
     // ==================== Preview ====================
@@ -1475,6 +1779,7 @@ impl App {
     /// This is useful for batch operations like "delete all duplicates from the 'downloads' group".
     /// Files in reference directories are skipped.
     pub fn select_all_by_group_name(&mut self, group_name: &str) {
+        self.push_selection_history();
         let mut count = 0;
         for group in &self.groups {
             // Ensure we don't select ALL files in any group
@@ -1637,7 +1942,30 @@ impl App {
                 self.select_largest();
                 true
             }
+            Action::SelectByExtension => {
+                if self.mode == AppMode::Reviewing {
+                    self.input_query.clear();
+                    self.set_mode(AppMode::InputtingExtension);
+                    true
+                } else {
+                    false
+                }
+            }
+            Action::SelectByDirectory => {
+                if self.mode == AppMode::Reviewing {
+                    self.input_query.clear();
+                    self.set_mode(AppMode::InputtingDirectory);
+                    true
+                } else {
+                    false
+                }
+            }
+            Action::UndoSelection => {
+                self.undo_selection();
+                true
+            }
             Action::DeselectAll => {
+                self.push_selection_history();
                 self.deselect_all();
                 true
             }
@@ -1700,10 +2028,21 @@ impl App {
             }
             Action::Confirm => {
                 if self.mode == AppMode::SelectingFolder {
+                    self.push_selection_history();
                     self.select_by_folder();
                     true
                 } else if self.mode == AppMode::SelectingGroup {
+                    self.push_selection_history();
                     self.select_by_group_name();
+                    true
+                } else if self.mode == AppMode::InputtingExtension {
+                    self.prepare_select_by_extension();
+                    true
+                } else if self.mode == AppMode::InputtingDirectory {
+                    self.prepare_select_by_directory();
+                    true
+                } else if self.mode == AppMode::ConfirmingBulkSelection {
+                    self.apply_bulk_selection();
                     true
                 } else if self.mode == AppMode::Searching {
                     self.set_mode(AppMode::Reviewing);
@@ -1722,10 +2061,17 @@ impl App {
                     AppMode::Confirming => {
                         self.set_mode(AppMode::Reviewing);
                     }
+                    AppMode::ConfirmingBulkSelection => {
+                        self.cancel_bulk_selection();
+                    }
                     AppMode::SelectingFolder => {
                         self.set_mode(AppMode::Reviewing);
                     }
                     AppMode::SelectingGroup => {
+                        self.set_mode(AppMode::Reviewing);
+                    }
+                    AppMode::InputtingExtension | AppMode::InputtingDirectory => {
+                        self.clear_input_query();
                         self.set_mode(AppMode::Reviewing);
                     }
                     AppMode::Searching => {
@@ -2152,6 +2498,82 @@ mod tests {
         app.next_group();
         let group = app.current_group().unwrap();
         assert_eq!(group.size, 200);
+    }
+
+    #[test]
+    fn test_undo_selection() {
+        let groups = vec![make_group(100, vec!["/a.txt", "/b.txt", "/c.txt"])];
+        let mut app = App::with_groups(groups);
+
+        app.select(PathBuf::from("/a.txt"));
+        assert_eq!(app.selected_count(), 1);
+
+        app.push_selection_history();
+        app.select(PathBuf::from("/b.txt"));
+        assert_eq!(app.selected_count(), 2);
+
+        app.undo_selection();
+        assert_eq!(app.selected_count(), 1);
+        assert!(app.is_file_selected(&PathBuf::from("/a.txt")));
+        assert!(!app.is_file_selected(&PathBuf::from("/b.txt")));
+    }
+
+    #[test]
+    fn test_select_by_extension() {
+        let groups = vec![
+            make_group(100, vec!["/a.jpg", "/b.jpg"]),
+            make_group(200, vec!["/c.png", "/d.png"]),
+        ];
+        let mut app = App::with_groups(groups);
+
+        app.set_input_query("jpg".to_string());
+        app.prepare_select_by_extension();
+
+        assert_eq!(app.mode(), AppMode::ConfirmingBulkSelection);
+        assert_eq!(app.pending_selection_count(), 1); // Kept /a.jpg, selected /b.jpg
+        assert_eq!(
+            app.pending_bulk_action(),
+            Some(BulkSelectionType::ByExtension)
+        );
+
+        app.apply_bulk_selection();
+        assert_eq!(app.mode(), AppMode::Reviewing);
+        assert_eq!(app.selected_count(), 1);
+        assert!(app.is_file_selected(&PathBuf::from("/b.jpg")));
+    }
+
+    #[test]
+    fn test_select_by_directory() {
+        let groups = vec![
+            make_group(100, vec!["/dir1/a.txt", "/dir2/a.txt"]),
+            make_group(200, vec!["/dir1/b.txt", "/dir2/b.txt"]),
+        ];
+        let mut app = App::with_groups(groups);
+
+        app.set_input_query("/dir2".to_string());
+        app.prepare_select_by_directory();
+
+        assert_eq!(app.mode(), AppMode::ConfirmingBulkSelection);
+        assert_eq!(app.pending_selection_count(), 2);
+
+        app.apply_bulk_selection();
+        assert_eq!(app.selected_count(), 2);
+        assert!(app.is_file_selected(&PathBuf::from("/dir2/a.txt")));
+        assert!(app.is_file_selected(&PathBuf::from("/dir2/b.txt")));
+    }
+
+    #[test]
+    fn test_bulk_selection_keeps_one() {
+        // Test that select_by_extension doesn't select ALL files in a group
+        let groups = vec![make_group(100, vec!["/a.jpg", "/b.jpg", "/c.jpg"])];
+        let mut app = App::with_groups(groups);
+
+        app.set_input_query("jpg".to_string());
+        app.prepare_select_by_extension();
+
+        // Should select all but the first one
+        assert_eq!(app.pending_selection_count(), 2);
+        assert!(!app.pending_selections.contains(&PathBuf::from("/a.jpg")));
     }
 
     #[test]
@@ -2582,7 +3004,7 @@ mod tests {
     #[test]
     fn test_action_all_names() {
         let names = Action::all_names();
-        assert_eq!(names.len(), 24);
+        assert_eq!(names.len(), 27);
         assert!(names.contains(&"navigate_down"));
         assert!(names.contains(&"show_help"));
         assert!(names.contains(&"select_group"));
@@ -2593,7 +3015,7 @@ mod tests {
     #[test]
     fn test_action_all() {
         let actions = Action::all();
-        assert_eq!(actions.len(), 24);
+        assert_eq!(actions.len(), 27);
         assert!(actions.contains(&Action::NavigateDown));
         assert!(actions.contains(&Action::ShowHelp));
         assert!(actions.contains(&Action::SelectGroup));

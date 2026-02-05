@@ -115,8 +115,23 @@ pub fn render(frame: &mut Frame, app: &App) {
     match app.mode() {
         AppMode::Previewing => render_preview_dialog(frame, app, area),
         AppMode::Confirming => render_confirm_dialog(frame, app, area),
+        AppMode::ConfirmingBulkSelection => render_bulk_selection_confirm_dialog(frame, app, area),
         AppMode::SelectingFolder => render_folder_selection_dialog(frame, app, area),
         AppMode::SelectingGroup => render_group_selection_dialog(frame, app, area),
+        AppMode::InputtingExtension => render_input_dialog(
+            frame,
+            app,
+            area,
+            "Select by Extension",
+            "Enter extension (e.g. .jpg, .png):",
+        ),
+        AppMode::InputtingDirectory => render_input_dialog(
+            frame,
+            app,
+            area,
+            "Select by Directory",
+            "Enter directory path:",
+        ),
         AppMode::ShowingHelp => render_help_dialog(frame, app, area),
         _ => {}
     }
@@ -145,6 +160,20 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         ),
         AppMode::SelectingGroup => format!(
             "rustdupe - Smart Duplicate Finder{} [Select Group]",
+            dry_run_suffix
+        ),
+        AppMode::InputtingExtension => format!(
+            "rustdupe - Smart Duplicate Finder{} [Select by Extension: {}]",
+            dry_run_suffix,
+            app.input_query()
+        ),
+        AppMode::InputtingDirectory => format!(
+            "rustdupe - Smart Duplicate Finder{} [Select by Directory: {}]",
+            dry_run_suffix,
+            app.input_query()
+        ),
+        AppMode::ConfirmingBulkSelection => format!(
+            "rustdupe - Smart Duplicate Finder{} [Confirm Bulk Selection]",
             dry_run_suffix
         ),
         AppMode::Searching => format!(
@@ -205,8 +234,11 @@ fn render_content(frame: &mut Frame, app: &App, area: Rect) {
         AppMode::Reviewing
         | AppMode::Previewing
         | AppMode::Confirming
+        | AppMode::ConfirmingBulkSelection
         | AppMode::SelectingFolder
         | AppMode::SelectingGroup
+        | AppMode::InputtingExtension
+        | AppMode::InputtingDirectory
         | AppMode::Searching
         | AppMode::ShowingHelp => render_reviewing_content(frame, app, area),
         AppMode::Quitting => render_quitting_content(frame, app, area),
@@ -687,6 +719,95 @@ fn render_confirm_dialog(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(confirm, dialog_area);
 }
 
+/// Render bulk selection confirmation dialog.
+fn render_bulk_selection_confirm_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let dialog_area = centered_rect(60, 30, area);
+    frame.render_widget(Clear, dialog_area);
+
+    let count = app.pending_selection_count();
+    let action_type = app
+        .pending_bulk_action()
+        .map(|t| match t {
+            crate::tui::app::BulkSelectionType::AllDuplicates => "all duplicates",
+            crate::tui::app::BulkSelectionType::Oldest => "oldest files",
+            crate::tui::app::BulkSelectionType::Newest => "newest files",
+            crate::tui::app::BulkSelectionType::Smallest => "smallest files",
+            crate::tui::app::BulkSelectionType::Largest => "largest files",
+            crate::tui::app::BulkSelectionType::ByExtension => "files by extension",
+            crate::tui::app::BulkSelectionType::ByDirectory => "files by directory",
+            crate::tui::app::BulkSelectionType::InGroup => "files in group",
+            crate::tui::app::BulkSelectionType::InFolder => "files in folder",
+            crate::tui::app::BulkSelectionType::InNamedGroup => "files in named group",
+        })
+        .unwrap_or("files");
+
+    let text = vec![
+        Line::from(Span::styled(
+            "Confirm Bulk Selection",
+            Style::default()
+                .fg(app.theme().primary)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(format!(
+            "This will mark {} {} for deletion.",
+            count, action_type
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Proceed with selection?",
+            Style::default().fg(app.theme().secondary),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "[Enter] Confirm    [Esc] Cancel",
+            Style::default().fg(app.theme().primary),
+        )),
+    ];
+
+    let confirm = Paragraph::new(Text::from(text))
+        .alignment(Alignment::Center)
+        .block(
+            create_block_with_title(app.is_accessible(), "Bulk Selection")
+                .border_style(Style::default().fg(app.theme().primary)),
+        );
+
+    frame.render_widget(confirm, dialog_area);
+}
+
+/// Render input dialog for extension or directory.
+fn render_input_dialog(frame: &mut Frame, app: &App, area: Rect, title: &str, prompt: &str) {
+    let dialog_area = centered_rect(60, 20, area);
+    frame.render_widget(Clear, dialog_area);
+
+    let input = app.input_query();
+
+    let text = vec![
+        Line::from(prompt),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!(" > {}_", input),
+            Style::default()
+                .fg(app.theme().secondary)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "[Enter] Confirm    [Esc] Cancel",
+            Style::default().fg(app.theme().dim),
+        )),
+    ];
+
+    let input_widget = Paragraph::new(Text::from(text))
+        .alignment(Alignment::Center)
+        .block(
+            create_block_with_title(app.is_accessible(), title)
+                .border_style(Style::default().fg(app.theme().primary)),
+        );
+
+    frame.render_widget(input_widget, dialog_area);
+}
+
 /// Render folder selection dialog.
 fn render_folder_selection_dialog(frame: &mut Frame, app: &App, area: Rect) {
     let dialog_area = centered_rect(70, 60, area);
@@ -924,8 +1045,12 @@ fn get_footer_commands(app: &App) -> Vec<(&'static str, &'static str)> {
         AppMode::Reviewing => get_reviewing_commands(app, profile),
         AppMode::Previewing => vec![("Esc", "Close"), ("q", "Quit")],
         AppMode::Confirming => vec![("Enter", "Confirm"), ("Esc", "Cancel")],
+        AppMode::ConfirmingBulkSelection => vec![("Enter", "Apply"), ("Esc", "Cancel")],
         AppMode::SelectingFolder => get_folder_selection_commands(profile),
         AppMode::SelectingGroup => get_group_selection_commands(profile),
+        AppMode::InputtingExtension | AppMode::InputtingDirectory => {
+            vec![("Enter", "Apply"), ("Esc", "Cancel")]
+        }
         AppMode::Searching => vec![("Enter", "Confirm"), ("Esc", "Cancel")],
         AppMode::ShowingHelp => vec![("Esc", "Close"), ("?/F1", "Help")],
         AppMode::Quitting => vec![],
@@ -980,6 +1105,8 @@ fn get_reviewing_commands(
         ("o/n", "Age"),
         ("f", "Dir"),
         ("s/l", "Size"),
+        ("E/D", "Ext/Dir"),
+        ("U", "Undo"),
         ("/", "Filter"),
     ];
     if !app.is_dry_run() {
