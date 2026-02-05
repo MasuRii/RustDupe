@@ -1412,6 +1412,212 @@ impl DuplicateFinder {
 
         Ok((duplicate_groups, summary))
     }
+
+    /// Find all duplicate files across multiple directories.
+    ///
+    /// Scans all provided paths using [`MultiWalker`] for parallel multi-directory
+    /// traversal with path overlap detection. This prevents double-scanning when
+    /// one path is nested within another.
+    ///
+    /// # Arguments
+    ///
+    /// * `paths` - Root directories to scan for duplicates
+    ///
+    /// # Returns
+    ///
+    /// A tuple of:
+    /// - `Vec<DuplicateGroup>` - Confirmed duplicate groups
+    /// - `ScanSummary` - Statistics about the scan
+    ///
+    /// # Errors
+    ///
+    /// Returns `FinderError` if:
+    /// - All paths are invalid (non-existent or not directories)
+    /// - The scan is interrupted by shutdown signal
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustdupe::duplicates::{DuplicateFinder, FinderConfig};
+    /// use std::path::PathBuf;
+    ///
+    /// let paths = vec![
+    ///     PathBuf::from("/home/user/Documents"),
+    ///     PathBuf::from("/home/user/Downloads"),
+    /// ];
+    ///
+    /// let finder = DuplicateFinder::with_defaults();
+    /// match finder.find_duplicates_in_paths(paths) {
+    ///     Ok((groups, summary)) => {
+    ///         println!("Found {} duplicate groups across directories", groups.len());
+    ///         println!("Can reclaim {} bytes", summary.reclaimable_space);
+    ///     }
+    ///     Err(e) => eprintln!("Scan failed: {}", e),
+    /// }
+    /// ```
+    ///
+    /// [`MultiWalker`]: crate::scanner::MultiWalker
+    pub fn find_duplicates_in_paths(
+        &self,
+        paths: Vec<PathBuf>,
+    ) -> Result<(Vec<super::DuplicateGroup>, ScanSummary), FinderError> {
+        let start_time = std::time::Instant::now();
+        let mut summary = ScanSummary::default();
+
+        // Handle empty paths
+        if paths.is_empty() {
+            log::warn!("No paths provided for scanning");
+            summary.scan_duration = start_time.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        // Check for early shutdown
+        if self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        log::info!("Starting multi-directory scan of {} path(s)", paths.len());
+
+        // Phase 0: Walk all directories and collect files
+        log::info!("Phase 0: Walking directories...");
+        if let Some(ref callback) = self.config.progress_callback {
+            callback.on_phase_start("walking", 0); // Unknown total
+        }
+
+        let multi_walker =
+            crate::scanner::MultiWalker::new(paths, self.config.walker_config.clone());
+
+        // Log the actual roots being scanned (after dedup/overlap detection)
+        let roots = multi_walker.roots();
+        if roots.is_empty() {
+            log::warn!("No valid directories to scan after path normalization");
+            summary.scan_duration = start_time.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        log::info!(
+            "Scanning {} directory root(s): {:?}",
+            roots.len(),
+            roots.iter().map(|p| p.display()).collect::<Vec<_>>()
+        );
+
+        // Set shutdown flag on walker if available
+        let multi_walker = if let Some(ref flag) = self.config.shutdown_flag {
+            multi_walker.with_shutdown_flag(flag.clone())
+        } else {
+            multi_walker
+        };
+
+        let files: Vec<FileEntry> = multi_walker.walk().filter_map(|r| r.ok()).collect();
+
+        if let Some(ref callback) = self.config.progress_callback {
+            callback.on_phase_end("walking");
+        }
+
+        summary.total_files = files.len();
+        summary.total_size = files.iter().map(|f| f.size).sum();
+
+        log::info!(
+            "Found {} files ({} total) across all directories",
+            files.len(),
+            format_size(summary.total_size)
+        );
+
+        // Check for shutdown after walking
+        if self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        if files.is_empty() {
+            log::info!("No files found, scan complete");
+            summary.scan_duration = start_time.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        // Continue with the duplicate detection pipeline (same as find_duplicates_from_files)
+        // Phase 1: Group by size
+        log::info!("Phase 1: Grouping by size...");
+        let (size_groups, size_stats) = super::group_by_size(files);
+
+        summary.eliminated_by_size = size_stats.eliminated_unique;
+
+        log::info!(
+            "Phase 1 complete: {} → {} files ({:.1}% eliminated)",
+            size_stats.total_files,
+            size_stats.potential_duplicates,
+            size_stats.elimination_rate()
+        );
+
+        // Check for shutdown after Phase 1
+        if self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        if size_groups.is_empty() {
+            log::info!("No potential duplicates found after size grouping");
+            summary.scan_duration = start_time.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        // Phase 2: Prehash comparison
+        log::info!("Phase 2: Computing prehashes...");
+        let prehash_config = PrehashConfig {
+            io_threads: self.config.io_threads,
+            cache: self.config.cache.clone(),
+            shutdown_flag: self.config.shutdown_flag.clone(),
+            progress_callback: self.config.progress_callback.clone(),
+            reference_paths: self.config.reference_paths.clone(),
+        };
+
+        let (prehash_groups, prehash_stats) =
+            phase2_prehash(size_groups, self.hasher.clone(), prehash_config);
+
+        summary.eliminated_by_prehash = prehash_stats.unique_prehashes;
+        summary.cache_prehash_hits = prehash_stats.cache_hits;
+        summary.cache_prehash_misses = prehash_stats.cache_misses;
+
+        if prehash_stats.interrupted || self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        if prehash_groups.is_empty() {
+            summary.scan_duration = start_time.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        // Phase 3: Full hash comparison
+        let fullhash_config = FullhashConfig {
+            io_threads: self.config.io_threads,
+            cache: self.config.cache.clone(),
+            shutdown_flag: self.config.shutdown_flag.clone(),
+            progress_callback: self.config.progress_callback.clone(),
+            reference_paths: self.config.reference_paths.clone(),
+        };
+
+        let (duplicate_groups, fullhash_stats) =
+            phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config);
+
+        if fullhash_stats.interrupted || self.config.is_shutdown_requested() {
+            return Err(FinderError::Interrupted);
+        }
+
+        // Update summary
+        summary.duplicate_groups = fullhash_stats.duplicate_groups;
+        summary.duplicate_files = fullhash_stats.duplicate_files;
+        summary.reclaimable_space = fullhash_stats.wasted_space;
+        summary.cache_fullhash_hits = fullhash_stats.cache_hits;
+        summary.cache_fullhash_misses = fullhash_stats.cache_misses;
+        summary.scan_duration = start_time.elapsed();
+
+        log::info!(
+            "Multi-directory scan complete: {} duplicate groups, {} duplicate files, {} reclaimable",
+            summary.duplicate_groups,
+            summary.duplicate_files,
+            summary.reclaimable_display()
+        );
+
+        Ok((duplicate_groups, summary))
+    }
 }
 
 #[cfg(test)]

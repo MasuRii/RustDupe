@@ -129,43 +129,37 @@ fn handle_scan(
             reference_paths,
         )
     } else {
-        // For now, we only support single-path scanning until task 2.2.2 implements multi-directory
-        // When multiple paths are specified, we use only the first path and log a warning
+        // Validate that at least one path is provided
         if args.paths.is_empty() {
             anyhow::bail!(
                 "At least one path is required for scanning unless --load-session is used"
             );
         }
 
-        let raw_path = &args.paths[0];
-        if args.paths.len() > 1 {
-            log::warn!(
-                "Multi-directory scanning not yet implemented. Only scanning first path: {}",
-                raw_path.display()
-            );
-            log::warn!(
-                "Additional paths will be ignored: {:?}",
-                args.paths[1..]
-                    .iter()
-                    .map(|p| p.display())
-                    .collect::<Vec<_>>()
-            );
+        // Canonicalize all scan paths and validate they exist
+        let mut canonical_paths = Vec::with_capacity(args.paths.len());
+        for raw_path in &args.paths {
+            let path = raw_path.canonicalize().map_err(|e| {
+                anyhow::anyhow!("Failed to resolve path '{}': {}", raw_path.display(), e)
+            })?;
+
+            if !path.exists() {
+                anyhow::bail!("Path does not exist: {}", path.display());
+            }
+
+            if !path.is_dir() {
+                anyhow::bail!("Path is not a directory: {}", path.display());
+            }
+
+            canonical_paths.push(path);
         }
 
-        // Canonicalize the scan path to ensure consistent path matching (especially on Windows)
-        let path = raw_path.canonicalize()?;
-
-        log::debug!("Scanning path: {:?}", path);
+        log::debug!(
+            "Scanning {} path(s): {:?}",
+            canonical_paths.len(),
+            canonical_paths
+        );
         log::debug!("Output format: {}", args.output);
-
-        // Validate the path exists
-        if !path.exists() {
-            anyhow::bail!("Path does not exist: {}", path.display());
-        }
-
-        if !path.is_dir() {
-            anyhow::bail!("Path is not a directory: {}", path.display());
-        }
 
         // Validate and canonicalize reference paths
         let mut reference_paths = Vec::new();
@@ -302,9 +296,9 @@ fn handle_scan(
 
         let finder = DuplicateFinder::new(finder_config);
 
-        log::info!("Starting scan of {}", path.display());
+        log::info!("Starting scan of {} path(s)", canonical_paths.len());
 
-        match finder.find_duplicates(&path) {
+        match finder.find_duplicates_in_paths(canonical_paths.clone()) {
             Ok((groups, summary)) => {
                 let settings = SessionSettings {
                     follow_symlinks: args.follow_symlinks,
@@ -320,13 +314,7 @@ fn handle_scan(
                     io_threads: args.io_threads,
                     paranoid: args.paranoid,
                 };
-                (
-                    groups,
-                    summary,
-                    vec![path.clone()],
-                    settings,
-                    reference_paths,
-                )
+                (groups, summary, canonical_paths, settings, reference_paths)
             }
             Err(e) => {
                 if args.output == OutputFormat::Json {

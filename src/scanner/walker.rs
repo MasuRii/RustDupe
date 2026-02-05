@@ -6,6 +6,11 @@
 //! directories and collecting file metadata for duplicate detection.
 //! It uses [`jwalk`] for parallel directory walking (4x faster than walkdir).
 //!
+//! For scanning multiple directories, use [`MultiWalker`] which provides:
+//! - Path overlap detection (prevents double-scanning of nested directories)
+//! - Parallel traversal of multiple root directories using rayon
+//! - Canonical path normalization for consistent comparison
+//!
 //! # Features
 //!
 //! - Parallel directory traversal using rayon thread pool
@@ -35,6 +40,22 @@
 //!         Err(e) => eprintln!("Warning: {}", e),
 //!     }
 //! }
+//! ```
+//!
+//! # Multi-Directory Example
+//!
+//! ```no_run
+//! use rustdupe::scanner::{MultiWalker, WalkerConfig};
+//! use std::path::PathBuf;
+//!
+//! let paths = vec![
+//!     PathBuf::from("/home/user/Documents"),
+//!     PathBuf::from("/home/user/Downloads"),
+//! ];
+//!
+//! let walker = MultiWalker::new(paths, WalkerConfig::default());
+//! let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+//! println!("Found {} files across all directories", files.len());
 //! ```
 
 use std::fs::Metadata;
@@ -470,6 +491,297 @@ impl Walker {
             path,
             source: std::io::Error::other(error.to_string()),
         })
+    }
+}
+
+// ============================================================================
+// MultiWalker - Multiple Directory Traversal
+// ============================================================================
+
+/// Multi-directory walker for parallel traversal of multiple root directories.
+///
+/// `MultiWalker` extends [`Walker`] to support scanning multiple directories
+/// simultaneously with:
+/// - Path overlap detection (prevents double-scanning nested directories)
+/// - Parallel traversal using rayon
+/// - Canonical path normalization for consistent comparison
+/// - Aggregated results from all directories
+///
+/// # Path Overlap Detection
+///
+/// When scanning multiple directories, some may be nested within others.
+/// For example, scanning both `/home/user` and `/home/user/Documents` would
+/// result in `Documents` being scanned twice. `MultiWalker` automatically
+/// detects these overlaps and removes redundant paths.
+///
+/// # Example
+///
+/// ```no_run
+/// use rustdupe::scanner::{MultiWalker, WalkerConfig};
+/// use std::path::PathBuf;
+///
+/// let paths = vec![
+///     PathBuf::from("/home/user/Documents"),
+///     PathBuf::from("/home/user/Downloads"),
+///     PathBuf::from("/home/user/Pictures"),
+/// ];
+///
+/// let config = WalkerConfig {
+///     skip_hidden: true,
+///     ..Default::default()
+/// };
+///
+/// let walker = MultiWalker::new(paths, config);
+/// let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+/// println!("Found {} files across all directories", files.len());
+/// ```
+#[derive(Debug)]
+pub struct MultiWalker {
+    /// Root paths to walk (canonicalized, overlaps removed)
+    roots: Vec<PathBuf>,
+    /// Walker configuration (shared across all walkers)
+    config: WalkerConfig,
+    /// Optional shutdown flag for graceful termination
+    shutdown_flag: Option<Arc<AtomicBool>>,
+}
+
+impl MultiWalker {
+    /// Create a new multi-directory walker.
+    ///
+    /// Paths are canonicalized and deduplicated. Overlapping paths
+    /// (where one is a parent of another) are detected and the child
+    /// paths are removed to prevent double-scanning.
+    ///
+    /// # Arguments
+    ///
+    /// * `paths` - Root directories to scan
+    /// * `config` - Walker configuration applied to all directories
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustdupe::scanner::{MultiWalker, WalkerConfig};
+    /// use std::path::PathBuf;
+    ///
+    /// let paths = vec![
+    ///     PathBuf::from("/home/user/docs"),
+    ///     PathBuf::from("/home/user/docs/archive"), // Will be removed (overlap)
+    ///     PathBuf::from("/home/user/downloads"),
+    /// ];
+    ///
+    /// let walker = MultiWalker::new(paths, WalkerConfig::default());
+    /// // Only /home/user/docs and /home/user/downloads will be scanned
+    /// ```
+    #[must_use]
+    pub fn new(paths: Vec<PathBuf>, config: WalkerConfig) -> Self {
+        let roots = Self::normalize_and_dedupe_paths(paths);
+        Self {
+            roots,
+            config,
+            shutdown_flag: None,
+        }
+    }
+
+    /// Set the shutdown flag for graceful termination.
+    ///
+    /// When the flag is set to `true`, all walkers will stop iteration
+    /// as soon as possible. This allows for clean Ctrl+C handling.
+    ///
+    /// # Arguments
+    ///
+    /// * `flag` - Atomic boolean flag shared across threads
+    #[must_use]
+    pub fn with_shutdown_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.shutdown_flag = Some(flag);
+        self
+    }
+
+    /// Get the list of root paths that will be scanned.
+    ///
+    /// Returns the canonicalized, deduplicated paths after overlap detection.
+    #[must_use]
+    pub fn roots(&self) -> &[PathBuf] {
+        &self.roots
+    }
+
+    /// Check if shutdown has been requested.
+    fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_flag
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::SeqCst))
+    }
+
+    /// Normalize paths and remove overlaps.
+    ///
+    /// This function:
+    /// 1. Canonicalizes all paths (resolves symlinks, `.`, `..`)
+    /// 2. Removes exact duplicates
+    /// 3. Removes paths that are children of other paths (overlap detection)
+    ///
+    /// Invalid paths (non-existent, non-directory) are logged and skipped.
+    fn normalize_and_dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+        use std::collections::HashSet;
+
+        if paths.is_empty() {
+            return Vec::new();
+        }
+
+        // Step 1: Canonicalize all paths and filter valid directories
+        let mut canonical_paths: Vec<PathBuf> = paths
+            .into_iter()
+            .filter_map(|p| match p.canonicalize() {
+                Ok(canonical) => {
+                    if canonical.is_dir() {
+                        Some(canonical)
+                    } else {
+                        log::warn!("Path is not a directory, skipping: {}", p.display());
+                        None
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to canonicalize path '{}': {}. Skipping.",
+                        p.display(),
+                        e
+                    );
+                    None
+                }
+            })
+            .collect();
+
+        if canonical_paths.is_empty() {
+            return Vec::new();
+        }
+
+        // Step 2: Remove exact duplicates
+        let unique: HashSet<PathBuf> = canonical_paths.drain(..).collect();
+        canonical_paths = unique.into_iter().collect();
+
+        // Step 3: Sort by path length (shortest first) to detect overlaps efficiently
+        canonical_paths.sort_by_key(|p| p.as_os_str().len());
+
+        // Step 4: Remove paths that are children of other paths
+        let mut result: Vec<PathBuf> = Vec::with_capacity(canonical_paths.len());
+
+        for path in canonical_paths {
+            let is_child_of_existing = result.iter().any(|parent| path.starts_with(parent));
+
+            if is_child_of_existing {
+                log::info!(
+                    "Path '{}' is nested within another scan path, skipping to avoid double-scanning",
+                    path.display()
+                );
+            } else {
+                result.push(path);
+            }
+        }
+
+        log::debug!(
+            "MultiWalker: {} root paths after deduplication and overlap detection",
+            result.len()
+        );
+
+        result
+    }
+
+    /// Walk all directories, yielding file entries.
+    ///
+    /// Returns an iterator over [`FileEntry`] results from all directories.
+    /// Directories are traversed in parallel using rayon, and results are
+    /// aggregated into a single stream.
+    ///
+    /// # Performance
+    ///
+    /// Uses rayon parallel iteration for multiple directories, with each
+    /// directory using jwalk's parallel directory reading internally.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rustdupe::scanner::{MultiWalker, WalkerConfig};
+    /// use std::path::PathBuf;
+    ///
+    /// let paths = vec![
+    ///     PathBuf::from("/path/1"),
+    ///     PathBuf::from("/path/2"),
+    /// ];
+    ///
+    /// let walker = MultiWalker::new(paths, WalkerConfig::default());
+    /// let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+    /// ```
+    pub fn walk(&self) -> impl Iterator<Item = Result<FileEntry, ScanError>> + '_ {
+        use rayon::prelude::*;
+        use std::collections::HashSet;
+        use std::sync::Mutex;
+
+        // Early return for empty roots
+        if self.roots.is_empty() || self.is_shutdown_requested() {
+            return Vec::new().into_iter();
+        }
+
+        // Use a mutex-protected HashSet to track seen canonical paths across all walkers
+        // This prevents duplicates when files might be accessible via different paths
+        // (e.g., symlinks that weren't followed but point to files in another scanned dir)
+        let seen_paths: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+
+        // Walk all directories in parallel and collect results
+        let all_results: Vec<Result<FileEntry, ScanError>> = self
+            .roots
+            .par_iter()
+            .flat_map(|root| {
+                // Check shutdown before starting each directory
+                if self.is_shutdown_requested() {
+                    return Vec::new();
+                }
+
+                log::debug!("MultiWalker: Starting scan of {}", root.display());
+
+                // Create a walker for this root
+                let mut walker = Walker::new(root, self.config.clone());
+                if let Some(ref flag) = self.shutdown_flag {
+                    walker = walker.with_shutdown_flag(Arc::clone(flag));
+                }
+
+                // Collect results from this walker
+                let results: Vec<Result<FileEntry, ScanError>> = walker
+                    .walk()
+                    .filter_map(|result| {
+                        match &result {
+                            Ok(entry) => {
+                                // Deduplicate by canonical path
+                                let canonical = match entry.path.canonicalize() {
+                                    Ok(c) => c,
+                                    Err(_) => entry.path.clone(),
+                                };
+
+                                let mut seen = seen_paths.lock().unwrap();
+                                if seen.contains(&canonical) {
+                                    log::trace!(
+                                        "Skipping duplicate path: {}",
+                                        entry.path.display()
+                                    );
+                                    None
+                                } else {
+                                    seen.insert(canonical);
+                                    Some(result)
+                                }
+                            }
+                            Err(_) => Some(result),
+                        }
+                    })
+                    .collect();
+
+                log::debug!(
+                    "MultiWalker: Found {} entries in {}",
+                    results.len(),
+                    root.display()
+                );
+
+                results
+            })
+            .collect();
+
+        all_results.into_iter()
     }
 }
 
@@ -949,5 +1261,230 @@ mod tests {
         assert!(file.modified != SystemTime::UNIX_EPOCH);
         assert!(!file.is_symlink);
         // is_hardlink depends on whether we've seen the inode before
+    }
+
+    // ========================================================================
+    // MultiWalker Tests
+    // ========================================================================
+
+    #[test]
+    fn test_multi_walker_single_directory() {
+        let dir = create_test_dir();
+        let paths = vec![dir.path().to_path_buf()];
+
+        let walker = MultiWalker::new(paths, WalkerConfig::default());
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+
+        // Same as single walker - should find 3 files
+        assert_eq!(files.len(), 3);
+    }
+
+    #[test]
+    fn test_multi_walker_multiple_directories() {
+        // Create two separate directories
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+
+        // Create files in dir1
+        let file1 = dir1.path().join("file1.txt");
+        let mut f = File::create(&file1).unwrap();
+        writeln!(f, "Content 1").unwrap();
+
+        // Create files in dir2
+        let file2 = dir2.path().join("file2.txt");
+        let mut f = File::create(&file2).unwrap();
+        writeln!(f, "Content 2").unwrap();
+
+        let paths = vec![dir1.path().to_path_buf(), dir2.path().to_path_buf()];
+
+        let walker = MultiWalker::new(paths, WalkerConfig::default());
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+
+        // Should find files from both directories
+        assert_eq!(files.len(), 2);
+
+        let names: Vec<_> = files
+            .iter()
+            .map(|f| f.path.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert!(names.contains(&"file1.txt"));
+        assert!(names.contains(&"file2.txt"));
+    }
+
+    #[test]
+    fn test_multi_walker_overlap_detection() {
+        // Create a parent directory with a subdirectory
+        let parent_dir = TempDir::new().unwrap();
+        let child_dir = parent_dir.path().join("child");
+        fs::create_dir(&child_dir).unwrap();
+
+        // Create files in both
+        let file1 = parent_dir.path().join("parent_file.txt");
+        let mut f = File::create(&file1).unwrap();
+        writeln!(f, "Parent content").unwrap();
+
+        let file2 = child_dir.join("child_file.txt");
+        let mut f = File::create(&file2).unwrap();
+        writeln!(f, "Child content").unwrap();
+
+        // Try to scan both parent and child (overlap)
+        let paths = vec![parent_dir.path().to_path_buf(), child_dir.clone()];
+
+        let walker = MultiWalker::new(paths, WalkerConfig::default());
+
+        // After dedup, only parent should remain
+        assert_eq!(walker.roots().len(), 1);
+
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+
+        // Should find both files, but only scanning once (from parent)
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn test_multi_walker_duplicate_paths() {
+        let dir = TempDir::new().unwrap();
+
+        let file1 = dir.path().join("file.txt");
+        let mut f = File::create(&file1).unwrap();
+        writeln!(f, "Content").unwrap();
+
+        // Same path listed twice
+        let paths = vec![dir.path().to_path_buf(), dir.path().to_path_buf()];
+
+        let walker = MultiWalker::new(paths, WalkerConfig::default());
+
+        // Should deduplicate to 1 root
+        assert_eq!(walker.roots().len(), 1);
+
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn test_multi_walker_empty_paths() {
+        let paths: Vec<PathBuf> = vec![];
+        let walker = MultiWalker::new(paths, WalkerConfig::default());
+
+        assert!(walker.roots().is_empty());
+
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_multi_walker_nonexistent_path_filtered() {
+        let dir = TempDir::new().unwrap();
+
+        let file1 = dir.path().join("file.txt");
+        let mut f = File::create(&file1).unwrap();
+        writeln!(f, "Content").unwrap();
+
+        // Mix of valid and invalid paths
+        let paths = vec![
+            PathBuf::from("/nonexistent/path/12345"),
+            dir.path().to_path_buf(),
+        ];
+
+        let walker = MultiWalker::new(paths, WalkerConfig::default());
+
+        // Invalid path should be filtered out
+        assert_eq!(walker.roots().len(), 1);
+
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn test_multi_walker_with_config() {
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+
+        // Create a hidden file in dir1
+        let hidden = dir1.path().join(".hidden");
+        let mut f = File::create(&hidden).unwrap();
+        writeln!(f, "Hidden content").unwrap();
+
+        // Create normal file in dir2
+        let normal = dir2.path().join("normal.txt");
+        let mut f = File::create(&normal).unwrap();
+        writeln!(f, "Normal content").unwrap();
+
+        let paths = vec![dir1.path().to_path_buf(), dir2.path().to_path_buf()];
+
+        // Skip hidden files
+        let config = WalkerConfig {
+            skip_hidden: true,
+            ..Default::default()
+        };
+
+        let walker = MultiWalker::new(paths, config);
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+
+        // Should only find the normal file
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path.file_name().unwrap(), "normal.txt");
+    }
+
+    #[test]
+    fn test_multi_walker_shutdown_flag() {
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+
+        // Create files in both directories
+        for i in 0..5 {
+            let file = dir1.path().join(format!("file{}.txt", i));
+            let mut f = File::create(&file).unwrap();
+            writeln!(f, "Content {}", i).unwrap();
+
+            let file = dir2.path().join(format!("other{}.txt", i));
+            let mut f = File::create(&file).unwrap();
+            writeln!(f, "Other {}", i).unwrap();
+        }
+
+        let paths = vec![dir1.path().to_path_buf(), dir2.path().to_path_buf()];
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let walker = MultiWalker::new(paths, WalkerConfig::default())
+            .with_shutdown_flag(Arc::clone(&shutdown));
+
+        // Set shutdown flag immediately
+        shutdown.store(true, Ordering::SeqCst);
+
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+
+        // With shutdown flag set immediately, should get very few or no files
+        assert!(
+            files.len() < 5,
+            "Expected early termination, got {} files",
+            files.len()
+        );
+    }
+
+    #[test]
+    fn test_multi_walker_cross_directory_duplicates() {
+        // Test that files with same content across directories are both found
+        let dir1 = TempDir::new().unwrap();
+        let dir2 = TempDir::new().unwrap();
+
+        let content = b"Identical content for testing";
+
+        // Same content in both directories
+        let file1 = dir1.path().join("file.txt");
+        let mut f = File::create(&file1).unwrap();
+        f.write_all(content).unwrap();
+
+        let file2 = dir2.path().join("file.txt");
+        let mut f = File::create(&file2).unwrap();
+        f.write_all(content).unwrap();
+
+        let paths = vec![dir1.path().to_path_buf(), dir2.path().to_path_buf()];
+
+        let walker = MultiWalker::new(paths, WalkerConfig::default());
+        let files: Vec<_> = walker.walk().filter_map(Result::ok).collect();
+
+        // Both files should be found (they're in different directories)
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|f| f.size == content.len() as u64));
     }
 }

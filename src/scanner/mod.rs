@@ -52,7 +52,7 @@ pub use path_utils::{
     paths_equal_normalized,
 };
 use regex::Regex;
-pub use walker::Walker;
+pub use walker::{MultiWalker, Walker};
 
 /// File categories for filtering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
