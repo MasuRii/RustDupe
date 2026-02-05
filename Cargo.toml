@@ -121,6 +121,12 @@ proptest = "1"
 tempfile = "3"
 # File modification time for tests
 filetime = "0.2"
+# Benchmarking
+criterion = "0.5"
+
+[[bench]]
+name = "scan_benchmark"
+harness = false
 
 [profile.release]
 lto = "thin"           # Link-time optimization (good balance)

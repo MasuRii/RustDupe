@@ -8,6 +8,7 @@ use clap::Parser;
 use rustdupe::cli::{Cli, Commands, OutputFormat, ThemeArg};
 use rustdupe::config::Config;
 use rustdupe::tui::keybindings::KeybindingProfile;
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Mutex;
 use tempfile::tempdir;
@@ -88,12 +89,16 @@ fn test_config_save_toml() {
     let temp_dir = tempdir().unwrap();
     let config_path = temp_dir.path().join("config.toml");
 
-    let mut config = Config::default();
-    config.theme = ThemeArg::Light;
-    config.io_threads = 2;
-    config
-        .custom_keybindings
-        .insert("quit".to_string(), vec!["q".to_string()]);
+    let config = Config {
+        theme: ThemeArg::Light,
+        io_threads: 2,
+        custom_keybindings: {
+            let mut m = HashMap::new();
+            m.insert("quit".to_string(), vec!["q".to_string()]);
+            m
+        },
+        ..Default::default()
+    };
 
     let content = toml::to_string_pretty(&config).unwrap();
     fs::write(&config_path, content).unwrap();

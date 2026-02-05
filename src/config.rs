@@ -720,7 +720,6 @@ fn find_best_match<'a>(input: &str, candidates: &[&'a str]) -> Option<&'a str> {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
 

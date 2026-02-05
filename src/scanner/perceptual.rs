@@ -230,7 +230,7 @@ mod tests {
         let hash = hasher.compute_hash(&file_path).unwrap();
 
         // A 10x10 black image should have a stable hash
-        assert!(hash.as_bytes().len() > 0);
+        assert!(!hash.as_bytes().is_empty());
     }
 
     #[test]
