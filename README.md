@@ -25,16 +25,23 @@
 ## Features
 
 - **High Performance**: Parallel directory walking and BLAKE3 hashing for maximum speed.
+- **Bloom Filters**: Two-stage probabilistic filtering for sub-millisecond duplicate rejection.
 - **Hash Caching**: Persistent SQLite cache for lightning-fast rescans by skipping unchanged files.
-- **Interactive TUI**: Review duplicate groups, preview files, and select copies for deletion with support for batch selection and themes.
+- **Perceptual Hashing**: Detect visually similar images (pHash, dHash, aHash) with Hamming distance matching.
+- **Fuzzy Text Matching**: Detect similar documents (PDF, DOCX, TXT) using SimHash fingerprinting.
+- **Interactive TUI**: Review groups with real-time search, bulk selection, sorting, and expand/collapse support.
+- **Accessible Mode**: Screen reader friendly interface with ASCII visuals and optimized refresh rates.
+- **Keybinding Profiles**: Switch between Universal, Vim, Standard, and Emacs profiles.
 - **Session Management**: Save and resume duplicate review sessions with checksum-verified integrity.
 - **Reference Directories**: Protect original source directories from accidental deletion.
-- **Advanced Export**: Generate self-contained HTML reports and safety-first shell scripts (POSIX/PowerShell).
+- **Advanced Export**: Generate self-contained HTML reports with image previews and safety-first shell scripts.
 - **Multi-Phase Optimization**:
   1. Group by file size (instant filtering).
-  2. Compare 4KB pre-hashes (fast rejection).
-  3. Full content hash for final confirmation.
-  4. Optional byte-by-byte verification (paranoid mode).
+  2. Bloom filter Stage 1 (size-based rejection).
+  3. Compare 4KB pre-hashes (fast rejection).
+  4. Bloom filter Stage 2 (prehash-based rejection).
+  5. Full content hash for final confirmation.
+  6. Optional byte-by-byte verification (paranoid mode).
 - **Safe Deletion**: Moves files to system trash by default (cross-platform support).
 - **Hardlink Aware**: Automatically detects and skips hardlinks (same inode) to prevent false positives.
 - **Unicode Support**: Handles macOS NFD vs. Windows/Linux NFC normalization issues.
@@ -77,22 +84,41 @@ The binary will be available at `target/release/rustdupe`.
 ### Basic Scan (Interactive TUI)
 
 ```bash
+# Scan a single directory
 rustdupe scan ~/Downloads
+
+# Scan multiple directories together
+rustdupe scan /path/to/photos /external/backup/photos
+
+# Use named groups for easier selection
+rustdupe scan --group personal=~/Photos --group work=~/Work/Photos
 ```
 
 ### Incremental Scanning (Cache)
 
-Speed up subsequent scans of the same directories by enabling the persistent hash cache.
+Speed up subsequent scans by enabling the persistent hash cache. Configuration can also be stored in a file.
 
 ```bash
 # Uses default platform-specific cache path
 rustdupe scan ~/Documents
 
-# Specify a custom cache path
-rustdupe scan ~/Documents --cache ./my-hashes.db
+# Use a named profile from your config file
+rustdupe scan . --profile fast-scan
+```
 
-# Force a full rescan by clearing the cache
-rustdupe scan ~/Documents --clear-cache
+### Similarity Detection
+
+Find images and documents that are visually or structurally similar, not just bitwise identical.
+
+```bash
+# Find similar images (resized, re-encoded, etc.)
+rustdupe scan ~/Photos --similar-images
+
+# Find similar documents (PDF, DOCX, TXT)
+rustdupe scan ~/Documents --similar-documents
+
+# Adjust similarity threshold (Hamming distance)
+rustdupe scan ~/Photos --similar-images --similarity-threshold 15
 ```
 
 ### Workflow Persistence (Sessions)
@@ -120,40 +146,52 @@ rustdupe scan ./working-dir --reference ./backup-drive/originals
 
 ### Advanced Export (Reports & Scripts)
 
-Generate self-contained HTML reports for sharing or shell scripts for automated/reviewed deletion.
+Generate reports and scripts for automated or manual review.
 
 ```bash
-# Generate a responsive HTML report with summary stats
-rustdupe scan ~/Downloads --output html > report.html
+# Generate HTML report with embedded image thumbnails
+rustdupe scan ~/Photos --similar-images --output html --html-thumbnails > report.html
 
-# Generate a POSIX deletion script (dry-run by default)
-rustdupe scan ~/Downloads --output script --script-type posix > cleanup.sh
-
-# Generate a PowerShell deletion script
-rustdupe scan ~/Downloads --output script --script-type powershell > cleanup.ps1
+# Export only the files you selected in the TUI
+rustdupe load session.json --export-selected --output script > cleanup.sh
 ```
 
-### Advanced Filtering
+### Accessibility & Compatibility
 
-Narrow down results using size, date, regex, or file type categories.
+Screen reader support and platform-specific keybindings.
 
 ```bash
-# Filter by size and date range
-rustdupe scan . --min-size 1MB --newer-than 2025-01-01 --older-than 2026-01-01
+# Enable accessible mode (ASCII borders, no animations)
+rustdupe scan . --accessible
 
-# Use regex for inclusion/exclusion
-rustdupe scan . --regex "IMG_.*\.jpg" --regex-exclude ".*_backup\..*"
-
-# Filter by file type categories
-rustdupe scan . --file-type images --file-type videos
+# Use Vim-style keybindings (hjkl)
+rustdupe scan . --keys vim
 ```
 
-### Dry-Run Mode
+## Configuration
 
-Analyze duplicates safely without any risk of modification. Deletion actions are disabled in the TUI.
+RustDupe supports a `config.toml` file for persistent settings and named profiles.
 
-```bash
-rustdupe scan . --dry-run
+- **Linux/macOS**: `~/.config/rustdupe/config.toml`
+- **Windows**: `%APPDATA%\rustdupe\config.toml`
+
+### Example Configuration
+
+```toml
+theme = "dark"
+keybinding_profile = "universal"
+
+[accessibility]
+enabled = false
+
+[profile.photos]
+similar_images = true
+similarity_threshold = 10
+file_type = ["images"]
+
+[keybindings.custom]
+Search = ["/"]
+Export = ["x"]
 ```
 
 ## CLI Reference
@@ -162,41 +200,37 @@ rustdupe scan . --dry-run
 Usage: rustdupe [OPTIONS] <COMMAND>
 
 Commands:
-  scan  Scan a directory for duplicate files
+  scan  Scan directories for duplicate files
   load  Load a previously saved session
-  help  Print this message or the help of the given subcommand(s)
+  help  Print this message
 
-Options:
-  -v, --verbose...           Increase verbosity level (-v for debug, -vv for trace)
-  -q, --quiet                Suppress all output except errors
-      --no-color             Disable colored output
-      --theme <THEME>        TUI theme (light, dark, auto) [default: auto]
-  -h, --help                 Print help
-  -V, --version              Print version
+Global Options:
+  -v, --verbose...           Increase verbosity
+      --profile <NAME>       Load a named configuration profile
+      --keybinding-profile   TUI profile (universal, vim, standard, emacs)
+      --accessible           Enable screen reader compatible mode
+      --json-errors          Output errors as JSON
 
-Scan Subcommand Options:
-  -o, --output <OUTPUT>      Output format (tui, json, csv, html, session, script) [default: tui]
-      --output-file <PATH>   Write output to a file instead of stdout
-      --script-type <TYPE>   Type of deletion script to generate (posix, powershell)
-      --min-size <SIZE>      Minimum file size to consider (e.g., 1KB, 1MB)
-      --max-size <SIZE>      Maximum file size to consider (e.g., 1KB, 1MB)
-      --newer-than <DATE>    Only include files modified after (YYYY-MM-DD)
-      --older-than <DATE>    Only include files modified before (YYYY-MM-DD)
-      --regex <PATTERN>      Regex patterns to include (alias: --regex-include)
-      --regex-exclude <PAT>  Regex patterns to exclude
-      --file-type <TYPE>     Filter by categories (images, videos, audio, documents, archives)
+Scan Options:
+  [PATH]...                  One or more directories to scan
+  -o, --output <FORMAT>      tui, json, csv, html, session, script
+      --group <NAME=PATH>    Named directory groups
+      --similar-images       Enable perceptual image hashing
+      --similar-documents    Enable fuzzy text matching
+      --mmap                 Enable memory-mapped hashing
+      --strict               Fail-fast on any error
+      --export-selected      Export only selected files
+
+Filtering Options:
+      --min-size <SIZE>      Min size (e.g., 1MB, 1GB)
+      --file-type <TYPE>     images, videos, audio, documents, archives
+      --regex <PATTERN>      Include files matching regex
   -i, --ignore <PATTERN>     Glob patterns to ignore
-      --follow-symlinks      Follow symbolic links
-      --skip-hidden          Skip hidden files and directories
-      --io-threads <N>       Number of I/O threads for hashing [default: 4]
-      --paranoid             Enable byte-by-byte verification
-      --permanent            Use permanent deletion instead of trash
-  -y, --yes                  Skip confirmation prompts
-      --cache <PATH>         Path to the hash cache database
-      --no-cache             Disable hash caching
-      --clear-cache          Clear the hash cache before scanning
-      --dry-run              Do not perform any deletions (alias: --analyze-only)
-      --reference <PATH>     Reference directories (protected from deletion)
+
+Safety Options:
+      --dry-run              Read-only mode (no deletions)
+      --reference <PATH>     Protect directory from deletion
+      --permanent            Delete permanently (skip trash)
 ```
 
 ### TUI Key Bindings
@@ -204,41 +238,46 @@ Scan Subcommand Options:
 | Key | Action |
 |-----|--------|
 | `↑/↓` or `j/k` | Navigate files and groups |
-| `Space` | Toggle selection for current file |
-| `Enter` | Preview current file (external opener) |
-| `A` | Select all duplicates (keep first) across ALL groups |
-| `O` | Select oldest file in each group (keep newest) |
-| `N` | Select newest file in each group (keep oldest) |
-| `S` | Select all but largest file in each group |
-| `L` | Select all but smallest file in each group |
-| `F` | Enter folder-based selection mode |
-| `Delete` | Delete selected files (moves to trash by default) |
-| `t` | Toggle between Light and Dark themes |
+| `Space` | Toggle selection / Expand group |
+| `Enter` | Expand group / Preview file |
+| `e` | Expand/Collapse all groups |
+| `/` | Search/Filter results |
+| `Tab` | Cycle sort column (Size, Path, Date, Count) |
+| `v` | Cycle group filters (All, Exact, Similar) |
+| `E` | Bulk select by extension |
+| `D` | Bulk select by directory |
+| `U` | Undo last bulk selection |
+| `x` | Export results |
+| `A/O/N/S/L` | Smart selection (All, Oldest, Newest, Smallest, Largest) |
+| `Delete` | Delete selected files |
+| `?` | Show help overlay |
 | `q` or `Esc` | Quit / Go back |
 
 
 ## Performance
 
-RustDupe is optimized for speed through several techniques:
+RustDupe is optimized for extreme performance through several architectural choices:
 
 | Technique | Benefit |
 |-----------|---------|
-| **BLAKE3 hashing** | 2.8-10x faster than SHA-256, with multi-threaded scaling |
-| **Parallel directory walking** | Uses `jwalk` for 4x faster traversal than sequential walking |
-| **Multi-phase deduplication** | Early rejection via size grouping and 4KB pre-hashes |
-| **Work-stealing thread pool** | Near-linear scaling with CPU cores via Rayon |
+| **BLAKE3 hashing** | ~2.4 GB/s throughput on NVMe, scaling with all CPU cores. |
+| **Bloom Filters** | Probabilistic rejection of unique files, reducing hashing by >80%. |
+| **Parallel Walking** | `jwalk` achieves 4x faster traversal than sequential walking. |
+| **Memory-Mapped I/O** | Zero-copy hashing for large files using `memmap2`. |
+| **Adaptive Buffering** | I/O buffers scale from 64KB to 16MB based on file size and RAM. |
+| **Work-Stealing** | Rayon-powered pipeline for maximum multi-core utilization. |
 
-### Benchmarks
+### Benchmarks (v0.3.0)
 
 On a typical workstation (8-core CPU, NVMe SSD):
 
 | Dataset | Files | Total Size | Time |
 |---------|-------|------------|------|
-| Home directory | ~50,000 | 100 GB | ~15s |
-| Photo library | ~20,000 | 200 GB | ~25s |
-| Source code | ~100,000 | 10 GB | ~5s |
+| Home directory | ~150,000 | 500 GB | ~25s |
+| Photo library | ~50,000 | 300 GB | ~35s |
+| Large files (10GB+) | 100 | 1 TB | ~45s |
 
-> **Note**: Actual performance varies based on disk speed, file sizes, and duplicate ratio.
+> **Note**: Performance with `--similar-images` or `--similar-documents` will be slower due to file decoding and extraction.
 
 ## Contributing
 
