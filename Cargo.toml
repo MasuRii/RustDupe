@@ -1,6 +1,6 @@
 [package]
 name = "rustdupe"
-version = "0.3.0-beta"
+version = "0.3.0-rc"
 edition = "2021"
 rust-version = "1.85"
 description = "Smart duplicate file finder with interactive TUI"
