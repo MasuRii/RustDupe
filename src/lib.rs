@@ -391,7 +391,9 @@ fn handle_scan(
             .with_bloom_fp_rate(config.bloom_fp_rate)
             .with_min_group_size(config.min_group_size)
             .with_similar_images(config.similar_images)
-            .with_similarity_threshold(config.similarity_threshold);
+            .with_similar_documents(config.similar_documents)
+            .with_similarity_threshold(config.similarity_threshold)
+            .with_doc_similarity_threshold(config.doc_similarity_threshold);
 
         if let Some(cache) = hash_cache {
             finder_config = finder_config.with_cache(cache);
@@ -424,11 +426,13 @@ fn handle_scan(
                     mmap: config.mmap,
                     mmap_threshold: config.mmap_threshold,
                     similar_images: config.similar_images,
+                    similar_documents: config.similar_documents,
                     min_group_size: config.min_group_size,
                     io_buffer_size: config.io_buffer_size,
                     io_buffer_min: config.io_buffer_min,
                     io_buffer_max: config.io_buffer_max,
                     io_adaptive_buffer: config.io_adaptive_buffer,
+                    doc_similarity_threshold: config.doc_similarity_threshold,
                 };
                 (groups, summary, canonical_paths, settings, reference_paths)
             }

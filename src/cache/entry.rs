@@ -35,6 +35,9 @@ pub struct CacheEntry {
         with = "crate::scanner::perceptual_hash_serde"
     )]
     pub perceptual_hash: Option<ImageHash>,
+    /// Optional document fingerprint for similarity detection (SimHash).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_fingerprint: Option<u64>,
 }
 
 impl CacheEntry {
@@ -86,6 +89,7 @@ impl From<FileEntry> for CacheEntry {
             prehash: [0u8; 32],
             fullhash: None,
             perceptual_hash: entry.perceptual_hash,
+            document_fingerprint: entry.document_fingerprint,
         }
     }
 }
@@ -106,6 +110,7 @@ mod tests {
             prehash: [0u8; 32],
             fullhash: None,
             perceptual_hash: None,
+            document_fingerprint: None,
         };
 
         assert!(entry.is_valid(100, now, Some(123)));

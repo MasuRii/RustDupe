@@ -55,7 +55,10 @@ pub use path_utils::{
     is_nfc, normalize_path_str, normalize_path_str_cow, normalize_pathbuf, path_key, paths_equal,
     paths_equal_normalized,
 };
-pub use perceptual::{PerceptualAlgorithm, PerceptualError, PerceptualHasher, SimilarityIndex};
+pub use perceptual::{
+    DocumentSimilarityIndex, PerceptualAlgorithm, PerceptualError, PerceptualHasher,
+    SimilarityIndex,
+};
 use regex::Regex;
 pub use walker::{MultiWalker, Walker};
 
@@ -116,6 +119,9 @@ pub struct FileEntry {
         with = "perceptual_hash_serde"
     )]
     pub perceptual_hash: Option<ImageHash>,
+    /// Optional document fingerprint for similarity detection (SimHash)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_fingerprint: Option<u64>,
 }
 
 pub mod perceptual_hash_serde {
@@ -164,6 +170,7 @@ impl FileEntry {
             is_hardlink: false,
             group_name: None,
             perceptual_hash: None,
+            document_fingerprint: None,
         }
     }
 
@@ -178,6 +185,7 @@ impl FileEntry {
             is_hardlink: false,
             group_name: Some(group_name),
             perceptual_hash: None,
+            document_fingerprint: None,
         }
     }
 
@@ -191,6 +199,11 @@ impl FileEntry {
         self.perceptual_hash = Some(hash);
     }
 
+    /// Set the document fingerprint for this entry.
+    pub fn set_document_fingerprint(&mut self, fingerprint: u64) {
+        self.document_fingerprint = Some(fingerprint);
+    }
+
     /// Check if this file is likely an image based on its extension.
     #[must_use]
     pub fn is_image(&self) -> bool {
@@ -202,6 +215,21 @@ impl FileEntry {
             .unwrap_or_default();
 
         FileCategory::Images
+            .extensions()
+            .contains(&extension.as_str())
+    }
+
+    /// Check if this file is likely a document based on its extension.
+    #[must_use]
+    pub fn is_document(&self) -> bool {
+        let extension = self
+            .path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+
+        FileCategory::Documents
             .extensions()
             .contains(&extension.as_str())
     }

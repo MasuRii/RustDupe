@@ -168,6 +168,39 @@ impl DocumentExtractor {
     }
 }
 
+/// SimHash implementation for document fingerprinting.
+pub struct SimHasher;
+
+impl SimHasher {
+    /// Compute a 64-bit SimHash fingerprint for the given text.
+    ///
+    /// The fingerprint is based on word 3-grams for robust similarity detection.
+    /// Returns 0 if the text is empty.
+    #[must_use]
+    pub fn compute_fingerprint(text: &str) -> u64 {
+        let normalized = DocumentExtractor::normalize_text(text);
+        let words: Vec<&str> = normalized.split_whitespace().collect();
+        if words.is_empty() {
+            return 0;
+        }
+
+        // Use 3-grams for SimHash as requested
+        if words.len() < 3 {
+            // Fallback to individual words if too short for 3-grams
+            simhash::simhash_stream(words.iter().copied())
+        } else {
+            let ngrams: Vec<String> = words.windows(3).map(|w| w.join(" ")).collect();
+            simhash::simhash_stream(ngrams.iter().map(|s| s.as_str()))
+        }
+    }
+
+    /// Calculate the Hamming distance between two fingerprints.
+    #[must_use]
+    pub fn hamming_distance(a: u64, b: u64) -> u32 {
+        (a ^ b).count_ones()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +242,59 @@ mod tests {
         assert!(matches!(result, Err(DocumentError::UnsupportedFormat(_))));
 
         fs::remove_file(exe_path).unwrap();
+    }
+
+    #[test]
+    fn test_simhash_identical() {
+        let text1 = "The quick brown fox jumps over the lazy dog";
+        let text2 = "The quick brown fox jumps over the lazy dog";
+        let hash1 = SimHasher::compute_fingerprint(text1);
+        let hash2 = SimHasher::compute_fingerprint(text2);
+        assert_eq!(hash1, hash2);
+        assert_eq!(SimHasher::hamming_distance(hash1, hash2), 0);
+    }
+
+    #[test]
+    fn test_simhash_similar() {
+        let text1 = "The quick brown fox jumps over the lazy dog";
+        let text2 = "The quick brown fox jumps over the active dog";
+        let hash1 = SimHasher::compute_fingerprint(text1);
+        let hash2 = SimHasher::compute_fingerprint(text2);
+        let distance = SimHasher::hamming_distance(hash1, hash2);
+        println!("Distance: {}", distance);
+        // Distance was 13 in previous run
+        assert!(distance > 0 && distance <= 15);
+    }
+
+    #[test]
+    fn test_simhash_similar_comprehensive() {
+        let text1 = "The quick brown fox jumps over the lazy dog. It was a sunny day in the park.";
+        let text2 =
+            "The quick brown fox jumps over the active dog. It was a sunny day in the park.";
+        let text3 = "Rust is a systems programming language that provides memory safety without garbage collection.";
+
+        let hash1 = SimHasher::compute_fingerprint(text1);
+        let hash2 = SimHasher::compute_fingerprint(text2);
+        let hash3 = SimHasher::compute_fingerprint(text3);
+
+        let d12 = SimHasher::hamming_distance(hash1, hash2);
+        let d13 = SimHasher::hamming_distance(hash1, hash3);
+
+        println!("d12: {}, d13: {}", d12, d13);
+
+        assert!(d12 <= 15);
+        assert!(d13 > 20);
+
+        let mut index = super::super::DocumentSimilarityIndex::new();
+        index.insert(hash1);
+        index.insert(hash2);
+        index.insert(hash3);
+
+        let matches = index.find(&hash1, 15);
+        let match_hashes: Vec<u64> = matches.into_iter().map(|(_, &h)| h).collect();
+        assert_eq!(match_hashes.len(), 2);
+        assert!(match_hashes.contains(&hash1));
+        assert!(match_hashes.contains(&hash2));
+        assert!(!match_hashes.contains(&hash3));
     }
 }

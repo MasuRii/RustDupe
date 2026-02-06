@@ -85,6 +85,12 @@ impl HashCache {
         // We use a try-and-ignore approach for simplicity in this version.
         let _ = conn.execute("ALTER TABLE hashes ADD COLUMN perceptual_hash BLOB", []);
 
+        // Migration: Add document_fingerprint column if it doesn't exist (v0.3.0)
+        let _ = conn.execute(
+            "ALTER TABLE hashes ADD COLUMN document_fingerprint INTEGER",
+            [],
+        );
+
         Ok(Self {
             conn: Mutex::new(Some(conn)),
         })
@@ -213,6 +219,35 @@ impl HashCache {
         Ok(None)
     }
 
+    /// Retrieve the document fingerprint for a file if it exists and metadata matches.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn get_document_fingerprint(
+        &self,
+        path: &Path,
+        size: u64,
+        mtime: SystemTime,
+    ) -> CacheResult<Option<u64>> {
+        let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
+        let mtime_ns = Self::system_time_to_ns(mtime);
+
+        let mut stmt = conn.prepare_cached(
+            "SELECT document_fingerprint FROM hashes WHERE path = ?1 AND size = ?2 AND mtime_ns = ?3",
+        )?;
+        let mut rows = stmt.query(params![path.to_string_lossy().to_string(), size, mtime_ns])?;
+
+        if let Some(row) = rows.next()? {
+            let val: Option<i64> = row.get(0)?;
+            if let Some(val) = val {
+                return Ok(Some(val as u64));
+            }
+        }
+        Ok(None)
+    }
+
     /// Insert or update a prehash in the cache.
     ///
     /// # Errors
@@ -225,8 +260,8 @@ impl HashCache {
         let now = Self::now_secs();
 
         conn.execute(
-            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7)
+            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, document_fingerprint, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8)
              ON CONFLICT(path) DO UPDATE SET
                 size = excluded.size,
                 mtime_ns = excluded.mtime_ns,
@@ -234,6 +269,7 @@ impl HashCache {
                 prehash = excluded.prehash,
                 fullhash = NULL,
                 perceptual_hash = excluded.perceptual_hash,
+                document_fingerprint = excluded.document_fingerprint,
                 created_at = excluded.created_at",
             params![
                 entry.path.to_string_lossy().to_string(),
@@ -242,6 +278,7 @@ impl HashCache {
                 entry.inode,
                 &hash[..],
                 entry.perceptual_hash.as_ref().map(|h| h.as_bytes()),
+                entry.document_fingerprint.map(|f| f as i64),
                 now,
             ],
         )?;
@@ -260,8 +297,8 @@ impl HashCache {
         let now = Self::now_secs();
 
         conn.execute(
-            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, document_fingerprint, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(path) DO UPDATE SET
                 size = excluded.size,
                 mtime_ns = excluded.mtime_ns,
@@ -269,6 +306,7 @@ impl HashCache {
                 prehash = excluded.prehash,
                 fullhash = excluded.fullhash,
                 perceptual_hash = excluded.perceptual_hash,
+                document_fingerprint = excluded.document_fingerprint,
                 created_at = excluded.created_at",
             params![
                 entry.path.to_string_lossy().to_string(),
@@ -278,6 +316,7 @@ impl HashCache {
                 &entry.prehash[..],
                 &hash[..],
                 entry.perceptual_hash.as_ref().map(|h| h.as_bytes()),
+                entry.document_fingerprint.map(|f| f as i64),
                 now,
             ],
         )?;
@@ -296,8 +335,8 @@ impl HashCache {
         let now = Self::now_secs();
 
         conn.execute(
-            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, created_at)
-             VALUES (?1, ?2, ?3, ?4, x'0000000000000000000000000000000000000000000000000000000000000000', NULL, ?5, ?6)
+            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, document_fingerprint, created_at)
+             VALUES (?1, ?2, ?3, ?4, x'0000000000000000000000000000000000000000000000000000000000000000', NULL, ?5, NULL, ?6)
              ON CONFLICT(path) DO UPDATE SET
                 prehash = CASE WHEN size = excluded.size AND mtime_ns = excluded.mtime_ns THEN hashes.prehash ELSE excluded.prehash END,
                 fullhash = CASE WHEN size = excluded.size AND mtime_ns = excluded.mtime_ns THEN hashes.fullhash ELSE NULL END,
@@ -318,6 +357,44 @@ impl HashCache {
         Ok(())
     }
 
+    /// Insert or update a document fingerprint in the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CacheError` if database access fails.
+    pub fn insert_document_fingerprint(
+        &self,
+        entry: &CacheEntry,
+        fingerprint: u64,
+    ) -> CacheResult<()> {
+        let lock = self.conn.lock().map_err(|_| CacheError::LockError)?;
+        let conn = lock.as_ref().ok_or(CacheError::ConnectionClosed)?;
+        let mtime_ns = Self::system_time_to_ns(entry.mtime);
+        let now = Self::now_secs();
+
+        conn.execute(
+            "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, document_fingerprint, created_at)
+             VALUES (?1, ?2, ?3, ?4, x'0000000000000000000000000000000000000000000000000000000000000000', NULL, NULL, ?5, ?6)
+             ON CONFLICT(path) DO UPDATE SET
+                prehash = CASE WHEN size = excluded.size AND mtime_ns = excluded.mtime_ns THEN hashes.prehash ELSE excluded.prehash END,
+                fullhash = CASE WHEN size = excluded.size AND mtime_ns = excluded.mtime_ns THEN hashes.fullhash ELSE NULL END,
+                size = excluded.size,
+                mtime_ns = excluded.mtime_ns,
+                inode = excluded.inode,
+                document_fingerprint = excluded.document_fingerprint,
+                created_at = excluded.created_at",
+            params![
+                entry.path.to_string_lossy().to_string(),
+                entry.size,
+                mtime_ns,
+                entry.inode,
+                fingerprint as i64,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Insert multiple entries in a single transaction.
     ///
     /// # Errors
@@ -331,8 +408,8 @@ impl HashCache {
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare_cached(
-                "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, created_at)
-                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "INSERT INTO hashes (path, size, mtime_ns, inode, prehash, fullhash, perceptual_hash, document_fingerprint, created_at)
+                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                   ON CONFLICT(path) DO UPDATE SET
                      size = excluded.size,
                      mtime_ns = excluded.mtime_ns,
@@ -340,6 +417,7 @@ impl HashCache {
                      prehash = excluded.prehash,
                      fullhash = excluded.fullhash,
                      perceptual_hash = excluded.perceptual_hash,
+                     document_fingerprint = excluded.document_fingerprint,
                      created_at = excluded.created_at",
             )?;
 
@@ -353,6 +431,7 @@ impl HashCache {
                     &entry.prehash[..],
                     entry.fullhash.as_ref().map(|h| &h[..]),
                     entry.perceptual_hash.as_ref().map(|h| h.as_bytes()),
+                    entry.document_fingerprint.map(|f| f as i64),
                     now,
                 ])?;
             }
@@ -503,6 +582,7 @@ mod tests {
             prehash: [1u8; 32],
             fullhash: None,
             perceptual_hash: None,
+            document_fingerprint: None,
         };
 
         // Test insert and get prehash
@@ -553,6 +633,7 @@ mod tests {
                 prehash: [1u8; 32],
                 fullhash: Some([11u8; 32]),
                 perceptual_hash: None,
+                document_fingerprint: None,
             },
             CacheEntry {
                 path: PathBuf::from("/test/2.txt"),
@@ -562,6 +643,7 @@ mod tests {
                 prehash: [2u8; 32],
                 fullhash: None,
                 perceptual_hash: None,
+                document_fingerprint: None,
             },
         ];
 
@@ -609,6 +691,7 @@ mod tests {
             prehash: [1u8; 32],
             fullhash: None,
             perceptual_hash: None,
+            document_fingerprint: None,
         };
 
         cache.insert_prehash(&entry, [1u8; 32]).unwrap();
@@ -644,6 +727,7 @@ mod tests {
             prehash: [1u8; 32],
             fullhash: None,
             perceptual_hash: None,
+            document_fingerprint: None,
         };
 
         let entry_fake = CacheEntry {
@@ -654,6 +738,7 @@ mod tests {
             prehash: [2u8; 32],
             fullhash: None,
             perceptual_hash: None,
+            document_fingerprint: None,
         };
 
         cache.insert_prehash(&entry_real, [1u8; 32]).unwrap();
@@ -681,6 +766,7 @@ mod tests {
             prehash: [1u8; 32],
             fullhash: None,
             perceptual_hash: None,
+            document_fingerprint: None,
         };
 
         cache.insert_prehash(&entry, [1u8; 32]).unwrap();
@@ -736,6 +822,7 @@ mod tests {
                 prehash: [i as u8; 32],
                 fullhash: Some([i as u8; 32]),
                 perceptual_hash: None,
+                document_fingerprint: None,
             });
         }
 
@@ -782,6 +869,7 @@ mod tests {
             prehash: [0u8; 32],
             fullhash: None,
             perceptual_hash: None,
+            document_fingerprint: None,
         };
         let res = cache.insert_prehash(&entry, [0u8; 32]);
         assert!(matches!(res, Err(CacheError::ConnectionClosed)));

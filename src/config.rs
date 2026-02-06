@@ -199,6 +199,10 @@ pub struct Config {
     #[serde(default)]
     pub similar_images: bool,
 
+    /// Enable similar document detection using SimHash.
+    #[serde(default)]
+    pub similar_documents: bool,
+
     /// Enable memory-mapped file I/O for hashing large files.
     #[serde(default)]
     pub mmap: bool,
@@ -254,6 +258,10 @@ pub struct Config {
     /// Threshold for similarity matching (Hamming distance).
     #[serde(default)]
     pub similarity_threshold: Option<u32>,
+
+    /// Threshold for document similarity (Hamming distance).
+    #[serde(default)]
+    pub doc_similarity_threshold: Option<u32>,
 
     /// False positive rate for Bloom filters.
     #[serde(default = "default_bloom_fp_rate")]
@@ -336,6 +344,7 @@ impl Default for Config {
             io_adaptive_buffer: true,
             strict: false,
             similar_images: false,
+            similar_documents: false,
             mmap: false,
             mmap_threshold: 64 * 1024 * 1024,
             paranoid: false,
@@ -349,6 +358,7 @@ impl Default for Config {
             dry_run: false,
             output: OutputFormat::Tui,
             similarity_threshold: None,
+            doc_similarity_threshold: None,
             bloom_fp_rate: 0.01,
             min_group_size: 2,
             html_thumbnails: false,
@@ -544,6 +554,12 @@ impl Config {
         if args.no_similar_images {
             self.similar_images = false;
         }
+        if args.similar_documents {
+            self.similar_documents = true;
+        }
+        if args.no_similar_documents {
+            self.similar_documents = false;
+        }
         if args.mmap {
             self.mmap = true;
         }
@@ -600,6 +616,9 @@ impl Config {
         }
         if let Some(threshold) = args.similarity_threshold {
             self.similarity_threshold = Some(threshold);
+        }
+        if let Some(threshold) = args.doc_similarity_threshold {
+            self.doc_similarity_threshold = Some(threshold);
         }
         if let Some(min_group) = args.min_group_size {
             self.min_group_size = min_group;
@@ -658,6 +677,7 @@ fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str)
         "io_adaptive_buffer",
         "strict",
         "similar_images",
+        "similar_documents",
         "mmap",
         "mmap_threshold",
         "paranoid",
@@ -671,6 +691,7 @@ fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str)
         "dry_run",
         "output",
         "similarity_threshold",
+        "doc_similarity_threshold",
         "bloom_fp_rate",
         "min_group_size",
         "html_thumbnails",
@@ -767,6 +788,7 @@ fn validate_profile_keys(table: &toml_edit::Table, path: &str, content: &str) {
         "io_adaptive_buffer",
         "strict",
         "similar_images",
+        "similar_documents",
         "mmap",
         "mmap_threshold",
         "paranoid",
@@ -780,6 +802,7 @@ fn validate_profile_keys(table: &toml_edit::Table, path: &str, content: &str) {
         "dry_run",
         "output",
         "similarity_threshold",
+        "doc_similarity_threshold",
         "bloom_fp_rate",
         "html_thumbnails",
         "html_thumbnail_size",

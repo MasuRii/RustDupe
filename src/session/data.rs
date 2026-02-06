@@ -122,6 +122,9 @@ pub struct SessionSettings {
     /// Whether similar image detection was enabled.
     #[serde(default)]
     pub similar_images: bool,
+    /// Whether similar document detection was enabled.
+    #[serde(default)]
+    pub similar_documents: bool,
     /// Minimum group size.
     #[serde(default = "default_min_group_size")]
     pub min_group_size: usize,
@@ -136,6 +139,8 @@ pub struct SessionSettings {
     /// Whether adaptive buffer sizing was enabled.
     #[serde(default = "default_true")]
     pub io_adaptive_buffer: bool,
+    /// Threshold for document similarity.
+    pub doc_similarity_threshold: Option<u32>,
 }
 
 fn default_true() -> bool {

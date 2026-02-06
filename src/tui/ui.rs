@@ -418,7 +418,17 @@ fn render_groups_list(frame: &mut Frame, app: &App, area: Rect) {
 
             let is_expanded = app.is_expanded(&group.hash);
             let expand_indicator = if is_expanded { "[-] " } else { "[+] " };
-            let sim_indicator = if group.is_similar { " [SIM]" } else { "" };
+            let sim_indicator = if group.is_similar {
+                if group.files.first().is_some_and(|f| f.is_image()) {
+                    " [SIM-IMG]"
+                } else if group.files.first().is_some_and(|f| f.is_document()) {
+                    " [SIM-DOC]"
+                } else {
+                    " [SIM]"
+                }
+            } else {
+                ""
+            };
 
             let text = format!(
                 "{}[{}] {} ({} copies) {} - {}{}",
@@ -578,6 +588,11 @@ fn render_files_list(frame: &mut Frame, app: &App, area: Rect) {
                     (&group.files[0].perceptual_hash, &entry.perceptual_hash)
                 {
                     format!(" [dist: {}]", h1.dist(h2))
+                } else if let (Some(f1), Some(f2)) = (
+                    group.files[0].document_fingerprint,
+                    entry.document_fingerprint,
+                ) {
+                    format!(" [dist: {}]", (f1 ^ f2).count_ones())
                 } else {
                     String::new()
                 }

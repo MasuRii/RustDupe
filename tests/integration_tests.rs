@@ -1,6 +1,7 @@
 mod integration {
     mod cache_corruption_tests;
     mod cache_tests;
+    mod document_tests;
     mod error_continuation_tests;
     mod export_tests;
     mod link_tests;

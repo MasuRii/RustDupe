@@ -947,6 +947,8 @@ pub struct FinderConfig {
     pub min_group_size: usize,
     /// Enable similar image detection using perceptual hashing.
     pub similar_images: bool,
+    /// Enable similar document detection using SimHash.
+    pub similar_documents: bool,
     /// Enable memory-mapped file I/O for hashing large files.
     pub mmap: bool,
     /// Threshold for memory-mapped I/O (default: 64MB).
@@ -955,6 +957,8 @@ pub struct FinderConfig {
     pub perceptual_algorithm: crate::scanner::PerceptualAlgorithm,
     /// Threshold for similarity matching (Hamming distance).
     pub similarity_threshold: Option<u32>,
+    /// Threshold for document similarity matching (Hamming distance).
+    pub doc_similarity_threshold: Option<u32>,
     /// Manual I/O buffer size override.
     pub io_buffer_size: Option<usize>,
     /// Minimum I/O buffer size.
@@ -982,6 +986,7 @@ impl std::fmt::Debug for FinderConfig {
             .field("bloom_fp_rate", &self.bloom_fp_rate)
             .field("min_group_size", &self.min_group_size)
             .field("similar_images", &self.similar_images)
+            .field("similar_documents", &self.similar_documents)
             .finish()
     }
 }
@@ -1001,10 +1006,12 @@ impl Default for FinderConfig {
             bloom_fp_rate: 0.01,
             min_group_size: 2,
             similar_images: false,
+            similar_documents: false,
             mmap: false,
             mmap_threshold: 64 * 1024 * 1024,
             perceptual_algorithm: crate::scanner::PerceptualAlgorithm::default(),
             similarity_threshold: None,
+            doc_similarity_threshold: None,
             io_buffer_size: None,
             io_buffer_min: 64 * 1024,
             io_buffer_max: 16 * 1024 * 1024,
@@ -1112,6 +1119,13 @@ impl FinderConfig {
         self
     }
 
+    /// Enable similar document detection.
+    #[must_use]
+    pub fn with_similar_documents(mut self, enabled: bool) -> Self {
+        self.similar_documents = enabled;
+        self
+    }
+
     /// Set the perceptual hashing algorithm.
     #[must_use]
     pub fn with_perceptual_algorithm(
@@ -1126,6 +1140,13 @@ impl FinderConfig {
     #[must_use]
     pub fn with_similarity_threshold(mut self, threshold: Option<u32>) -> Self {
         self.similarity_threshold = threshold;
+        self
+    }
+
+    /// Set the document similarity threshold.
+    #[must_use]
+    pub fn with_doc_similarity_threshold(mut self, threshold: Option<u32>) -> Self {
+        self.doc_similarity_threshold = threshold;
         self
     }
 
@@ -1201,6 +1222,8 @@ pub struct ScanSummary {
     pub walk_duration: std::time::Duration,
     /// Duration of the perceptual hashing phase
     pub perceptual_duration: std::time::Duration,
+    /// Duration of the document fingerprinting phase
+    pub document_duration: std::time::Duration,
     /// Duration of the size grouping phase (Phase 1)
     pub size_duration: std::time::Duration,
     /// Duration of the prehash phase (Phase 2)
@@ -1225,6 +1248,10 @@ pub struct ScanSummary {
     pub images_perceptual_hashed: usize,
     /// Number of perceptual hash cache hits
     pub images_perceptual_hash_cache_hits: usize,
+    /// Number of documents processed for SimHash fingerprinting
+    pub documents_fingerprinted: usize,
+    /// Number of document fingerprint cache hits
+    pub documents_fingerprint_cache_hits: usize,
 }
 
 impl ScanSummary {
@@ -1345,12 +1372,19 @@ impl ScanSummary {
                 "Perceptual Hash:",
                 HumanDuration(self.perceptual_duration)
             );
+        }
+        if self.documents_fingerprinted > 0 {
             eprintln!(
                 "  {: <18} {:>10}",
-                "Clustering:",
-                HumanDuration(self.clustering_duration)
+                "Document SimHash:",
+                HumanDuration(self.document_duration)
             );
         }
+        eprintln!(
+            "  {: <18} {:>10}",
+            "Clustering:",
+            HumanDuration(self.clustering_duration)
+        );
 
         if self.bloom_size_unique > 0 || self.bloom_prehash_unique > 0 {
             eprintln!("{}", "\nBloom Filter Efficiency".cyan().bold());
@@ -1377,6 +1411,7 @@ impl ScanSummary {
         if self.cache_prehash_hits > 0
             || self.cache_fullhash_hits > 0
             || self.images_perceptual_hash_cache_hits > 0
+            || self.documents_fingerprint_cache_hits > 0
         {
             eprintln!("{}", "\nCache Effectiveness".cyan().bold());
             if self.cache_prehash_hits > 0 {
@@ -1389,6 +1424,12 @@ impl ScanSummary {
                 eprintln!(
                     "  {: <18} {}",
                     "Perceptual hits:", self.images_perceptual_hash_cache_hits
+                );
+            }
+            if self.documents_fingerprint_cache_hits > 0 {
+                eprintln!(
+                    "  {: <18} {}",
+                    "Document hits:", self.documents_fingerprint_cache_hits
                 );
             }
         }
@@ -1591,6 +1632,76 @@ impl DuplicateFinder {
         )
     }
 
+    /// Compute document fingerprints for a list of files in parallel.
+    /// Returns (total_processed, cache_hits)
+    fn compute_document_fingerprints(&self, files: &mut [&mut FileEntry]) -> (usize, usize) {
+        use std::sync::atomic::AtomicUsize;
+
+        let processed_count = AtomicUsize::new(0);
+        let cache_hits = AtomicUsize::new(0);
+
+        // Build thread pool for I/O
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(self.config.io_threads)
+            .build()
+            .unwrap_or_else(|_| {
+                rayon::ThreadPoolBuilder::new()
+                    .build()
+                    .expect("Failed to build global thread pool")
+            });
+
+        pool.install(|| {
+            files.par_iter_mut().for_each(|file| {
+                if !file.is_document() {
+                    return;
+                }
+
+                if self.config.is_shutdown_requested() {
+                    return;
+                }
+
+                // Check cache
+                if let Some(ref cache) = self.config.cache {
+                    if let Ok(Some(fp)) =
+                        cache.get_document_fingerprint(&file.path, file.size, file.modified)
+                    {
+                        file.set_document_fingerprint(fp);
+                        processed_count.fetch_add(1, Ordering::SeqCst);
+                        cache_hits.fetch_add(1, Ordering::SeqCst);
+                        return;
+                    }
+                }
+
+                // Compute
+                match crate::scanner::DocumentExtractor::extract_text(&file.path) {
+                    Ok(text) => {
+                        let fp = crate::scanner::document::SimHasher::compute_fingerprint(&text);
+                        file.set_document_fingerprint(fp);
+                        processed_count.fetch_add(1, Ordering::SeqCst);
+
+                        // Update cache
+                        if let Some(ref cache) = self.config.cache {
+                            let entry = CacheEntry::from((*file).clone());
+                            let _ = cache.insert_document_fingerprint(&entry, fp);
+                        }
+                    }
+                    Err(e) => {
+                        log::debug!(
+                            "Failed to compute document fingerprint for {}: {}",
+                            file.path.display(),
+                            e
+                        );
+                    }
+                }
+            });
+        });
+
+        (
+            processed_count.load(Ordering::SeqCst),
+            cache_hits.load(Ordering::SeqCst),
+        )
+    }
+
     /// Find similar groups based on perceptual hashes.
     fn find_similar_groups(&self, files: &[FileEntry]) -> Vec<super::DuplicateGroup> {
         if files.is_empty() {
@@ -1658,6 +1769,78 @@ impl DuplicateFinder {
                 let mut hash_array = [0u8; 32];
                 let len = id_bytes.len().min(32);
                 hash_array[..len].copy_from_slice(&id_bytes[..len]);
+
+                groups.push(super::DuplicateGroup::new_similar(
+                    hash_array,
+                    group_files,
+                    self.config.reference_paths.clone(),
+                ));
+            }
+        }
+
+        groups
+    }
+
+    /// Find similar groups based on document fingerprints.
+    fn find_similar_document_groups(&self, files: &[FileEntry]) -> Vec<super::DuplicateGroup> {
+        if files.is_empty() {
+            return Vec::new();
+        }
+
+        let mut doc_files = Vec::new();
+        let mut index = crate::scanner::DocumentSimilarityIndex::new();
+        let mut fp_to_indices = std::collections::HashMap::new();
+
+        for file in files {
+            if let Some(fp) = file.document_fingerprint {
+                let idx = doc_files.len();
+                doc_files.push(file);
+                index.insert(fp);
+                fp_to_indices.entry(fp).or_insert_with(Vec::new).push(idx);
+            }
+        }
+
+        if doc_files.is_empty() {
+            return Vec::new();
+        }
+
+        let threshold = self.config.doc_similarity_threshold.unwrap_or(3);
+
+        let mut groups = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+
+        for (i, file) in doc_files.iter().enumerate() {
+            if visited.contains(&i) {
+                continue;
+            }
+
+            let fp = file.document_fingerprint.unwrap();
+            let matches = index.find(&fp, threshold);
+
+            // Collect all unique file indices from all matching fingerprints
+            let mut group_indices = Vec::new();
+            for (_, match_fp) in matches {
+                if let Some(indices) = fp_to_indices.get(match_fp) {
+                    for &idx in indices {
+                        if !visited.contains(&idx) {
+                            group_indices.push(idx);
+                        }
+                    }
+                }
+            }
+
+            if group_indices.len() >= self.config.min_group_size {
+                let mut group_files = Vec::new();
+                for idx in group_indices {
+                    group_files.push((*doc_files[idx]).clone());
+                    visited.insert(idx);
+                }
+
+                // Generate a stable ID hash for the similar group
+                // Use the fingerprint of the first file
+                let mut hash_array = [0u8; 32];
+                let fp_bytes = group_files[0].document_fingerprint.unwrap().to_be_bytes();
+                hash_array[..8].copy_from_slice(&fp_bytes);
 
                 groups.push(super::DuplicateGroup::new_similar(
                     hash_array,
@@ -1792,10 +1975,34 @@ impl DuplicateFinder {
             }
         }
 
+        // Phase 0.6: Document Fingerprinting
+        if self.config.similar_documents {
+            let doc_start = std::time::Instant::now();
+            log::info!("Phase 0.6: Computing fingerprints for documents...");
+            let mut doc_refs: Vec<&mut FileEntry> = all_discovered
+                .iter_mut()
+                .filter(|f| f.is_document())
+                .collect();
+
+            if let Some(ref callback) = self.config.progress_callback {
+                callback.on_phase_start("document_fingerprinting", doc_refs.len());
+            }
+
+            let (count, hits) = self.compute_document_fingerprints(&mut doc_refs);
+            summary.documents_fingerprinted = count;
+            summary.documents_fingerprint_cache_hits = hits;
+
+            if let Some(ref callback) = self.config.progress_callback {
+                callback.on_phase_end("document_fingerprinting");
+            }
+            summary.document_duration = doc_start.elapsed();
+        }
+
         // Phase 1: Group by size (and prepare for Phase 2)
         let size_start = std::time::Instant::now();
         let mut files = Vec::new();
         let mut images = Vec::new();
+        let mut documents = Vec::new();
         let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
         let mut duplicate_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
         let mut first_occurrences: HashMap<u64, FileEntry> = HashMap::new();
@@ -1804,6 +2011,11 @@ impl DuplicateFinder {
             // Collect images for similarity detection
             if self.config.similar_images && file.is_image() {
                 images.push(file.clone());
+            }
+
+            // Collect documents for similarity detection
+            if self.config.similar_documents && file.is_document() {
+                documents.push(file.clone());
             }
 
             if file.size == 0 {
@@ -1842,8 +2054,8 @@ impl DuplicateFinder {
             return Err(FinderError::Interrupted);
         }
 
-        if files.is_empty() {
-            log::info!("No potential duplicates found after size filtering, scan complete");
+        if files.is_empty() && images.is_empty() && documents.is_empty() {
+            log::info!("No potential duplicates or similar files found, scan complete");
             summary.scan_duration = start_time.elapsed();
             summary.size_duration = size_start.elapsed();
             return Ok((Vec::new(), summary));
@@ -1851,8 +2063,11 @@ impl DuplicateFinder {
 
         // Phase 1: Group by size
         log::info!("Phase 1: Grouping by size...");
-        // group_by_size will still handle the files we kept
-        let (size_groups, size_stats) = super::group_by_size(files);
+        let (size_groups, size_stats) = if !files.is_empty() {
+            super::group_by_size(files)
+        } else {
+            (HashMap::new(), super::GroupingStats::default())
+        };
 
         // Update eliminated count to include files we discarded during walk
         summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
@@ -1872,7 +2087,7 @@ impl DuplicateFinder {
             return Err(FinderError::Interrupted);
         }
 
-        if size_groups.is_empty() {
+        if size_groups.is_empty() && images.is_empty() && documents.is_empty() {
             log::info!("No potential duplicates found after size grouping");
             summary.scan_duration = start_time.elapsed();
             return Ok((Vec::new(), summary));
@@ -1880,18 +2095,21 @@ impl DuplicateFinder {
 
         // Phase 2: Prehash comparison
         let prehash_start = std::time::Instant::now();
-        log::info!("Phase 2: Computing prehashes...");
-        let prehash_config = PrehashConfig {
-            io_threads: self.config.io_threads,
-            cache: self.config.cache.clone(),
-            shutdown_flag: self.config.shutdown_flag.clone(),
-            progress_callback: self.config.progress_callback.clone(),
-            reference_paths: self.config.reference_paths.clone(),
-            bloom_fp_rate: self.config.bloom_fp_rate,
-        };
+        let (prehash_groups, prehash_stats) = if !size_groups.is_empty() {
+            log::info!("Phase 2: Computing prehashes...");
+            let prehash_config = PrehashConfig {
+                io_threads: self.config.io_threads,
+                cache: self.config.cache.clone(),
+                shutdown_flag: self.config.shutdown_flag.clone(),
+                progress_callback: self.config.progress_callback.clone(),
+                reference_paths: self.config.reference_paths.clone(),
+                bloom_fp_rate: self.config.bloom_fp_rate,
+            };
 
-        let (prehash_groups, prehash_stats) =
-            phase2_prehash(size_groups, self.hasher.clone(), prehash_config);
+            phase2_prehash(size_groups, self.hasher.clone(), prehash_config)
+        } else {
+            (HashMap::new(), PrehashStats::default())
+        };
 
         summary.eliminated_by_prehash = prehash_stats.unique_prehashes;
         summary.cache_prehash_hits = prehash_stats.cache_hits;
@@ -1919,23 +2137,21 @@ impl DuplicateFinder {
             return Err(FinderError::Interrupted);
         }
 
-        if prehash_groups.is_empty() {
-            summary.scan_duration = start_time.elapsed();
-            return Ok((Vec::new(), summary));
-        }
-
         // Phase 3: Full hash comparison
         let fullhash_start = std::time::Instant::now();
-        let fullhash_config = FullhashConfig {
-            io_threads: self.config.io_threads,
-            cache: self.config.cache.clone(),
-            shutdown_flag: self.config.shutdown_flag.clone(),
-            progress_callback: self.config.progress_callback.clone(),
-            reference_paths: self.config.reference_paths.clone(),
-        };
+        let (duplicate_groups, fullhash_stats) = if !prehash_groups.is_empty() {
+            let fullhash_config = FullhashConfig {
+                io_threads: self.config.io_threads,
+                cache: self.config.cache.clone(),
+                shutdown_flag: self.config.shutdown_flag.clone(),
+                progress_callback: self.config.progress_callback.clone(),
+                reference_paths: self.config.reference_paths.clone(),
+            };
 
-        let (duplicate_groups, fullhash_stats) =
-            phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config);
+            phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config)
+        } else {
+            (Vec::new(), FullhashStats::default())
+        };
 
         if !fullhash_stats.errors.is_empty() {
             if self.config.strict {
@@ -1968,14 +2184,61 @@ impl DuplicateFinder {
 
         // Phase 4: Similar Image Detection
         let mut all_groups = duplicate_groups;
+        let clustering_start = std::time::Instant::now();
+
         if self.config.similar_images {
-            let clustering_start = std::time::Instant::now();
             log::info!("Phase 4: Detecting similar images...");
             let similar_groups = self.find_similar_groups(&images);
-            log::info!("Found {} similar image groups", similar_groups.len());
-            all_groups.extend(similar_groups);
-            summary.clustering_duration = clustering_start.elapsed();
+
+            // Filter out redundant similar groups (those that are already fully represented in an exact group)
+            for sim_group in similar_groups {
+                let is_redundant = all_groups.iter().any(|exact_group| {
+                    if exact_group.is_similar {
+                        return false;
+                    }
+                    sim_group.files.iter().all(|sim_file| {
+                        exact_group
+                            .files
+                            .iter()
+                            .any(|exact_file| exact_file.path == sim_file.path)
+                    })
+                });
+
+                if !is_redundant {
+                    all_groups.push(sim_group);
+                } else {
+                    log::debug!("Skipping redundant similar image group");
+                }
+            }
         }
+
+        // Phase 5: Similar Document Detection
+        if self.config.similar_documents {
+            log::info!("Phase 5: Detecting similar documents...");
+            let similar_groups = self.find_similar_document_groups(&documents);
+
+            // Filter out redundant similar groups
+            for sim_group in similar_groups {
+                let is_redundant = all_groups.iter().any(|exact_group| {
+                    if exact_group.is_similar {
+                        return false;
+                    }
+                    sim_group.files.iter().all(|sim_file| {
+                        exact_group
+                            .files
+                            .iter()
+                            .any(|exact_file| exact_file.path == sim_file.path)
+                    })
+                });
+
+                if !is_redundant {
+                    all_groups.push(sim_group);
+                } else {
+                    log::debug!("Skipping redundant similar document group");
+                }
+            }
+        }
+        summary.clustering_duration = clustering_start.elapsed();
 
         log::info!(
             "Scan complete: {} duplicate/similar groups, {} duplicate files, {} reclaimable, {} cache hits",
@@ -2066,9 +2329,31 @@ impl DuplicateFinder {
             }
         }
 
+        // Phase 0.6: Document Fingerprinting
+        if self.config.similar_documents {
+            let doc_start = std::time::Instant::now();
+            log::info!("Phase 0.6: Computing fingerprints for documents...");
+            let mut doc_refs: Vec<&mut FileEntry> =
+                files.iter_mut().filter(|f| f.is_document()).collect();
+
+            if let Some(ref callback) = self.config.progress_callback {
+                callback.on_phase_start("document_fingerprinting", doc_refs.len());
+            }
+
+            let (count, hits) = self.compute_document_fingerprints(&mut doc_refs);
+            summary.documents_fingerprinted = count;
+            summary.documents_fingerprint_cache_hits = hits;
+
+            if let Some(ref callback) = self.config.progress_callback {
+                callback.on_phase_end("document_fingerprinting");
+            }
+            summary.document_duration = doc_start.elapsed();
+        }
+
         // Phase 1: Group by size
         let size_start = std::time::Instant::now();
         let mut images = Vec::new();
+        let mut documents = Vec::new();
         let mut potential_files = Vec::new();
         let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, files.len());
         let mut duplicate_sizes = GrowableBloom::new(self.config.bloom_fp_rate, files.len());
@@ -2078,6 +2363,11 @@ impl DuplicateFinder {
             // Collect images for similarity detection
             if self.config.similar_images && file.is_image() {
                 images.push(file.clone());
+            }
+
+            // Collect documents for similarity detection
+            if self.config.similar_documents && file.is_document() {
+                documents.push(file.clone());
             }
 
             if file.size == 0 {
@@ -2099,7 +2389,21 @@ impl DuplicateFinder {
             }
         }
 
-        let (size_groups, size_stats) = super::group_by_size(potential_files);
+        if potential_files.is_empty() && images.is_empty() && documents.is_empty() {
+            log::info!("No potential duplicates or similar files found, scan complete");
+            summary.scan_duration = start_time.elapsed();
+            summary.size_duration = size_start.elapsed();
+            return Ok((Vec::new(), summary));
+        }
+
+        // Phase 1: Group by size
+        log::info!("Phase 1: Grouping by size...");
+        let (size_groups, size_stats) = if !potential_files.is_empty() {
+            super::group_by_size(potential_files)
+        } else {
+            (HashMap::new(), super::GroupingStats::default())
+        };
+
         summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
         summary.bloom_size_unique = first_occurrences.len();
         summary.bloom_size_fp = size_stats.eliminated_unique;
@@ -2109,24 +2413,29 @@ impl DuplicateFinder {
             return Err(FinderError::Interrupted);
         }
 
-        if size_groups.is_empty() {
+        if size_groups.is_empty() && images.is_empty() && documents.is_empty() {
+            log::info!("No potential duplicates found after size grouping");
             summary.scan_duration = start_time.elapsed();
             return Ok((Vec::new(), summary));
         }
 
         // Phase 2: Prehash comparison
         let prehash_start = std::time::Instant::now();
-        let prehash_config = PrehashConfig {
-            io_threads: self.config.io_threads,
-            cache: self.config.cache.clone(),
-            shutdown_flag: self.config.shutdown_flag.clone(),
-            progress_callback: self.config.progress_callback.clone(),
-            reference_paths: self.config.reference_paths.clone(),
-            bloom_fp_rate: self.config.bloom_fp_rate,
-        };
+        let (prehash_groups, prehash_stats) = if !size_groups.is_empty() {
+            log::info!("Phase 2: Computing prehashes...");
+            let prehash_config = PrehashConfig {
+                io_threads: self.config.io_threads,
+                cache: self.config.cache.clone(),
+                shutdown_flag: self.config.shutdown_flag.clone(),
+                progress_callback: self.config.progress_callback.clone(),
+                reference_paths: self.config.reference_paths.clone(),
+                bloom_fp_rate: self.config.bloom_fp_rate,
+            };
 
-        let (prehash_groups, prehash_stats) =
-            phase2_prehash(size_groups, self.hasher.clone(), prehash_config);
+            phase2_prehash(size_groups, self.hasher.clone(), prehash_config)
+        } else {
+            (HashMap::new(), PrehashStats::default())
+        };
 
         summary.eliminated_by_prehash = prehash_stats.unique_prehashes;
         summary.cache_prehash_hits = prehash_stats.cache_hits;
@@ -2154,23 +2463,21 @@ impl DuplicateFinder {
             return Err(FinderError::Interrupted);
         }
 
-        if prehash_groups.is_empty() {
-            summary.scan_duration = start_time.elapsed();
-            return Ok((Vec::new(), summary));
-        }
-
         // Phase 3: Full hash comparison
         let fullhash_start = std::time::Instant::now();
-        let fullhash_config = FullhashConfig {
-            io_threads: self.config.io_threads,
-            cache: self.config.cache.clone(),
-            shutdown_flag: self.config.shutdown_flag.clone(),
-            progress_callback: self.config.progress_callback.clone(),
-            reference_paths: self.config.reference_paths.clone(),
-        };
+        let (duplicate_groups, fullhash_stats) = if !prehash_groups.is_empty() {
+            let fullhash_config = FullhashConfig {
+                io_threads: self.config.io_threads,
+                cache: self.config.cache.clone(),
+                shutdown_flag: self.config.shutdown_flag.clone(),
+                progress_callback: self.config.progress_callback.clone(),
+                reference_paths: self.config.reference_paths.clone(),
+            };
 
-        let (duplicate_groups, fullhash_stats) =
-            phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config);
+            phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config)
+        } else {
+            (Vec::new(), FullhashStats::default())
+        };
 
         if !fullhash_stats.errors.is_empty() {
             if self.config.strict {
@@ -2203,14 +2510,61 @@ impl DuplicateFinder {
 
         // Phase 4: Similar Image Detection
         let mut all_groups = duplicate_groups;
+        let clustering_start = std::time::Instant::now();
+
         if self.config.similar_images {
-            let clustering_start = std::time::Instant::now();
             log::info!("Phase 4: Detecting similar images...");
             let similar_groups = self.find_similar_groups(&images);
-            log::info!("Found {} similar image groups", similar_groups.len());
-            all_groups.extend(similar_groups);
-            summary.clustering_duration = clustering_start.elapsed();
+
+            // Filter out redundant similar groups (those that are already fully represented in an exact group)
+            for sim_group in similar_groups {
+                let is_redundant = all_groups.iter().any(|exact_group| {
+                    if exact_group.is_similar {
+                        return false;
+                    }
+                    sim_group.files.iter().all(|sim_file| {
+                        exact_group
+                            .files
+                            .iter()
+                            .any(|exact_file| exact_file.path == sim_file.path)
+                    })
+                });
+
+                if !is_redundant {
+                    all_groups.push(sim_group);
+                } else {
+                    log::debug!("Skipping redundant similar image group");
+                }
+            }
         }
+
+        // Phase 5: Similar Document Detection
+        if self.config.similar_documents {
+            log::info!("Phase 5: Detecting similar documents...");
+            let similar_groups = self.find_similar_document_groups(&documents);
+
+            // Filter out redundant similar groups
+            for sim_group in similar_groups {
+                let is_redundant = all_groups.iter().any(|exact_group| {
+                    if exact_group.is_similar {
+                        return false;
+                    }
+                    sim_group.files.iter().all(|sim_file| {
+                        exact_group
+                            .files
+                            .iter()
+                            .any(|exact_file| exact_file.path == sim_file.path)
+                    })
+                });
+
+                if !is_redundant {
+                    all_groups.push(sim_group);
+                } else {
+                    log::debug!("Skipping redundant similar document group");
+                }
+            }
+        }
+        summary.clustering_duration = clustering_start.elapsed();
 
         Ok((all_groups, summary))
     }
@@ -2298,11 +2652,7 @@ impl DuplicateFinder {
             return Ok((Vec::new(), summary));
         }
 
-        log::info!(
-            "Scanning {} directory root(s): {:?}",
-            roots.len(),
-            roots.iter().map(|p| p.display()).collect::<Vec<_>>()
-        );
+        log::info!("Scanning {} directory root(s): {:?}", roots.len(), roots);
 
         // Set shutdown flag on multi_walker if available
         if let Some(ref flag) = self.config.shutdown_flag {
@@ -2363,10 +2713,34 @@ impl DuplicateFinder {
             }
         }
 
+        // Phase 0.6: Document Fingerprinting
+        if self.config.similar_documents {
+            let doc_start = std::time::Instant::now();
+            log::info!("Phase 0.6: Computing fingerprints for documents...");
+            let mut doc_refs: Vec<&mut FileEntry> = all_discovered
+                .iter_mut()
+                .filter(|f| f.is_document())
+                .collect();
+
+            if let Some(ref callback) = self.config.progress_callback {
+                callback.on_phase_start("document_fingerprinting", doc_refs.len());
+            }
+
+            let (count, hits) = self.compute_document_fingerprints(&mut doc_refs);
+            summary.documents_fingerprinted = count;
+            summary.documents_fingerprint_cache_hits = hits;
+
+            if let Some(ref callback) = self.config.progress_callback {
+                callback.on_phase_end("document_fingerprinting");
+            }
+            summary.document_duration = doc_start.elapsed();
+        }
+
         // Phase 1: Group by size
         let size_start = std::time::Instant::now();
         let mut files = Vec::new();
         let mut images = Vec::new();
+        let mut documents = Vec::new();
         let mut seen_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
         let mut duplicate_sizes = GrowableBloom::new(self.config.bloom_fp_rate, 1000);
         let mut first_occurrences: HashMap<u64, FileEntry> = HashMap::new();
@@ -2375,6 +2749,11 @@ impl DuplicateFinder {
             // Collect images for similarity detection
             if self.config.similar_images && file.is_image() {
                 images.push(file.clone());
+            }
+
+            // Collect documents for similarity detection
+            if self.config.similar_documents && file.is_document() {
+                documents.push(file.clone());
             }
 
             if file.size == 0 {
@@ -2411,17 +2790,20 @@ impl DuplicateFinder {
             return Err(FinderError::Interrupted);
         }
 
-        if files.is_empty() {
-            log::info!("No potential duplicates found across all directories, scan complete");
+        if files.is_empty() && images.is_empty() && documents.is_empty() {
+            log::info!("No potential duplicates or similar files found across all directories, scan complete");
             summary.scan_duration = start_time.elapsed();
             summary.size_duration = size_start.elapsed();
             return Ok((Vec::new(), summary));
         }
 
-        // Continue with the duplicate detection pipeline (same as find_duplicates_from_files)
         // Phase 1: Group by size
         log::info!("Phase 1: Grouping by size...");
-        let (size_groups, size_stats) = super::group_by_size(files);
+        let (size_groups, size_stats) = if !files.is_empty() {
+            super::group_by_size(files)
+        } else {
+            (HashMap::new(), super::GroupingStats::default())
+        };
 
         // Update eliminated count to include files we discarded during walk
         summary.eliminated_by_size = size_stats.eliminated_unique + first_occurrences.len();
@@ -2441,7 +2823,7 @@ impl DuplicateFinder {
             return Err(FinderError::Interrupted);
         }
 
-        if size_groups.is_empty() {
+        if size_groups.is_empty() && images.is_empty() && documents.is_empty() {
             log::info!("No potential duplicates found after size grouping");
             summary.scan_duration = start_time.elapsed();
             return Ok((Vec::new(), summary));
@@ -2449,18 +2831,21 @@ impl DuplicateFinder {
 
         // Phase 2: Prehash comparison
         let prehash_start = std::time::Instant::now();
-        log::info!("Phase 2: Computing prehashes...");
-        let prehash_config = PrehashConfig {
-            io_threads: self.config.io_threads,
-            cache: self.config.cache.clone(),
-            shutdown_flag: self.config.shutdown_flag.clone(),
-            progress_callback: self.config.progress_callback.clone(),
-            reference_paths: self.config.reference_paths.clone(),
-            bloom_fp_rate: self.config.bloom_fp_rate,
-        };
+        let (prehash_groups, prehash_stats) = if !size_groups.is_empty() {
+            log::info!("Phase 2: Computing prehashes...");
+            let prehash_config = PrehashConfig {
+                io_threads: self.config.io_threads,
+                cache: self.config.cache.clone(),
+                shutdown_flag: self.config.shutdown_flag.clone(),
+                progress_callback: self.config.progress_callback.clone(),
+                reference_paths: self.config.reference_paths.clone(),
+                bloom_fp_rate: self.config.bloom_fp_rate,
+            };
 
-        let (prehash_groups, prehash_stats) =
-            phase2_prehash(size_groups, self.hasher.clone(), prehash_config);
+            phase2_prehash(size_groups, self.hasher.clone(), prehash_config)
+        } else {
+            (HashMap::new(), PrehashStats::default())
+        };
 
         summary.eliminated_by_prehash = prehash_stats.unique_prehashes;
         summary.cache_prehash_hits = prehash_stats.cache_hits;
@@ -2488,23 +2873,21 @@ impl DuplicateFinder {
             return Err(FinderError::Interrupted);
         }
 
-        if prehash_groups.is_empty() {
-            summary.scan_duration = start_time.elapsed();
-            return Ok((Vec::new(), summary));
-        }
-
         // Phase 3: Full hash comparison
         let fullhash_start = std::time::Instant::now();
-        let fullhash_config = FullhashConfig {
-            io_threads: self.config.io_threads,
-            cache: self.config.cache.clone(),
-            shutdown_flag: self.config.shutdown_flag.clone(),
-            progress_callback: self.config.progress_callback.clone(),
-            reference_paths: self.config.reference_paths.clone(),
-        };
+        let (duplicate_groups, fullhash_stats) = if !prehash_groups.is_empty() {
+            let fullhash_config = FullhashConfig {
+                io_threads: self.config.io_threads,
+                cache: self.config.cache.clone(),
+                shutdown_flag: self.config.shutdown_flag.clone(),
+                progress_callback: self.config.progress_callback.clone(),
+                reference_paths: self.config.reference_paths.clone(),
+            };
 
-        let (duplicate_groups, fullhash_stats) =
-            phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config);
+            phase3_fullhash(prehash_groups, self.hasher.clone(), fullhash_config)
+        } else {
+            (Vec::new(), FullhashStats::default())
+        };
 
         if !fullhash_stats.errors.is_empty() {
             if self.config.strict {
@@ -2537,14 +2920,61 @@ impl DuplicateFinder {
 
         // Phase 4: Similar Image Detection
         let mut all_groups = duplicate_groups;
+        let clustering_start = std::time::Instant::now();
+
         if self.config.similar_images {
-            let clustering_start = std::time::Instant::now();
             log::info!("Phase 4: Detecting similar images...");
             let similar_groups = self.find_similar_groups(&images);
-            log::info!("Found {} similar image groups", similar_groups.len());
-            all_groups.extend(similar_groups);
-            summary.clustering_duration = clustering_start.elapsed();
+
+            // Filter out redundant similar groups (those that are already fully represented in an exact group)
+            for sim_group in similar_groups {
+                let is_redundant = all_groups.iter().any(|exact_group| {
+                    if exact_group.is_similar {
+                        return false;
+                    }
+                    sim_group.files.iter().all(|sim_file| {
+                        exact_group
+                            .files
+                            .iter()
+                            .any(|exact_file| exact_file.path == sim_file.path)
+                    })
+                });
+
+                if !is_redundant {
+                    all_groups.push(sim_group);
+                } else {
+                    log::debug!("Skipping redundant similar image group");
+                }
+            }
         }
+
+        // Phase 5: Similar Document Detection
+        if self.config.similar_documents {
+            log::info!("Phase 5: Detecting similar documents...");
+            let similar_groups = self.find_similar_document_groups(&documents);
+
+            // Filter out redundant similar groups
+            for sim_group in similar_groups {
+                let is_redundant = all_groups.iter().any(|exact_group| {
+                    if exact_group.is_similar {
+                        return false;
+                    }
+                    sim_group.files.iter().all(|sim_file| {
+                        exact_group
+                            .files
+                            .iter()
+                            .any(|exact_file| exact_file.path == sim_file.path)
+                    })
+                });
+
+                if !is_redundant {
+                    all_groups.push(sim_group);
+                } else {
+                    log::debug!("Skipping redundant similar document group");
+                }
+            }
+        }
+        summary.clustering_duration = clustering_start.elapsed();
 
         log::info!(
             "Multi-directory scan complete: {} duplicate/similar groups, {} duplicate files, {} reclaimable",
@@ -2559,6 +2989,7 @@ impl DuplicateFinder {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use std::fs::File;
     use std::io::Write;

@@ -332,6 +332,7 @@ mod tests {
             scan_duration: Duration::from_millis(1234),
             walk_duration: Duration::from_millis(100),
             perceptual_duration: Duration::from_millis(0),
+            document_duration: Duration::from_millis(0),
             size_duration: Duration::from_millis(50),
             prehash_duration: Duration::from_millis(200),
             fullhash_duration: Duration::from_millis(800),
@@ -344,6 +345,8 @@ mod tests {
             bloom_prehash_fp: 5,
             images_perceptual_hashed: 0,
             images_perceptual_hash_cache_hits: 0,
+            documents_fingerprinted: 0,
+            documents_fingerprint_cache_hits: 0,
         }
     }
 

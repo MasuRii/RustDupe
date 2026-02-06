@@ -172,6 +172,73 @@ impl Default for SimilarityIndex {
     }
 }
 
+/// Metric for comparing `u64` fingerprints using Hamming distance.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct DocumentFingerprintMetric;
+
+impl Metric<u64> for DocumentFingerprintMetric {
+    fn distance(&self, a: &u64, b: &u64) -> u32 {
+        (a ^ b).count_ones()
+    }
+
+    fn threshold_distance(&self, a: &u64, b: &u64, threshold: u32) -> Option<u32> {
+        let d = self.distance(a, b);
+        if d <= threshold {
+            Some(d)
+        } else {
+            None
+        }
+    }
+}
+
+/// A similarity index for document fingerprints using a BK-tree.
+pub struct DocumentSimilarityIndex {
+    tree: BKTree<u64, DocumentFingerprintMetric>,
+    count: usize,
+}
+
+impl DocumentSimilarityIndex {
+    /// Create a new empty document similarity index.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            tree: BKTree::new(DocumentFingerprintMetric),
+            count: 0,
+        }
+    }
+
+    /// Add a document fingerprint to the index.
+    pub fn insert(&mut self, fingerprint: u64) {
+        self.tree.add(fingerprint);
+        self.count += 1;
+    }
+
+    /// Find all fingerprints in the index within the given Hamming distance.
+    ///
+    /// Returns a list of (distance, fingerprint) pairs.
+    pub fn find(&self, fingerprint: &u64, max_distance: u32) -> Vec<(u32, &u64)> {
+        self.tree.find(fingerprint, max_distance).collect()
+    }
+
+    /// Returns the number of items in the index.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    /// Returns true if the index is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+}
+
+impl Default for DocumentSimilarityIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -507,6 +507,7 @@ impl Walker {
             is_hardlink: false,
             group_name: self.group_name.clone(),
             perceptual_hash: None,
+            document_fingerprint: None,
         }))
     }
 

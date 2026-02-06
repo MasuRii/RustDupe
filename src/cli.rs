@@ -474,6 +474,22 @@ pub struct ScanArgs {
     )]
     pub no_similar_images: bool,
 
+    /// Enable similar document detection using SimHash
+    #[arg(
+        long = "similar-documents",
+        alias = "sim-docs",
+        help_heading = "Scanning Options"
+    )]
+    pub similar_documents: bool,
+
+    /// Disable similar document detection
+    #[arg(
+        long = "no-similar-documents",
+        overrides_with = "similar_documents",
+        hide = true
+    )]
+    pub no_similar_documents: bool,
+
     /// Enable memory-mapped file I/O for hashing large files
     ///
     /// Uses BLAKE3's parallel memory-mapped hashing for better performance.
@@ -502,6 +518,17 @@ pub struct ScanArgs {
     /// - aHash: 5
     #[arg(long, value_name = "N", help_heading = "Scanning Options")]
     pub similarity_threshold: Option<u32>,
+
+    /// Threshold for document similarity (Hamming distance, default: 3)
+    ///
+    /// Lower values mean documents must be more similar.
+    #[arg(
+        long = "doc-similarity-threshold",
+        alias = "sim-docs-threshold",
+        value_name = "N",
+        help_heading = "Scanning Options"
+    )]
+    pub doc_similarity_threshold: Option<u32>,
 
     /// Minimum number of files in a group to be considered a duplicate (default: 2)
     #[arg(long, value_name = "N", help_heading = "Scanning Options")]
