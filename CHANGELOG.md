@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-02-06
+## [0.3.0-alpha] - 2026-02-06
 
 ### Added
 - **Multi-Directory Scanning**: Support for multiple root paths in a single scan with intelligent path overlap detection and canonicalization.
@@ -80,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Initial project release.
 
-[Unreleased]: https://github.com/MasuRii/RustDupe/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/MasuRii/RustDupe/compare/v0.2.0...v0.3.0
+[Unreleased]: https://github.com/MasuRii/RustDupe/compare/v0.3.0-alpha...HEAD
+[0.3.0-alpha]: https://github.com/MasuRii/RustDupe/compare/v0.2.0...v0.3.0-alpha
 [0.2.0]: https://github.com/MasuRii/RustDupe/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MasuRii/RustDupe/releases/tag/v0.1.0
