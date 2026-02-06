@@ -35,6 +35,7 @@
 //! }
 //! ```
 
+pub mod document;
 pub mod hardlink;
 pub mod hasher;
 pub mod path_utils;
@@ -46,6 +47,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 // Re-export main types
+pub use document::{DocumentError, DocumentExtractor};
 pub use hardlink::HardlinkTracker;
 pub use hasher::{hash_to_hex, hex_to_hash, Hash, Hasher, PREHASH_SIZE};
 pub use image_hasher::ImageHash;
