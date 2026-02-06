@@ -30,6 +30,9 @@ crossterm = "0.28"
 # Multi-threaded scaling: 8.4 GB/s single-thread -> 92 GB/s on 16 cores
 blake3 = "1"
 
+# Memory-mapped I/O - memmap2 for parallel hashing of large files
+memmap2 = "0.9"
+
 # Directory Walking - jwalk for parallel traversal (4x faster than walkdir)
 # Provides sorted streaming results, rayon-powered parallelism
 jwalk = "0.8"
