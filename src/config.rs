@@ -175,6 +175,22 @@ pub struct Config {
     #[serde(default = "default_io_threads")]
     pub io_threads: usize,
 
+    /// I/O buffer size for streaming operations (manual override).
+    #[serde(default)]
+    pub io_buffer_size: Option<usize>,
+
+    /// Minimum I/O buffer size.
+    #[serde(default = "default_buffer_min")]
+    pub io_buffer_min: usize,
+
+    /// Maximum I/O buffer size.
+    #[serde(default = "default_buffer_max")]
+    pub io_buffer_max: usize,
+
+    /// Automatically adjust buffer size based on system resources.
+    #[serde(default = "default_true")]
+    pub io_adaptive_buffer: bool,
+
     /// Fail-fast on any error during scan.
     #[serde(default)]
     pub strict: bool,
@@ -288,6 +304,14 @@ fn default_mmap_threshold() -> u64 {
     64 * 1024 * 1024 // 64MB
 }
 
+fn default_buffer_min() -> usize {
+    64 * 1024 // 64KB
+}
+
+fn default_buffer_max() -> usize {
+    16 * 1024 * 1024 // 16MB
+}
+
 fn default_thumbnail_size() -> u32 {
     100
 }
@@ -306,6 +330,10 @@ impl Default for Config {
             newer_than: None,
             older_than: None,
             io_threads: 4,
+            io_buffer_size: None,
+            io_buffer_min: 64 * 1024,
+            io_buffer_max: 16 * 1024 * 1024,
+            io_adaptive_buffer: true,
             strict: false,
             similar_images: false,
             mmap: false,
@@ -489,6 +517,21 @@ impl Config {
         if let Some(threads) = args.io_threads {
             self.io_threads = threads;
         }
+        if let Some(size) = args.io_buffer_size {
+            self.io_buffer_size = Some(size);
+        }
+        if let Some(min) = args.io_buffer_min {
+            self.io_buffer_min = min;
+        }
+        if let Some(max) = args.io_buffer_max {
+            self.io_buffer_max = max;
+        }
+        if args.io_adaptive_buffer {
+            self.io_adaptive_buffer = true;
+        }
+        if args.no_io_adaptive_buffer {
+            self.io_adaptive_buffer = false;
+        }
         if args.strict {
             self.strict = true;
         }
@@ -609,6 +652,10 @@ fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str)
         "newer_than",
         "older_than",
         "io_threads",
+        "io_buffer_size",
+        "io_buffer_min",
+        "io_buffer_max",
+        "io_adaptive_buffer",
         "strict",
         "similar_images",
         "mmap",
@@ -714,6 +761,10 @@ fn validate_profile_keys(table: &toml_edit::Table, path: &str, content: &str) {
         "newer_than",
         "older_than",
         "io_threads",
+        "io_buffer_size",
+        "io_buffer_min",
+        "io_buffer_max",
+        "io_adaptive_buffer",
         "strict",
         "similar_images",
         "mmap",

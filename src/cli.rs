@@ -342,6 +342,30 @@ pub struct ScanArgs {
     )]
     pub io_threads: Option<usize>,
 
+    /// Manual I/O buffer size (e.g., 64KB, 1MB)
+    #[arg(long, value_name = "SIZE", value_parser = parse_size_usize, help_heading = "Scanning Options")]
+    pub io_buffer_size: Option<usize>,
+
+    /// Minimum I/O buffer size (default: 64KB)
+    #[arg(long, value_name = "SIZE", value_parser = parse_size_usize, help_heading = "Scanning Options")]
+    pub io_buffer_min: Option<usize>,
+
+    /// Maximum I/O buffer size (default: 16MB)
+    #[arg(long, value_name = "SIZE", value_parser = parse_size_usize, help_heading = "Scanning Options")]
+    pub io_buffer_max: Option<usize>,
+
+    /// Enable adaptive buffer sizing based on system resources (default)
+    #[arg(long = "io-adaptive-buffer", help_heading = "Scanning Options")]
+    pub io_adaptive_buffer: bool,
+
+    /// Disable adaptive buffer sizing
+    #[arg(
+        long = "no-io-adaptive-buffer",
+        overrides_with = "io_adaptive_buffer",
+        hide = true
+    )]
+    pub no_io_adaptive_buffer: bool,
+
     /// Enable paranoid mode: byte-by-byte verification after hash match
     ///
     /// Slower but guarantees no hash collisions.
@@ -679,6 +703,11 @@ pub fn parse_size(s: &str) -> Result<u64, String> {
     Ok((num * multiplier as f64) as u64)
 }
 
+/// Parse a human-readable size string into usize.
+pub fn parse_size_usize(s: &str) -> Result<usize, String> {
+    parse_size(s).map(|s| s as usize)
+}
+
 /// Parse a date string in YYYY-MM-DD format into SystemTime.
 pub fn parse_date(s: &str) -> Result<std::time::SystemTime, String> {
     use chrono::{NaiveDate, TimeZone, Utc};
@@ -919,6 +948,13 @@ mod tests {
             "--skip-hidden",
             "--io-threads",
             "8",
+            "--io-buffer-size",
+            "1MB",
+            "--io-buffer-min",
+            "128KB",
+            "--io-buffer-max",
+            "32MB",
+            "--no-io-adaptive-buffer",
             "--paranoid",
             "--permanent",
             "--yes",
@@ -930,6 +966,10 @@ mod tests {
                 assert!(args.follow_symlinks);
                 assert!(args.skip_hidden);
                 assert_eq!(args.io_threads, Some(8));
+                assert_eq!(args.io_buffer_size, Some(1_000_000));
+                assert_eq!(args.io_buffer_min, Some(128_000));
+                assert_eq!(args.io_buffer_max, Some(32_000_000));
+                assert!(args.no_io_adaptive_buffer);
                 assert!(args.paranoid);
                 assert!(args.permanent);
                 assert!(args.yes);

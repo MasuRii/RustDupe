@@ -79,6 +79,10 @@ ctrlc = { version = "3.4", features = ["termination"] }
 # Config/Cache Directory Discovery - XDG on Linux, AppData on Windows
 directories = "5"
 
+# System Information - sysinfo for detecting system resources (memory, disk type)
+# Enables adaptive buffer sizing and optimized resource allocation
+sysinfo = "0.30"
+
 # Configuration File Parsing - TOML is the Rust ecosystem standard
 # Used with figment for layered config (defaults < file < env < CLI)
 toml = "0.8"

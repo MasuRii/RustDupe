@@ -125,6 +125,29 @@ pub struct SessionSettings {
     /// Minimum group size.
     #[serde(default = "default_min_group_size")]
     pub min_group_size: usize,
+    /// Manual I/O buffer size.
+    pub io_buffer_size: Option<usize>,
+    /// Minimum I/O buffer size.
+    #[serde(default = "default_buffer_min")]
+    pub io_buffer_min: usize,
+    /// Maximum I/O buffer size.
+    #[serde(default = "default_buffer_max")]
+    pub io_buffer_max: usize,
+    /// Whether adaptive buffer sizing was enabled.
+    #[serde(default = "default_true")]
+    pub io_adaptive_buffer: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_buffer_min() -> usize {
+    64 * 1024
+}
+
+fn default_buffer_max() -> usize {
+    16 * 1024 * 1024
 }
 
 fn default_min_group_size() -> usize {

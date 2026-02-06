@@ -380,6 +380,10 @@ fn handle_scan(
             .with_paranoid(config.paranoid)
             .with_mmap(config.mmap)
             .with_mmap_threshold(config.mmap_threshold)
+            .with_io_buffer_size(config.io_buffer_size)
+            .with_io_buffer_min(config.io_buffer_min)
+            .with_io_buffer_max(config.io_buffer_max)
+            .with_io_adaptive_buffer(config.io_adaptive_buffer)
             .with_walker_config(walker_config)
             .with_shutdown_flag(shutdown_flag.clone())
             .with_reference_paths(reference_paths.clone())
@@ -421,6 +425,10 @@ fn handle_scan(
                     mmap_threshold: config.mmap_threshold,
                     similar_images: config.similar_images,
                     min_group_size: config.min_group_size,
+                    io_buffer_size: config.io_buffer_size,
+                    io_buffer_min: config.io_buffer_min,
+                    io_buffer_max: config.io_buffer_max,
+                    io_adaptive_buffer: config.io_adaptive_buffer,
                 };
                 (groups, summary, canonical_paths, settings, reference_paths)
             }

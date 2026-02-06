@@ -955,6 +955,14 @@ pub struct FinderConfig {
     pub perceptual_algorithm: crate::scanner::PerceptualAlgorithm,
     /// Threshold for similarity matching (Hamming distance).
     pub similarity_threshold: Option<u32>,
+    /// Manual I/O buffer size override.
+    pub io_buffer_size: Option<usize>,
+    /// Minimum I/O buffer size.
+    pub io_buffer_min: usize,
+    /// Maximum I/O buffer size.
+    pub io_buffer_max: usize,
+    /// Enable adaptive buffer sizing.
+    pub io_adaptive_buffer: bool,
 }
 
 impl std::fmt::Debug for FinderConfig {
@@ -997,6 +1005,10 @@ impl Default for FinderConfig {
             mmap_threshold: 64 * 1024 * 1024,
             perceptual_algorithm: crate::scanner::PerceptualAlgorithm::default(),
             similarity_threshold: None,
+            io_buffer_size: None,
+            io_buffer_min: 64 * 1024,
+            io_buffer_max: 16 * 1024 * 1024,
+            io_adaptive_buffer: true,
         }
     }
 }
@@ -1114,6 +1126,34 @@ impl FinderConfig {
     #[must_use]
     pub fn with_similarity_threshold(mut self, threshold: Option<u32>) -> Self {
         self.similarity_threshold = threshold;
+        self
+    }
+
+    /// Set manual I/O buffer size.
+    #[must_use]
+    pub fn with_io_buffer_size(mut self, size: Option<usize>) -> Self {
+        self.io_buffer_size = size;
+        self
+    }
+
+    /// Set minimum I/O buffer size.
+    #[must_use]
+    pub fn with_io_buffer_min(mut self, min: usize) -> Self {
+        self.io_buffer_min = min;
+        self
+    }
+
+    /// Set maximum I/O buffer size.
+    #[must_use]
+    pub fn with_io_buffer_max(mut self, max: usize) -> Self {
+        self.io_buffer_max = max;
+        self
+    }
+
+    /// Enable or disable adaptive buffer sizing.
+    #[must_use]
+    pub fn with_io_adaptive_buffer(mut self, enabled: bool) -> Self {
+        self.io_adaptive_buffer = enabled;
         self
     }
 
@@ -1447,7 +1487,11 @@ impl DuplicateFinder {
     pub fn new(config: FinderConfig) -> Self {
         let mut hasher = Hasher::new()
             .with_mmap(config.mmap)
-            .with_mmap_threshold(config.mmap_threshold);
+            .with_mmap_threshold(config.mmap_threshold)
+            .with_buffer_size(config.io_buffer_size)
+            .with_buffer_min(config.io_buffer_min)
+            .with_buffer_max(config.io_buffer_max)
+            .with_adaptive_buffer(config.io_adaptive_buffer);
         if let Some(ref flag) = config.shutdown_flag {
             hasher = hasher.with_shutdown_flag(flag.clone());
         }

@@ -36,16 +36,13 @@ use std::io::{BufReader, ErrorKind, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
 use super::HashError;
 
 /// Default size for prehash - first 4KB of the file.
 /// This is enough to detect most different files while minimizing I/O.
 pub const PREHASH_SIZE: usize = 4 * 1024; // 4KB
-
-/// Buffer size for streaming hash computation.
-/// 64KB is optimal for modern SSD I/O and CPU cache efficiency.
-const BUFFER_SIZE: usize = 64 * 1024; // 64KB
 
 /// BLAKE3 hash output size (32 bytes / 256 bits).
 pub type Hash = [u8; 32];
@@ -67,6 +64,14 @@ pub struct Hasher {
     mmap: bool,
     /// Threshold for memory-mapped I/O (default: 64MB)
     mmap_threshold: u64,
+    /// Manual I/O buffer size override
+    buffer_size: Option<usize>,
+    /// Minimum I/O buffer size
+    buffer_min: usize,
+    /// Maximum I/O buffer size
+    buffer_max: usize,
+    /// Enable adaptive buffer sizing
+    adaptive_buffer: bool,
     /// Optional shutdown flag for graceful termination
     shutdown_flag: Option<Arc<AtomicBool>>,
 }
@@ -94,6 +99,10 @@ impl Hasher {
             prehash_size: PREHASH_SIZE,
             mmap: false,
             mmap_threshold: 64 * 1024 * 1024,
+            buffer_size: None,
+            buffer_min: 64 * 1024,
+            buffer_max: 16 * 1024 * 1024,
+            adaptive_buffer: true,
             shutdown_flag: None,
         }
     }
@@ -121,8 +130,40 @@ impl Hasher {
             prehash_size,
             mmap: false,
             mmap_threshold: 64 * 1024 * 1024,
+            buffer_size: None,
+            buffer_min: 64 * 1024,
+            buffer_max: 16 * 1024 * 1024,
+            adaptive_buffer: true,
             shutdown_flag: None,
         }
+    }
+
+    /// Set manual I/O buffer size.
+    #[must_use]
+    pub fn with_buffer_size(mut self, size: Option<usize>) -> Self {
+        self.buffer_size = size;
+        self
+    }
+
+    /// Set minimum I/O buffer size.
+    #[must_use]
+    pub fn with_buffer_min(mut self, min: usize) -> Self {
+        self.buffer_min = min;
+        self
+    }
+
+    /// Set maximum I/O buffer size.
+    #[must_use]
+    pub fn with_buffer_max(mut self, max: usize) -> Self {
+        self.buffer_max = max;
+        self
+    }
+
+    /// Enable or disable adaptive buffer sizing.
+    #[must_use]
+    pub fn with_adaptive_buffer(mut self, enabled: bool) -> Self {
+        self.adaptive_buffer = enabled;
+        self
     }
 
     /// Enable or disable memory-mapped I/O.
@@ -274,6 +315,72 @@ impl Hasher {
         Ok(*hasher.finalize().as_bytes())
     }
 
+    /// Calculate the optimal buffer size for a file.
+    fn calculate_buffer_size(&self, file_size: u64, max_read: Option<usize>) -> usize {
+        // 1. Manual override takes highest priority
+        if let Some(manual) = self.buffer_size {
+            return manual;
+        }
+
+        // 2. If adaptive is disabled, use the minimum buffer size
+        if !self.adaptive_buffer {
+            return self.buffer_min;
+        }
+
+        // 3. For small reads (like prehash), use minimum buffer
+        if let Some(max) = max_read {
+            if max <= self.buffer_min {
+                return self.buffer_min;
+            }
+        }
+
+        // 4. Adaptive calculation
+        // Small files (< 1MB) use the minimum buffer
+        if file_size < 1024 * 1024 {
+            return self.buffer_min;
+        }
+
+        // For larger files, consider system resources
+        // We use a global static for system info to avoid expensive re-initialization
+        thread_local! {
+            static SYSTEM: std::cell::RefCell<System> = std::cell::RefCell::new(
+                System::new_with_specifics(RefreshKind::new().with_memory(MemoryRefreshKind::everything()))
+            );
+        }
+
+        let mut optimal = SYSTEM.with(|sys| {
+            let mut sys = sys.borrow_mut();
+            sys.refresh_memory();
+
+            let available = sys.available_memory();
+            let total = sys.total_memory();
+
+            // Heuristic: Use 0.1% of available memory, but no more than 1% of total memory
+            // per thread. Since we don't know the exact thread count here, we assume
+            // a reasonable number of threads (e.g. 4-16).
+            let memory_based = (available / 1000).min(total / 100);
+
+            // Scale with file size:
+            // - 1MB to 100MB -> 128KB
+            // - 100MB to 1GB -> 1MB
+            // - > 1GB -> 8MB
+            let size_based = if file_size < 100 * 1024 * 1024 {
+                128 * 1024
+            } else if file_size < 1024 * 1024 * 1024 {
+                1024 * 1024
+            } else {
+                8 * 1024 * 1024
+            };
+
+            memory_based.min(size_based as u64) as usize
+        });
+
+        // Clamp to configured limits
+        optimal = optimal.clamp(self.buffer_min, self.buffer_max);
+
+        optimal
+    }
+
     /// Internal method to hash a file with optional byte limit.
     ///
     /// # Arguments
@@ -281,17 +388,25 @@ impl Hasher {
     /// * `path` - Path to the file
     /// * `max_bytes` - Optional limit on bytes to read (None = entire file)
     fn hash_bytes(&self, path: &Path, max_bytes: Option<usize>) -> Result<Hash, HashError> {
+        // Get file size for buffer calculation
+        let metadata = std::fs::metadata(path).map_err(|e| self.map_io_error(path, e))?;
+        let file_size = metadata.len();
+
+        // Calculate optimal buffer size
+        let buf_size = self.calculate_buffer_size(file_size, max_bytes);
+
         // Open the file
+
         let file = File::open(path).map_err(|e| self.map_io_error(path, e))?;
 
         // Use buffered reader for better I/O performance
-        let mut reader = BufReader::with_capacity(BUFFER_SIZE, file);
+        let mut reader = BufReader::with_capacity(buf_size, file);
 
         // Create BLAKE3 hasher
         let mut hasher = blake3::Hasher::new();
 
         // Read and hash in chunks
-        let mut buffer = vec![0u8; BUFFER_SIZE];
+        let mut buffer = vec![0u8; buf_size];
         let mut total_read: u64 = 0;
         let limit = max_bytes.map(|b| b as u64);
 
@@ -394,8 +509,12 @@ impl Hasher {
     /// let hash = hasher.full_hash_optimized(Path::new("large_file.bin")).unwrap();
     /// ```
     pub fn full_hash_optimized(&self, path: &Path) -> Result<Hash, HashError> {
+        let metadata = std::fs::metadata(path).map_err(|e| self.map_io_error(path, e))?;
+        let file_size = metadata.len();
+        let buf_size = self.calculate_buffer_size(file_size, None);
+
         let file = File::open(path).map_err(|e| self.map_io_error(path, e))?;
-        let mut reader = BufReader::with_capacity(BUFFER_SIZE, file);
+        let mut reader = BufReader::with_capacity(buf_size, file);
 
         let mut hasher = blake3::Hasher::new();
 
@@ -689,6 +808,42 @@ mod tests {
     fn test_hasher_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Hasher>();
+    }
+
+    #[test]
+    fn test_calculate_buffer_size() {
+        let hasher = Hasher::new()
+            .with_buffer_min(64 * 1024)
+            .with_buffer_max(1024 * 1024)
+            .with_adaptive_buffer(true);
+
+        // Small file uses min buffer
+        assert_eq!(hasher.calculate_buffer_size(100, None), 64 * 1024);
+
+        // Small read uses min buffer even for large file
+        assert_eq!(
+            hasher.calculate_buffer_size(100 * 1024 * 1024, Some(4096)),
+            64 * 1024
+        );
+
+        // Large file with adaptive enabled should be >= min
+        let large_buf = hasher.calculate_buffer_size(200 * 1024 * 1024, None);
+        assert!(large_buf >= 64 * 1024);
+        assert!(large_buf <= 1024 * 1024);
+
+        // Manual override
+        let manual_hasher = hasher.clone().with_buffer_size(Some(12345));
+        assert_eq!(
+            manual_hasher.calculate_buffer_size(100 * 1024 * 1024, None),
+            12345
+        );
+
+        // Adaptive disabled uses min
+        let non_adaptive = hasher.clone().with_adaptive_buffer(false);
+        assert_eq!(
+            non_adaptive.calculate_buffer_size(100 * 1024 * 1024, None),
+            64 * 1024
+        );
     }
 
     #[test]
