@@ -111,7 +111,7 @@ bk-tree = "0.5"
 
 # Fuzzy Text Document Matching - FC-006
 simhash = "0.2"
-pdf-extract = "0.7"
+pdf-extract = "0.10"
 docx-rs = "0.4"
 
 # Serialization for JSON/CSV output
