@@ -28,7 +28,7 @@ crossterm = "0.28"
 # Hashing - BLAKE3 is optimal for file deduplication
 # 2.8-10x faster than SHA-256, parallel processing, cryptographically secure
 # Multi-threaded scaling: 8.4 GB/s single-thread -> 92 GB/s on 16 cores
-blake3 = "1"
+blake3 = { version = "1", features = ["mmap", "rayon"] }
 
 # Memory-mapped I/O - memmap2 for parallel hashing of large files
 memmap2 = "0.9"

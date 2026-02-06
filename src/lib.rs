@@ -378,6 +378,8 @@ fn handle_scan(
             .with_io_threads(config.io_threads)
             .with_strict(config.strict)
             .with_paranoid(config.paranoid)
+            .with_mmap(config.mmap)
+            .with_mmap_threshold(config.mmap_threshold)
             .with_walker_config(walker_config)
             .with_shutdown_flag(shutdown_flag.clone())
             .with_reference_paths(reference_paths.clone())
@@ -415,6 +417,8 @@ fn handle_scan(
                     file_categories: config.file_types.iter().map(|&t| t.into()).collect(),
                     io_threads: config.io_threads,
                     paranoid: config.paranoid,
+                    mmap: config.mmap,
+                    mmap_threshold: config.mmap_threshold,
                     similar_images: config.similar_images,
                     min_group_size: config.min_group_size,
                 };

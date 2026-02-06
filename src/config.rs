@@ -183,6 +183,14 @@ pub struct Config {
     #[serde(default)]
     pub similar_images: bool,
 
+    /// Enable memory-mapped file I/O for hashing large files.
+    #[serde(default)]
+    pub mmap: bool,
+
+    /// Threshold for memory-mapped I/O (default: 64MB).
+    #[serde(default = "default_mmap_threshold")]
+    pub mmap_threshold: u64,
+
     /// Enable paranoid mode (byte-by-byte verification).
     #[serde(default)]
     pub paranoid: bool,
@@ -276,6 +284,10 @@ fn default_min_group_size() -> usize {
     2
 }
 
+fn default_mmap_threshold() -> u64 {
+    64 * 1024 * 1024 // 64MB
+}
+
 fn default_thumbnail_size() -> u32 {
     100
 }
@@ -296,6 +308,8 @@ impl Default for Config {
             io_threads: 4,
             strict: false,
             similar_images: false,
+            mmap: false,
+            mmap_threshold: 64 * 1024 * 1024,
             paranoid: false,
             ignore_patterns: Vec::new(),
             regex_include: Vec::new(),
@@ -487,6 +501,15 @@ impl Config {
         if args.no_similar_images {
             self.similar_images = false;
         }
+        if args.mmap {
+            self.mmap = true;
+        }
+        if args.no_mmap {
+            self.mmap = false;
+        }
+        if let Some(threshold) = args.mmap_threshold {
+            self.mmap_threshold = threshold;
+        }
         if args.paranoid {
             self.paranoid = true;
         }
@@ -588,6 +611,8 @@ fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str)
         "io_threads",
         "strict",
         "similar_images",
+        "mmap",
+        "mmap_threshold",
         "paranoid",
         "ignore_patterns",
         "regex_include",
@@ -691,6 +716,8 @@ fn validate_profile_keys(table: &toml_edit::Table, path: &str, content: &str) {
         "io_threads",
         "strict",
         "similar_images",
+        "mmap",
+        "mmap_threshold",
         "paranoid",
         "ignore_patterns",
         "regex_include",

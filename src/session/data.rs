@@ -113,6 +113,12 @@ pub struct SessionSettings {
     pub io_threads: usize,
     /// Whether byte-by-byte verification was enabled.
     pub paranoid: bool,
+    /// Whether memory-mapped hashing was enabled.
+    #[serde(default)]
+    pub mmap: bool,
+    /// Threshold for memory-mapped hashing.
+    #[serde(default = "default_mmap_threshold")]
+    pub mmap_threshold: u64,
     /// Whether similar image detection was enabled.
     #[serde(default)]
     pub similar_images: bool,
@@ -123,6 +129,10 @@ pub struct SessionSettings {
 
 fn default_min_group_size() -> usize {
     2
+}
+
+fn default_mmap_threshold() -> u64 {
+    64 * 1024 * 1024
 }
 
 /// A group of duplicates within a session.

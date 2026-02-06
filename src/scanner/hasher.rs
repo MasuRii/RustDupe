@@ -63,6 +63,10 @@ pub type Hash = [u8; 32];
 pub struct Hasher {
     /// Size of data to read for prehash operations
     prehash_size: usize,
+    /// Enable memory-mapped I/O for large files
+    mmap: bool,
+    /// Threshold for memory-mapped I/O (default: 64MB)
+    mmap_threshold: u64,
     /// Optional shutdown flag for graceful termination
     shutdown_flag: Option<Arc<AtomicBool>>,
 }
@@ -88,6 +92,8 @@ impl Hasher {
     pub fn new() -> Self {
         Self {
             prehash_size: PREHASH_SIZE,
+            mmap: false,
+            mmap_threshold: 64 * 1024 * 1024,
             shutdown_flag: None,
         }
     }
@@ -113,8 +119,24 @@ impl Hasher {
         assert!(prehash_size > 0, "prehash_size must be greater than 0");
         Self {
             prehash_size,
+            mmap: false,
+            mmap_threshold: 64 * 1024 * 1024,
             shutdown_flag: None,
         }
+    }
+
+    /// Enable or disable memory-mapped I/O.
+    #[must_use]
+    pub fn with_mmap(mut self, enabled: bool) -> Self {
+        self.mmap = enabled;
+        self
+    }
+
+    /// Set the threshold for memory-mapped I/O.
+    #[must_use]
+    pub fn with_mmap_threshold(mut self, threshold: u64) -> Self {
+        self.mmap_threshold = threshold;
+        self
     }
 
     /// Set the shutdown flag for graceful termination.
@@ -212,7 +234,44 @@ impl Hasher {
     /// println!("Full hash: {:x?}", hash);
     /// ```
     pub fn full_hash(&self, path: &Path) -> Result<Hash, HashError> {
+        if self.mmap {
+            let metadata = std::fs::metadata(path).map_err(|e| self.map_io_error(path, e))?;
+            if metadata.len() >= self.mmap_threshold {
+                match self.hash_mmap(path) {
+                    Ok(hash) => return Ok(hash),
+                    Err(e) => {
+                        log::debug!(
+                            "Mmap hashing failed for {}, falling back to streaming: {}",
+                            path.display(),
+                            e
+                        );
+                        // Fallback to streaming
+                    }
+                }
+            }
+        }
         self.hash_bytes(path, None)
+    }
+
+    /// Compute hash using memory-mapped I/O and rayon for parallelism.
+    fn hash_mmap(&self, path: &Path) -> Result<Hash, HashError> {
+        // Check shutdown flag before starting expensive parallel hash
+        if self.is_shutdown_requested() {
+            return Err(HashError::Io {
+                path: path.to_path_buf(),
+                source: Arc::new(std::io::Error::new(
+                    ErrorKind::Interrupted,
+                    "Operation interrupted",
+                )),
+            });
+        }
+
+        let mut hasher = blake3::Hasher::new();
+        hasher
+            .update_mmap_rayon(path)
+            .map_err(|e| self.map_io_error(path, e))?;
+
+        Ok(*hasher.finalize().as_bytes())
     }
 
     /// Internal method to hash a file with optional byte limit.

@@ -450,6 +450,22 @@ pub struct ScanArgs {
     )]
     pub no_similar_images: bool,
 
+    /// Enable memory-mapped file I/O for hashing large files
+    ///
+    /// Uses BLAKE3's parallel memory-mapped hashing for better performance.
+    #[arg(long = "mmap", help_heading = "Scanning Options")]
+    pub mmap: bool,
+
+    /// Disable memory-mapped file I/O
+    #[arg(long = "no-mmap", overrides_with = "mmap", hide = true)]
+    pub no_mmap: bool,
+
+    /// Threshold for memory-mapped I/O (default: 64MB)
+    ///
+    /// Files larger than this threshold will be hashed using memory mapping if --mmap is enabled.
+    #[arg(long, value_name = "SIZE", value_parser = parse_size, help_heading = "Scanning Options")]
+    pub mmap_threshold: Option<u64>,
+
     /// False positive rate for Bloom filters (default: 0.01)
     #[arg(long, value_name = "RATE", help_heading = "Scanning Options")]
     pub bloom_fp_rate: Option<f64>,

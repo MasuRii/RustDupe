@@ -947,6 +947,10 @@ pub struct FinderConfig {
     pub min_group_size: usize,
     /// Enable similar image detection using perceptual hashing.
     pub similar_images: bool,
+    /// Enable memory-mapped file I/O for hashing large files.
+    pub mmap: bool,
+    /// Threshold for memory-mapped I/O (default: 64MB).
+    pub mmap_threshold: u64,
     /// Algorithm to use for perceptual hashing.
     pub perceptual_algorithm: crate::scanner::PerceptualAlgorithm,
     /// Threshold for similarity matching (Hamming distance).
@@ -989,6 +993,8 @@ impl Default for FinderConfig {
             bloom_fp_rate: 0.01,
             min_group_size: 2,
             similar_images: false,
+            mmap: false,
+            mmap_threshold: 64 * 1024 * 1024,
             perceptual_algorithm: crate::scanner::PerceptualAlgorithm::default(),
             similarity_threshold: None,
         }
@@ -1014,6 +1020,20 @@ impl FinderConfig {
     #[must_use]
     pub fn with_cache(mut self, cache: Arc<HashCache>) -> Self {
         self.cache = Some(cache);
+        self
+    }
+
+    /// Enable memory-mapped I/O for hashing large files.
+    #[must_use]
+    pub fn with_mmap(mut self, enabled: bool) -> Self {
+        self.mmap = enabled;
+        self
+    }
+
+    /// Set the threshold for memory-mapped I/O.
+    #[must_use]
+    pub fn with_mmap_threshold(mut self, threshold: u64) -> Self {
+        self.mmap_threshold = threshold;
         self
     }
 
@@ -1425,7 +1445,9 @@ impl DuplicateFinder {
     /// * `config` - Configuration for the finder
     #[must_use]
     pub fn new(config: FinderConfig) -> Self {
-        let mut hasher = Hasher::new();
+        let mut hasher = Hasher::new()
+            .with_mmap(config.mmap)
+            .with_mmap_threshold(config.mmap_threshold);
         if let Some(ref flag) = config.shutdown_flag {
             hasher = hasher.with_shutdown_flag(flag.clone());
         }
