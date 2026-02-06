@@ -249,6 +249,56 @@ impl DuplicateGroup {
             }
         })
     }
+
+    /// Create a new group containing only the files present in the given selection set.
+    ///
+    /// Returns `None` if no files from this group are in the selection set.
+    #[must_use]
+    pub fn filter_by_selections(
+        &self,
+        selections: &std::collections::BTreeSet<std::path::PathBuf>,
+    ) -> Option<Self> {
+        let filtered_files: Vec<_> = self
+            .files
+            .iter()
+            .filter(|f| selections.contains(&f.path))
+            .cloned()
+            .collect();
+
+        if filtered_files.is_empty() {
+            None
+        } else {
+            let mut new_group = self.clone();
+            new_group.files = filtered_files;
+            Some(new_group)
+        }
+    }
+}
+
+/// Filter a list of duplicate groups by user selections and return a new list of groups
+/// along with an updated scan summary reflecting only the selected files.
+#[must_use]
+pub fn filter_selected(
+    groups: &[DuplicateGroup],
+    summary: &crate::duplicates::ScanSummary,
+    selections: &std::collections::BTreeSet<std::path::PathBuf>,
+) -> (Vec<DuplicateGroup>, crate::duplicates::ScanSummary) {
+    let filtered_groups: Vec<_> = groups
+        .iter()
+        .filter_map(|g| g.filter_by_selections(selections))
+        .collect();
+
+    let mut new_summary = summary.clone();
+    new_summary.duplicate_groups = filtered_groups.len();
+    new_summary.duplicate_files = filtered_groups.iter().map(|g| g.files.len()).sum();
+    // For selected-only export, reclaimable space is the sum of all selected files
+    new_summary.reclaimable_space = filtered_groups
+        .iter()
+        .map(|g| g.files.iter().map(|f| f.size).sum::<u64>())
+        .sum();
+    new_summary.total_duplicate_size = new_summary.reclaimable_space;
+
+    (filtered_groups, new_summary)
 }
 
 /// Statistics from size grouping phase.

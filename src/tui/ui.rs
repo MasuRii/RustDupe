@@ -132,6 +132,7 @@ pub fn render(frame: &mut Frame, app: &App) {
             "Select by Directory",
             "Enter directory path:",
         ),
+        AppMode::Exporting => render_export_dialog(frame, app, area),
         AppMode::ShowingHelp => render_help_dialog(frame, app, area),
         _ => {}
     }
@@ -181,6 +182,12 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
             dry_run_suffix,
             app.search_query()
         ),
+        AppMode::Exporting => {
+            format!(
+                "rustdupe - Smart Duplicate Finder{} [Export Results]",
+                dry_run_suffix
+            )
+        }
         AppMode::ShowingHelp => {
             format!("rustdupe - Smart Duplicate Finder{} [Help]", dry_run_suffix)
         }
@@ -240,6 +247,7 @@ fn render_content(frame: &mut Frame, app: &App, area: Rect) {
         | AppMode::InputtingExtension
         | AppMode::InputtingDirectory
         | AppMode::Searching
+        | AppMode::Exporting
         | AppMode::ShowingHelp => render_reviewing_content(frame, app, area),
         AppMode::Quitting => render_quitting_content(frame, app, area),
     }
@@ -1116,6 +1124,11 @@ fn get_footer_commands(app: &App) -> Vec<(&'static str, &'static str)> {
             vec![("Enter", "Apply"), ("Esc", "Cancel")]
         }
         AppMode::Searching => vec![("Enter", "Confirm"), ("Esc", "Cancel")],
+        AppMode::Exporting => vec![
+            ("Space", "Toggle Sel-Only"),
+            ("Enter", "Export"),
+            ("Esc", "Cancel"),
+        ],
         AppMode::ShowingHelp => vec![("Esc", "Close"), ("?/F1", "Help")],
         AppMode::Quitting => vec![],
     }
@@ -1176,6 +1189,7 @@ fn get_reviewing_commands(
         ("v", "Filter"),
         ("U", "Undo"),
         ("/", "Search"),
+        ("x", "Exp"),
     ];
     if !app.is_dry_run() {
         cmds.push(("d", "Del"));
@@ -1499,6 +1513,86 @@ fn format_help_line_static(app: &App, key: &'static str, desc: &'static str) -> 
             Style::default().fg(app.theme().normal),
         ),
     ])
+}
+
+/// Render export selection dialog.
+fn render_export_dialog(frame: &mut Frame, app: &App, area: Rect) {
+    let dialog_area = centered_rect(50, 30, area);
+    frame.render_widget(Clear, dialog_area);
+
+    let export_selected = app.export_selected();
+    let checkbox = if export_selected { "[X]" } else { "[ ]" };
+
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Export Results",
+            Style::default()
+                .fg(app.theme().primary)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                checkbox,
+                Style::default()
+                    .fg(app.theme().secondary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " Export only selected files",
+                Style::default().fg(app.theme().normal),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" (Press ", Style::default().fg(app.theme().dim)),
+            Span::styled(
+                "Space",
+                Style::default()
+                    .fg(app.theme().secondary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" to toggle)", Style::default().fg(app.theme().dim)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "Results will be saved to ",
+                Style::default().fg(app.theme().dim),
+            ),
+            Span::styled(
+                "rustdupe_export.html",
+                Style::default()
+                    .fg(app.theme().normal)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(
+                "[ Enter ] ",
+                Style::default()
+                    .fg(app.theme().success)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("Export   ", Style::default().fg(app.theme().normal)),
+            Span::styled(
+                "[ Esc ] ",
+                Style::default()
+                    .fg(app.theme().danger)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("Cancel", Style::default().fg(app.theme().normal)),
+        ]),
+    ];
+
+    let dialog = Paragraph::new(text).alignment(Alignment::Center).block(
+        create_block_with_title(app.is_accessible(), "Export")
+            .border_style(Style::default().fg(app.theme().primary)),
+    );
+
+    frame.render_widget(dialog, dialog_area);
 }
 
 #[cfg(test)]

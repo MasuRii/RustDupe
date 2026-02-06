@@ -65,6 +65,8 @@ use super::keybindings::{KeyBindings, KeybindingProfile};
 use super::ui::render;
 use crate::actions::delete::{delete_batch, validate_preserves_copy, DeleteConfig};
 use crate::actions::preview::preview_file_simple;
+use crate::duplicates::ScanSummary;
+use crate::output::HtmlOutput;
 
 /// Frame rate limit: 60 FPS = ~16.67ms per frame.
 /// Using 16ms for slightly conservative timing.
@@ -300,6 +302,20 @@ fn handle_action(
                         app.set_mode(AppMode::Reviewing);
                     }
                 }
+            } else if app.mode() == AppMode::Exporting {
+                // Perform the export
+                let result = perform_export(app);
+                match result {
+                    Ok(path) => {
+                        log::info!("Exported to {}", path);
+                        app.set_mode(AppMode::Reviewing);
+                        app.set_error(&format!("Export successful: {}", path));
+                    }
+                    Err(e) => {
+                        app.set_error(&format!("Export failed: {}", e));
+                        app.set_mode(AppMode::Reviewing);
+                    }
+                }
             }
         }
         Action::Preview => {
@@ -504,6 +520,46 @@ fn restore_terminal() -> TuiResult<()> {
 
     log::debug!("Terminal restored");
     Ok(())
+}
+
+/// Perform export of scan results to an HTML report.
+fn perform_export(app: &App) -> Result<String, String> {
+    let mut groups = app.groups().to_vec();
+
+    // Reconstruct a basic summary from current app state
+    let mut summary = ScanSummary {
+        total_files: app.duplicate_file_count(),
+        total_size: app.groups().iter().map(|g| g.total_size()).sum(),
+        duplicate_groups: app.group_count(),
+        duplicate_files: app.duplicate_file_count(),
+        reclaimable_space: app.reclaimable_space(),
+        ..Default::default()
+    };
+
+    if app.export_selected() {
+        let selections = app.selected_files_btree();
+        if selections.is_empty() {
+            return Err("No files selected for export".to_string());
+        }
+        let (f_groups, f_summary) =
+            crate::duplicates::groups::filter_selected(&groups, &summary, &selections);
+        groups = f_groups;
+        summary = f_summary;
+    }
+
+    if groups.is_empty() {
+        return Err("No results to export".to_string());
+    }
+
+    // Use default config for report settings
+    let config = crate::config::Config::default();
+    let html_output = HtmlOutput::new(&groups, &summary, &config);
+
+    let path = "rustdupe_export.html";
+    let mut file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    html_output.write_to(&mut file).map_err(|e| e.to_string())?;
+
+    Ok(path.to_string())
 }
 
 #[cfg(test)]

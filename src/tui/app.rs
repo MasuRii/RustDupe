@@ -81,6 +81,8 @@ pub enum AppMode {
     InputtingDirectory,
     /// Searching duplicate groups
     Searching,
+    /// Exporting results
+    Exporting,
     /// Showing help overlay with keybinding reference
     ShowingHelp,
     /// Application is quitting
@@ -120,6 +122,8 @@ impl AppMode {
                 | Self::SelectingGroup
                 | Self::InputtingExtension
                 | Self::InputtingDirectory
+                | Self::Searching
+                | Self::Exporting
                 | Self::ShowingHelp
         )
     }
@@ -207,6 +211,8 @@ pub enum Action {
     SelectGroup,
     /// Enter search mode
     Search,
+    /// Export selected files to a format
+    Export,
     /// Delete selected files (to trash)
     Delete,
     /// Toggle theme
@@ -270,6 +276,7 @@ impl Action {
             Self::SelectFolder => "select_folder",
             Self::SelectGroup => "select_group",
             Self::Search => "search",
+            Self::Export => "export",
             Self::Delete => "delete",
             Self::ToggleTheme => "toggle_theme",
             Self::ToggleExpand => "toggle_expand",
@@ -311,6 +318,7 @@ impl Action {
             "select_folder",
             "select_group",
             "search",
+            "export",
             "delete",
             "toggle_theme",
             "toggle_expand",
@@ -329,7 +337,7 @@ impl Action {
 
     /// Returns all action variants.
     #[must_use]
-    pub const fn all() -> [Action; 34] {
+    pub const fn all() -> [Action; 35] {
         [
             Self::NavigateUp,
             Self::NavigateDown,
@@ -352,6 +360,7 @@ impl Action {
             Self::SelectFolder,
             Self::SelectGroup,
             Self::Search,
+            Self::Export,
             Self::Delete,
             Self::ToggleTheme,
             Self::ToggleExpand,
@@ -395,6 +404,7 @@ impl std::str::FromStr for Action {
             "select_folder" | "folder" => Ok(Self::SelectFolder),
             "select_group" | "group" => Ok(Self::SelectGroup),
             "search" | "/" => Ok(Self::Search),
+            "export" | "x" => Ok(Self::Export),
             "delete" => Ok(Self::Delete),
             "toggle_theme" | "theme" => Ok(Self::ToggleTheme),
             "toggle_expand" | "expand" | "collapse" => Ok(Self::ToggleExpand),
@@ -624,6 +634,8 @@ pub struct App {
     sort_direction: SortDirection,
     /// Accessible mode for screen reader compatibility
     accessible: bool,
+    /// Whether to export only selected files
+    export_selected: bool,
     /// Filter for duplicate groups
     group_filter: GroupFilter,
 }
@@ -679,6 +691,7 @@ impl App {
             sort_column: SortColumn::default(),
             sort_direction: SortDirection::default(),
             accessible: false,
+            export_selected: false,
             group_filter: GroupFilter::default(),
         }
     }
@@ -761,6 +774,22 @@ impl App {
     #[must_use]
     pub fn is_accessible(&self) -> bool {
         self.accessible
+    }
+
+    /// Check if export only selected is enabled.
+    #[must_use]
+    pub fn export_selected(&self) -> bool {
+        self.export_selected
+    }
+
+    /// Toggle export only selected.
+    pub fn toggle_export_selected(&mut self) {
+        self.export_selected = !self.export_selected;
+    }
+
+    /// Set export only selected.
+    pub fn set_export_selected(&mut self, enabled: bool) {
+        self.export_selected = enabled;
     }
 
     /// Set dry-run mode for the application.
@@ -867,6 +896,7 @@ impl App {
             sort_column: SortColumn::default(),
             sort_direction: SortDirection::default(),
             accessible: false,
+            export_selected: false,
             group_filter: GroupFilter::default(),
         };
 
@@ -2335,18 +2365,29 @@ impl App {
                 true
             }
             Action::ToggleSelect => {
-                if let Some(group) = self.current_group() {
-                    let hash = group.hash;
-                    if !self.expanded_groups.contains(&hash) {
-                        self.expanded_groups.insert(hash);
-                    } else if self.file_index == 0 {
-                        // On first file, space collapses
-                        self.expanded_groups.remove(&hash);
-                    } else {
-                        self.toggle_select();
+                if self.mode == AppMode::Exporting {
+                    self.toggle_export_selected();
+                    true
+                } else if self.mode.is_navigable() {
+                    if let Some(group) = self.current_group() {
+                        let hash = group.hash;
+                        let is_expanded = self.is_expanded(&hash);
+
+                        if !is_expanded {
+                            // Expand collapsed group
+                            self.expanded_groups.insert(hash);
+                        } else if self.file_index == 0 {
+                            // Collapse expanded group if on first file
+                            self.expanded_groups.remove(&hash);
+                        } else {
+                            // Toggle selection on selectable files
+                            self.toggle_select();
+                        }
                     }
+                    true
+                } else {
+                    false
                 }
-                true
             }
             Action::SelectAllInGroup => {
                 self.select_all_in_group();
@@ -2426,6 +2467,14 @@ impl App {
             Action::Search => {
                 if self.mode == AppMode::Reviewing {
                     self.set_mode(AppMode::Searching);
+                    true
+                } else {
+                    false
+                }
+            }
+            Action::Export => {
+                if self.mode == AppMode::Reviewing {
+                    self.set_mode(AppMode::Exporting);
                     true
                 } else {
                     false
@@ -2520,6 +2569,9 @@ impl App {
                 } else if self.mode == AppMode::Searching {
                     self.set_mode(AppMode::Reviewing);
                     true
+                } else if self.mode == AppMode::Exporting {
+                    // Confirmation handling is done by the TUI main loop
+                    true
                 } else if self.mode == AppMode::Reviewing {
                     if let Some(group) = self.current_group() {
                         let hash = group.hash;
@@ -2559,6 +2611,9 @@ impl App {
                     }
                     AppMode::Searching => {
                         self.clear_search();
+                        self.set_mode(AppMode::Reviewing);
+                    }
+                    AppMode::Exporting => {
                         self.set_mode(AppMode::Reviewing);
                     }
                     AppMode::ShowingHelp => {
@@ -3583,11 +3638,12 @@ mod tests {
     #[test]
     fn test_action_all_names() {
         let names = Action::all_names();
-        assert_eq!(names.len(), 34);
+        assert_eq!(names.len(), 35);
         assert!(names.contains(&"navigate_down"));
         assert!(names.contains(&"show_help"));
         assert!(names.contains(&"select_group"));
         assert!(names.contains(&"search"));
+        assert!(names.contains(&"export"));
         assert!(names.contains(&"cycle_group_filter"));
         assert!(names.contains(&"quit"));
     }
@@ -3595,11 +3651,12 @@ mod tests {
     #[test]
     fn test_action_all() {
         let actions = Action::all();
-        assert_eq!(actions.len(), 34);
+        assert_eq!(actions.len(), 35);
         assert!(actions.contains(&Action::NavigateDown));
         assert!(actions.contains(&Action::ShowHelp));
         assert!(actions.contains(&Action::SelectGroup));
         assert!(actions.contains(&Action::Search));
+        assert!(actions.contains(&Action::Export));
         assert!(actions.contains(&Action::CycleGroupFilter));
         assert!(actions.contains(&Action::Quit));
     }

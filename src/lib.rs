@@ -513,9 +513,10 @@ struct ResultContext {
 
 fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
     let ResultContext {
-        groups,
-        summary,
+        mut groups,
+        mut summary,
         config,
+
         output_format,
         output_file,
         script_type,
@@ -531,6 +532,22 @@ fn handle_results(ctx: ResultContext) -> Result<ExitCode> {
         keybindings,
         accessible,
     } = ctx;
+
+    // 0. Filter results if export_selected is true
+    if config.export_selected {
+        if let Some(ref session) = initial_session {
+            let (f_groups, f_summary) = crate::duplicates::groups::filter_selected(
+                &groups,
+                &summary,
+                &session.user_selections,
+            );
+            groups = f_groups;
+            summary = f_summary;
+        } else if output_format != OutputFormat::Tui {
+            // If not in TUI and no session, we can't filter by selections
+            log::warn!("--export-selected requires a session file with user selections when not in TUI mode. Exporting all results.");
+        }
+    }
 
     // 1. Save session if requested (non-TUI only)
     if output_format != OutputFormat::Tui {

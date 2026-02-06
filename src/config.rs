@@ -252,6 +252,10 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub html_thumbnail_embed: bool,
 
+    /// Export only files selected for deletion.
+    #[serde(default)]
+    pub export_selected: bool,
+
     // Named Profiles
     /// Named configuration profiles.
     ///
@@ -308,6 +312,7 @@ impl Default for Config {
             html_thumbnails: false,
             html_thumbnail_size: 100,
             html_thumbnail_embed: true,
+            export_selected: false,
             profile: HashMap::new(),
         }
     }
@@ -545,6 +550,9 @@ impl Config {
         if args.html_thumbnail_link {
             self.html_thumbnail_embed = false;
         }
+        if args.export_selected {
+            self.export_selected = true;
+        }
     }
 
     /// Merge load arguments into the configuration.
@@ -557,6 +565,9 @@ impl Config {
         }
         if let Some(output) = args.output {
             self.output = output;
+        }
+        if args.export_selected {
+            self.export_selected = true;
         }
     }
 }
@@ -593,6 +604,7 @@ fn validate_config_keys(doc: &toml_edit::DocumentMut, path: &str, content: &str)
         "html_thumbnails",
         "html_thumbnail_size",
         "html_thumbnail_embed",
+        "export_selected",
         "profile",
     ];
 
@@ -694,6 +706,7 @@ fn validate_profile_keys(table: &toml_edit::Table, path: &str, content: &str) {
         "html_thumbnails",
         "html_thumbnail_size",
         "html_thumbnail_embed",
+        "export_selected",
     ];
 
     for (key, _) in table.iter() {

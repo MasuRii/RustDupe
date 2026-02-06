@@ -482,6 +482,10 @@ pub struct ScanArgs {
     /// Link to original images instead of embedding thumbnails as base64
     #[arg(long, help_heading = "Output Options")]
     pub html_thumbnail_link: bool,
+
+    /// Export only files selected for deletion (requires a session with selections)
+    #[arg(long, help_heading = "Output Options")]
+    pub export_selected: bool,
 }
 
 /// Arguments for the load subcommand.
@@ -498,6 +502,10 @@ pub struct LoadArgs {
     /// Write output to a file instead of stdout
     #[arg(long, value_name = "PATH", help_heading = "Output Options")]
     pub output_file: Option<PathBuf>,
+
+    /// Export only files selected for deletion from the session
+    #[arg(long, help_heading = "Output Options")]
+    pub export_selected: bool,
 
     /// Type of deletion script to generate
     #[arg(long, value_enum, value_name = "TYPE", help_heading = "Output Options")]
