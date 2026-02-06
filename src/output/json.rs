@@ -31,6 +31,7 @@
 //! use rustdupe::duplicates::{DuplicateFinder, DuplicateGroup, ScanSummary};
 //! use rustdupe::output::json::JsonOutput;
 //! use rustdupe::error::ExitCode;
+//! use rustdupe::config::Config;
 //! use std::path::Path;
 //!
 //! let finder = DuplicateFinder::with_defaults();
