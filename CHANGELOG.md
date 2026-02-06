@@ -7,11 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0-rc] - 2026-02-06
+## [0.3.0] - 2026-02-06
 
 ### Added
+- **v0.3.0 Stable Release**: Consolidated major release with all planned features and improvements.
 - **Final Validation**: Completed final documentation review and cross-platform verification.
-- **Release Candidate**: Preparing for the stable v0.3.0 release.
+
+## [0.3.0-rc] - 2026-02-06
 
 ## [0.3.0-beta] - 2026-02-06
 
@@ -92,7 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Initial project release.
 
-[Unreleased]: https://github.com/MasuRii/RustDupe/compare/v0.3.0-rc...HEAD
+[Unreleased]: https://github.com/MasuRii/RustDupe/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/MasuRii/RustDupe/compare/v0.3.0-rc...v0.3.0
 [0.3.0-rc]: https://github.com/MasuRii/RustDupe/compare/v0.3.0-beta...v0.3.0-rc
 [0.3.0-beta]: https://github.com/MasuRii/RustDupe/compare/v0.3.0-alpha...v0.3.0-beta
 [0.3.0-alpha]: https://github.com/MasuRii/RustDupe/compare/v0.2.0...v0.3.0-alpha
