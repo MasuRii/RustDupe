@@ -3778,4 +3778,59 @@ mod tests {
         assert!(*callback.phase_started.lock().unwrap());
         assert!(*callback.phase_ended.lock().unwrap());
     }
+
+    #[test]
+    fn test_finder_configs_debug_and_builders() {
+        let config = FinderConfig::default()
+            .with_io_threads(2)
+            .with_mmap(true)
+            .with_mmap_threshold(1024)
+            .with_bloom_fp_rate(0.05)
+            .with_min_group_size(3)
+            .with_similar_images(true)
+            .with_similar_documents(true)
+            .with_doc_similarity_threshold(Some(5))
+            .with_similarity_threshold(Some(10));
+
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("io_threads: 2"));
+
+        let prehash_config = PrehashConfig::default()
+            .with_io_threads(1)
+            .with_bloom_fp_rate(0.01)
+            .with_reference_paths(vec![std::path::PathBuf::from("/ref")]);
+        let prehash_debug = format!("{:?}", prehash_config);
+        assert!(prehash_debug.contains("io_threads: 1"));
+        assert!(prehash_debug.contains("/ref"));
+
+        let fullhash_config = FullhashConfig::default()
+            .with_io_threads(4)
+            .with_reference_paths(vec![std::path::PathBuf::from("/ref2")]);
+        let fullhash_debug = format!("{:?}", fullhash_config);
+        assert!(fullhash_debug.contains("io_threads: 4"));
+        assert!(fullhash_debug.contains("/ref2"));
+    }
+
+    #[test]
+    fn test_redundant_similar_groups() {
+        use std::fs;
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path();
+
+        // Exact duplicates (also similar)
+        let content = "The quick brown fox jumps over the lazy dog. One two three four five six.";
+        fs::write(path.join("a.txt"), content).unwrap();
+        fs::write(path.join("b.txt"), content).unwrap();
+
+        let config = FinderConfig::default()
+            .with_similar_documents(true)
+            .with_doc_similarity_threshold(Some(3));
+
+        let finder = DuplicateFinder::new(config);
+        let (groups, _summary) = finder.find_duplicates(path).unwrap();
+
+        // Should only have 1 group (exact), the similar one should be filtered out as redundant
+        assert_eq!(groups.len(), 1);
+        assert!(!groups[0].is_similar);
+    }
 }

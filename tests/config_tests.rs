@@ -374,3 +374,80 @@ theme = "dark"
     let config = Config::load_from_path(config_path, Some("test"));
     assert_eq!(config.theme, ThemeArg::Dark);
 }
+
+#[test]
+fn test_config_toml_defaults() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    clear_env();
+    let temp_dir = tempdir().unwrap();
+    let config_path = temp_dir.path().join("config.toml");
+
+    // Empty TOML should use all default_* functions
+    fs::write(&config_path, "").unwrap();
+
+    let config = Config::load_from_path(config_path, None);
+
+    // Verify specific defaults from default_* functions
+    assert_eq!(config.io_threads, 4);
+    assert!(config.io_adaptive_buffer);
+    assert_eq!(config.mmap_threshold, 64 * 1024 * 1024);
+    assert_eq!(config.bloom_fp_rate, 0.01);
+    assert_eq!(config.min_group_size, 2);
+    assert!(config.accessibility.use_ascii_borders);
+    assert!(config.accessibility.disable_animations);
+    assert!(config.accessibility.simplified_progress);
+    assert!(config.accessibility.reduce_refresh_rate);
+}
+
+#[test]
+fn test_config_builders_and_helpers() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    clear_env();
+
+    let mut config = Config::default();
+    config.enable_accessibility();
+    assert!(config.accessibility.enabled);
+
+    config.keybinding_profile = KeybindingProfile::Vim;
+    assert_eq!(config.keybinding_profile, KeybindingProfile::Vim);
+}
+
+#[test]
+fn test_config_load_with_missing_fields_in_section() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    clear_env();
+    let temp_dir = tempdir().unwrap();
+    let config_path = temp_dir.path().join("config.toml");
+
+    // Section exists but fields missing - should trigger default_* functions
+    let toml_content = r#"
+[accessibility]
+# empty
+"#;
+    fs::write(&config_path, toml_content).unwrap();
+
+    let config = Config::load_from_path(config_path, None);
+    assert!(config.accessibility.use_ascii_borders);
+    assert!(config.accessibility.disable_animations);
+}
+
+#[test]
+fn test_config_serde_defaults() {
+    // Test that default_* functions are actually used by serde
+    let json = r#"{
+        "io_threads": 4,
+        "bloom_fp_rate": 0.01,
+        "min_group_size": 2,
+        "mmap_threshold": 67108864,
+        "io_buffer_min": 65536,
+        "io_buffer_max": 16777216,
+        "html_thumbnail_size": 100,
+        "accessibility": {
+            "use_ascii_borders": true
+        }
+    }"#;
+    let config: Config = serde_json::from_str(json).unwrap();
+    assert_eq!(config.io_threads, 4);
+    assert_eq!(config.bloom_fp_rate, 0.01);
+    assert!(config.accessibility.use_ascii_borders);
+}

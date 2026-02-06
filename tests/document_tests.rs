@@ -159,6 +159,33 @@ fn test_corrupt_documents_handled_gracefully() {
 }
 
 #[test]
+fn test_docx_successful_extraction() {
+    use docx_rs::*;
+    let temp_dir = tempdir().unwrap();
+    let docx_path = temp_dir.path().join("test.docx");
+
+    let file = std::fs::File::create(&docx_path).unwrap();
+    Docx::new()
+        .add_paragraph(
+            Paragraph::new()
+                .add_run(Run::new().add_text("Hello from DOCX!"))
+                .add_run(Run::new().add_text(" More text.")),
+        )
+        .add_table(Table::new(vec![TableRow::new(vec![TableCell::new()
+            .add_paragraph(
+                Paragraph::new().add_run(Run::new().add_text("Table cell text")),
+            )])]))
+        .build()
+        .pack(file)
+        .unwrap();
+
+    let text = DocumentExtractor::extract_text(&docx_path).unwrap();
+    assert!(text.contains("Hello from DOCX!"));
+    assert!(text.contains("More text."));
+    assert!(text.contains("Table cell text"));
+}
+
+#[test]
 fn test_unsupported_format_skipped() {
     let temp_dir = tempdir().unwrap();
     let path = temp_dir.path();
