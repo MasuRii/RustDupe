@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed for gh-pages branch operations
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -33,6 +35,20 @@ jobs:
           # Show what we captured for debugging
           echo "=== Benchmark output preview ==="
           head -50 benchmark_output.txt || true
+
+      - name: Create gh-pages branch if missing
+        run: |
+          # Check if gh-pages branch exists remotely
+          if ! git ls-remote --heads origin gh-pages | grep -q gh-pages; then
+            echo "Creating gh-pages branch..."
+            git checkout --orphan gh-pages
+            git reset --hard
+            git commit --allow-empty -m "Initialize gh-pages branch for benchmarks"
+            git push origin gh-pages
+            git checkout -
+          else
+            echo "gh-pages branch already exists"
+          fi
 
       - name: Store and compare benchmark results
         uses: benchmark-action/github-action-benchmark@v1
