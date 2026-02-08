@@ -13,16 +13,17 @@ fn test_paths_with_quotes() {
         let quote_name = "file_with_\"quote\".txt";
         let file_path = dir.path().join(quote_name);
 
-        File::create(&file_path)
-            .expect("Failed to create file with quotes")
-            .write_all(b"content")
-            .unwrap();
+        // Use sync_all() to ensure file is flushed to disk on macOS
+        let mut f1 = File::create(&file_path).expect("Failed to create file with quotes");
+        f1.write_all(b"content").unwrap();
+        f1.sync_all().unwrap();
+        drop(f1);
 
         let dup_path = dir.path().join("duplicate.txt");
-        File::create(&dup_path)
-            .unwrap()
-            .write_all(b"content")
-            .unwrap();
+        let mut f2 = File::create(&dup_path).unwrap();
+        f2.write_all(b"content").unwrap();
+        f2.sync_all().unwrap();
+        drop(f2);
 
         let finder = DuplicateFinder::with_defaults();
         let (groups, _) = finder.find_duplicates(dir.path()).unwrap();
@@ -44,16 +45,17 @@ fn test_paths_with_newlines() {
         let newline_name = "file_with\nnewline.txt";
         let file_path = dir.path().join(newline_name);
 
-        File::create(&file_path)
-            .expect("Failed to create file with newline")
-            .write_all(b"content")
-            .unwrap();
+        // Use sync_all() to ensure file is flushed to disk on macOS
+        let mut f1 = File::create(&file_path).expect("Failed to create file with newline");
+        f1.write_all(b"content").unwrap();
+        f1.sync_all().unwrap();
+        drop(f1);
 
         let dup_path = dir.path().join("duplicate.txt");
-        File::create(&dup_path)
-            .unwrap()
-            .write_all(b"content")
-            .unwrap();
+        let mut f2 = File::create(&dup_path).unwrap();
+        f2.write_all(b"content").unwrap();
+        f2.sync_all().unwrap();
+        drop(f2);
 
         let finder = DuplicateFinder::with_defaults();
         let (groups, _) = finder.find_duplicates(dir.path()).unwrap();
