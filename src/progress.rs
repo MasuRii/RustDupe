@@ -510,7 +510,9 @@ impl ProgressCallback for Progress {
 
 /// Truncate a path for display in the progress bar.
 fn truncate_path(path: &str, max_len: usize) -> String {
-    if path.len() <= max_len {
+    // Use character count, not byte count, for proper Unicode handling
+    let char_count = path.chars().count();
+    if char_count <= max_len {
         return path.to_string();
     }
 
@@ -520,8 +522,12 @@ fn truncate_path(path: &str, max_len: usize) -> String {
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    if file_name.len() >= max_len {
-        return format!("...{}", &file_name[file_name.len() - max_len + 3..]);
+    let file_name_chars = file_name.chars().count();
+    if file_name_chars >= max_len {
+        // Truncate filename from the start, keeping the end
+        let skip_chars = file_name_chars.saturating_sub(max_len.saturating_sub(3));
+        let truncated: String = file_name.chars().skip(skip_chars).collect();
+        return format!("...{}", truncated);
     }
 
     format!(".../{}", file_name)
