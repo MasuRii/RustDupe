@@ -105,7 +105,10 @@ strsim = "0.11"
 growable-bloom-filter = "2.0"
 
 # Perceptual Image Similarity - FC-005
-image = "0.25"
+# Disable default image features and explicitly enable needed formats
+# JPEG uses zune-jpeg which has broken ARM64 NEON code in Rust 1.85
+# See: https://github.com/etemesi254/zune-image/issues/343
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "png", "tiff", "webp", "rayon"] }
 image_hasher = "2.0"
 bk-tree = "0.5"
 
