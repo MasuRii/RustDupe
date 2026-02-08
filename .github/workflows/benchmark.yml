@@ -28,7 +28,11 @@ jobs:
 
       - name: Run benchmarks
         run: |
-          cargo bench -- --output-format bencher | tee benchmark_output.txt
+          # Run Criterion benchmarks with bencher output format for github-action-benchmark
+          cargo bench --bench scan_benchmarks -- --output-format bencher 2>&1 | tee benchmark_output.txt
+          # Show what we captured for debugging
+          echo "=== Benchmark output preview ==="
+          head -50 benchmark_output.txt || true
 
       - name: Store and compare benchmark results
         uses: benchmark-action/github-action-benchmark@v1
