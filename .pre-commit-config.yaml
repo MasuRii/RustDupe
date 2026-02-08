@@ -32,7 +32,7 @@ repos:
         name: cargo clippy
         description: Lint Rust code with clippy (warnings as errors)
         entry: cargo clippy
-        args: ["--", "-D", "warnings"]
+        args: ["--all-targets", "--", "-D", "warnings"]
         language: system
         types: [rust]
         pass_filenames: false

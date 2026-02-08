@@ -75,7 +75,7 @@ fn test_document_similarity_matching() {
     let (groups, summary) = finder.find_duplicates(path).unwrap();
 
     // doc1 and doc2 should be in a similar group
-    assert!(groups.len() >= 1);
+    assert!(!groups.is_empty());
     let similar_group = groups
         .iter()
         .find(|g| g.is_similar)
