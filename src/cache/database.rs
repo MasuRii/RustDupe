@@ -54,6 +54,16 @@ impl HashCache {
     pub fn new(path: &Path) -> CacheResult<Self> {
         let conn = Connection::open(path)?;
 
+        // Configure SQLite for better concurrency:
+        // - WAL mode allows concurrent reads during writes
+        // - busy_timeout retries on temporary locks instead of failing immediately
+        // - synchronous=NORMAL is safe with WAL and improves write performance
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA busy_timeout=5000;
+             PRAGMA synchronous=NORMAL;",
+        )?;
+
         // Initialize schema
         // We use a single table 'hashes' to store file metadata and computed hashes.
         // mtime_ns is stored as nanoseconds since UNIX epoch in a 64-bit integer.
