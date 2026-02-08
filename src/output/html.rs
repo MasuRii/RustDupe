@@ -192,14 +192,15 @@ fn generate_thumbnail(path: &Path, max_size: u32) -> Option<String> {
     // 2. Resize while preserving aspect ratio
     let thumbnail = img.thumbnail(max_size, max_size);
 
-    // 3. Encode as JPEG to a memory buffer
+    // 3. Encode as PNG to a memory buffer
+    // Note: JPEG encoding disabled due to zune-jpeg ARM64 compatibility issues with Rust 1.85
     let mut buffer = Vec::new();
     let mut cursor = Cursor::new(&mut buffer);
-    thumbnail.write_to(&mut cursor, ImageFormat::Jpeg).ok()?;
+    thumbnail.write_to(&mut cursor, ImageFormat::Png).ok()?;
 
     // 4. Encode to base64
     let b64 = base64::engine::general_purpose::STANDARD.encode(&buffer);
-    Some(format!("data:image/jpeg;base64,{}", b64))
+    Some(format!("data:image/png;base64,{}", b64))
 }
 
 /// Format a duration as a human-readable string.
@@ -438,6 +439,6 @@ mod tests {
         let thumb = generate_thumbnail(&img_path, 50);
         assert!(thumb.is_some());
         let thumb_str = thumb.unwrap();
-        assert!(thumb_str.starts_with("data:image/jpeg;base64,"));
+        assert!(thumb_str.starts_with("data:image/png;base64,"));
     }
 }
