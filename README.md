@@ -12,16 +12,6 @@
 
 ---
 
-## Table of Contents
-
-- [Features](#features)
-- [Installation](#installation)
-- [Usage](#usage)
-- [CLI Reference](#cli-reference)
-- [Performance](#performance)
-- [Contributing](#contributing)
-- [License](#license)
-
 ## Features
 
 - **High Performance**: Parallel directory walking and BLAKE3 hashing for maximum speed.
@@ -187,11 +177,11 @@ enabled = false
 [profile.photos]
 similar_images = true
 similarity_threshold = 10
-file_type = ["images"]
+file_types = ["images"]
 
-[keybindings.custom]
-Search = ["/"]
-Export = ["x"]
+[custom_keybindings]
+preview = ["p", "Enter"]
+quit = ["q", "Esc"]
 ```
 
 ## CLI Reference

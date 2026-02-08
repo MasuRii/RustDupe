@@ -2,18 +2,6 @@
 
 Thank you for your interest in contributing to RustDupe! This document provides guidelines and instructions for contributing.
 
-## Table of Contents
-
-- [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
-- [Development Setup](#development-setup)
-- [Making Changes](#making-changes)
-- [Code Style](#code-style)
-- [Testing](#testing)
-- [Commit Messages](#commit-messages)
-- [Pull Request Process](#pull-request-process)
-- [Release Process](#release-process)
-
 ## Code of Conduct
 
 This project adheres to the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to the project maintainers.
