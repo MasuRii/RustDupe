@@ -763,10 +763,13 @@ impl KeyBindings {
         );
 
         // Help
+        // Note: '?' requires SHIFT on most keyboards, but some terminals report
+        // it with NONE modifiers while others report SHIFT. We accept both.
         bindings.insert(
             Action::ShowHelp,
             vec![
                 Self::key(KeyCode::Char('?'), KeyModifiers::NONE),
+                Self::key(KeyCode::Char('?'), KeyModifiers::SHIFT),
                 Self::key(KeyCode::F(1), KeyModifiers::NONE),
             ],
         );
@@ -976,6 +979,7 @@ impl KeyBindings {
             Action::ShowHelp,
             vec![
                 Self::key(KeyCode::Char('?'), KeyModifiers::NONE),
+                Self::key(KeyCode::Char('?'), KeyModifiers::SHIFT),
                 Self::key(KeyCode::F(1), KeyModifiers::NONE),
             ],
         );
@@ -1164,6 +1168,7 @@ impl KeyBindings {
             Action::ShowHelp,
             vec![
                 Self::key(KeyCode::Char('?'), KeyModifiers::NONE),
+                Self::key(KeyCode::Char('?'), KeyModifiers::SHIFT),
                 Self::key(KeyCode::F(1), KeyModifiers::NONE),
             ],
         );
@@ -1376,6 +1381,7 @@ impl KeyBindings {
             Action::ShowHelp,
             vec![
                 Self::key(KeyCode::Char('?'), KeyModifiers::NONE),
+                Self::key(KeyCode::Char('?'), KeyModifiers::SHIFT),
                 Self::key(KeyCode::F(1), KeyModifiers::NONE),
             ],
         );
