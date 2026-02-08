@@ -255,7 +255,14 @@ fn test_invalid_utf8_path() {
     if let Ok(mut f) = File::create(&file_path) {
         f.write_all(b"invalid utf8").unwrap();
 
-        let cli = Cli::try_parse_from(["rustdupe", "scan", dir.path().to_str().unwrap()]).unwrap();
+        let cli = Cli::try_parse_from([
+            "rustdupe",
+            "scan",
+            dir.path().to_str().unwrap(),
+            "--output",
+            "json",
+        ])
+        .unwrap();
         let result = rustdupe::run_app(cli).unwrap();
 
         assert_eq!(result, ExitCode::Success);
